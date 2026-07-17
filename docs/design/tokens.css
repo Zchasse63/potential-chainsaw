@@ -202,3 +202,34 @@
   /* Missing from v1 CSS (present in JSON) */
   --kelo-surface-inverse-brand: #1C2A37;
 }
+
+/* ── v1.1 round 3 — Kimi K3 audit closure (2026-07-17) ──────────────────────
+   Executable vars for the round-3 tokens.json additions. tokens.json is
+   canonical; a CI parity check reconciles the two. */
+:root {
+  /* Input state borders (K17) — rest uses --kelo-border-input above */
+  --kelo-focus-glow: 0 0 0 3px rgba(62,90,116,.18);   /* input focus glow (buttons/links use the offset ring) */
+  --kelo-input-border-focus: var(--kelo-brand-600);   /* 1.5px */
+  --kelo-input-border-error: var(--kelo-danger);      /* 1.5px */
+
+  /* Chrome hexes admitted to the semantic layer (K18) */
+  --kelo-icon-inactive: #8A939A;
+  --kelo-warning-surface-weak: #FDF8EC;               /* row-level warning wash */
+  --kelo-warning-emphasis-text: #5C3F0B;              /* banner titles on warning tint */
+
+  /* Micro rules that are single values (K19) */
+  --kelo-fill-bar-complete: var(--kelo-brand-700);
+  --kelo-selected-border-strong: var(--kelo-brand-600); /* 2px slots/tender */
+  --kelo-selected-border-chip: var(--kelo-brand-600);   /* 1px filter chips */
+
+  /* Radii (K11, K26) */
+  --kelo-radius-desk: 8px;                             /* desk buttons, phone tabs */
+  --kelo-radius-status-critical-dot: 2px;             /* stale-critical squared dot */
+
+  /* Skeleton (K20) — static, no shimmer */
+  --kelo-skeleton-base: var(--kelo-neutral-100);      /* #E7EAEA */
+  --kelo-skeleton-highlight: var(--kelo-neutral-050); /* #EFF1F1 */
+}
+/* Reserved-hue collision (member-theme intake, K7): tenant-action must sit
+   outside collision distance of danger #B3453C, success #2E7D56, ai #2F7B80.
+   Enforced in the intake validator, not CSS. */

@@ -38,13 +38,14 @@ gradients. No dark patterns. Nothing that reads medical.
 | State | Shape | Fill | Icon |
 |---|---|---|---|
 | Confirmed | full-radius pill | success tint | check |
-| Processing | radius 4–5, outlined | card bg | clock |
-| Failed | radius 3, sharp | SOLID danger, white text — loudest thing on screen | x |
+| Processing | radius r1 (4px), outlined | card bg | clock |
+| Failed | radius 3px (dedicated `--kelo-radius-status-failed`, sharper than r1) | SOLID danger, white text — loudest thing on screen | x |
 | Refund pending | full-radius pill, **dashed** border | warning tint | diamond |
 
-**Freshness chips** on every data region: `● LIVE` (green) → `● SYNCED 12M` (neutral) →
-`● STALE 2H` (amber tint, >1h) → `■ STALE 4H+` (red tint, dot becomes a **square**, weight 600).
-Micro mono type, full-radius chip, hairline border when healthy.
+**Freshness chips** on every data region: `● LIVE` (green) → `● SYNCED {n}M` (neutral, from 1 min)
+→ `● STALE 2H` (amber tint, **≥2h**) → `■ STALE 4H+` (red tint, **≥4h**, dot becomes a **square**,
+weight 600). Thresholds align to the build plan (2h/4h). Micro mono type, full-radius chip,
+hairline border when healthy.
 
 **Provenance:** Kelo-native data sits on plain surfaces with solid hairlines. Imported legacy
 data (e.g. Glofox) is a different material: birch hatch background, dashed `#9C875F` border,
@@ -53,7 +54,7 @@ data (e.g. Glofox) is a different material: birch hatch background, dashed `#9C8
 **AI surfaces:** dotted 1.5px teal border + `#F7FBFB` bg + `DRAFT · KELO INTELLIGENCE` micro tag
 + evidence chips (row counts, sources, date ranges). Draft-shaped until approved. The **approval
 ceremony** is explicit: summary line in micro mono (`SMS · 18 RECIPIENTS · EST $1.26`), verb
-with the count (`Approve & send to 18`), plus `Edit draft` / `Send test to me`. After sending,
+naming channel + count (`Send SMS to 18 people` — `Approve & send` is a banned string), plus `Edit draft` / `Send test to me`. After sending,
 show a receipt state: `SENT · APPROVED BY {name} {time}` with per-recipient delivery truth
 (`DELIVERED 16 · FAILED 2 → RETRY QUEUED`). AI suggestions elsewhere (schedule ghosts) are
 dotted and **never auto-applied**.
@@ -201,3 +202,40 @@ CommandMenu results + AlertCenter panel anatomy (phase 2), ChartWithTable toolti
 chrome + heatmap keyboard/table alternative (phase 2), receipt print template + printer states
 (phase 5), DataBoundary compositional-state model (phase 0 component work: primary render state +
 independent freshness/connectivity/mutation flags with banner precedence).
+
+---
+
+## Amendments — round 3 (Kimi K3 CLI audit closure, 2026-07-17)
+
+A third audit (Kimi K3, repo-aware, read-only) checked the round-2 state and caught that several
+round-2 rules were declared but not fully landed. All resolved:
+
+- **The "mockups amended to comply" claim is now true.** Round 2 stated it prematurely: the
+  stylescape still taught `Reply YES` and `Approve & send`, and the heatmap still read "demand,
+  8 weeks." Fixed: stylescape carries a **SUPERSEDED — reference only** banner and its two
+  teaching strings are corrected; `p0-screens.html` §07 now reads **30-day fill** (tint + legend +
+  footer), the "Demand overlay" chip is marked *later*; the Health streak headline uses the
+  canonical definition; `p0-today-phone.html` KPI tiles now carry **labeled** freshness chips
+  (was color-only — a never-color-alone violation in our own artifact).
+- **Canonical files aligned to their own amendments:** `tokens.json` `ai-accent.$rule` and guide
+  §4 dropped the banned `Approve & send`; `tokens.json` `motion.reduced-motion` now matches the
+  CSS opacity-fade behavior (was still "0ms movement").
+- **tokens.json v1.1 filled the remaining implementability holes** (agents would have guessed):
+  input rest/focus/error/disabled border states; admitted chrome hexes (`icon-inactive`,
+  warning wash/emphasis) into the semantic layer; `data-hero` (38px) + `dense-header` (10px) type
+  steps; `desk` radius (8px); micro-rules (selected border widths, nav-badge danger trigger,
+  avatar hashing, fill-bar-complete, delta coloring); static-skeleton spec; countdown aria-live
+  cadence (start/60s/10s/expiry, never per-second); toast lifetime/stack; the **unknown-state**
+  fallback appearance; freshness thresholds (aged ≥1m, stale ≥2h, critical ≥4h); demand-ramp as
+  a real array; Stripe-Elements label exception.
+- **Status registry extended** to every state the flows render: no-show (money event), dunning
+  stages, waitlist offer terminal states, full room-readiness set, refund-denied.
+- **Member-theme schema hardened:** derived link/border/selected/hover rules, a light-surface
+  luminance constraint (immutable chrome assumes light ground), reserved-hue collision rejection
+  at intake, and no-logo / font-load-failure fallbacks.
+
+**Still deferred (owned by build phases, unchanged):** member failure-state frames + email/SMS/
+receipt comms templates (phase 8 / phase 5), Desk shell tab-group, CommandMenu + AlertCenter
+anatomy (phase 2), standalone `kelo-mark.svg` + favicon/app-icon exports, DataBoundary
+compositional-state model, larger-text-mode scale. These are spec debts with phase owners, not
+blockers to starting.

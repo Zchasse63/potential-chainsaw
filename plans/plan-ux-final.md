@@ -57,8 +57,9 @@ so the top verdict stands on convergence, not self-preference.)
    refund; step-up re-auth (manager PIN) above a tenant-configured threshold; typed phrases never.
 5. **Phone KPI presentation.** Horizontal carousel (Grok) vs wrapped grid (Sol).
    **Ruling: two-column grid** — carousels hide metrics from a coffee-line scan.
-6. **Owner phone tabs.** **Today · Money · People · Schedule · More.** Money earns a phone tab
-   (failed-payment work is explicitly daily — Sol's own critique of its More-menu placement).
+6. **Owner phone tabs.** **Today · Payments · People · Schedule · More.** Payments earns a phone
+   tab (failed-payment work is explicitly daily — Sol's own critique of its More-menu placement).
+   *(Label "Payments" per the 2026-07-17 design amendment; this ruling originally said "Money".)*
 7. **Member guest checkout.** Kimi proposed it; Fable allowed a fallback version; Sol and two
    critiques flagged the duplicate-identity liability. **Ruling: no unverified guest checkout.**
    Every member *identity* is contact-verified once (one-time code) — which *is* the
@@ -308,7 +309,8 @@ current issues (each naming its *operational consequence* — "Bookings are 4h s
 imported availability"), entity freshness, authority matrix (read source / write source / cadence /
 **countdown-to-cutover narrative**), import runs, quarantine, reconciliation history, a
 **verification ledger** (append-only, exportable feed of every automated check with pass/fail
-and counts), and the trust-streak headline **"days since an unverified figure shown"** (both
+and counts), and the trust-streak headline **"days since an unchecked or unmarked figure"** —
+marked-imported figures don't break it, failed-check ones do (both
 adopted from the design round — the founding trauma turned into a number). **The
 "prove this number" gesture** (new, universal): every KPI and briefing-cited metric offers a
 two-tap path → constituent rows + envelope metadata + export. Trust is a gesture, not a promise.
