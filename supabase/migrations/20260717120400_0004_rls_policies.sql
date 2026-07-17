@@ -44,6 +44,13 @@ create policy locations_delete on public.locations
   using (app.has_tenant_role(tenant_id, array['owner', 'manager']));
 
 -- tenant_users -------------------------------------------------------------------
+-- Membership writes are OWNER-only and NEVER self-directed. The previous
+-- owner-or-manager policies let a manager UPDATE their own row to role='owner'
+-- (intra-tenant privilege escalation); even an owner cannot modify their own
+-- membership row — another owner (or break-glass via the service role) must.
+-- Managers invite via tenant_invitations; the accept-invite flow creates rows
+-- under the service role, which bypasses RLS, so owner-only client INSERT breaks
+-- nothing. GRANTs stay as they are — RLS is the gate.
 drop policy if exists tenant_users_select on public.tenant_users;
 create policy tenant_users_select on public.tenant_users
   for select
@@ -52,18 +59,18 @@ create policy tenant_users_select on public.tenant_users
 drop policy if exists tenant_users_insert on public.tenant_users;
 create policy tenant_users_insert on public.tenant_users
   for insert
-  with check (app.has_tenant_role(tenant_id, array['owner', 'manager']));
+  with check (app.has_tenant_role(tenant_id, array['owner']));
 
 drop policy if exists tenant_users_update on public.tenant_users;
 create policy tenant_users_update on public.tenant_users
   for update
-  using (app.has_tenant_role(tenant_id, array['owner', 'manager']))
-  with check (app.has_tenant_role(tenant_id, array['owner', 'manager']));
+  using (app.has_tenant_role(tenant_id, array['owner']) and user_id <> (select auth.uid()))
+  with check (app.has_tenant_role(tenant_id, array['owner']) and user_id <> (select auth.uid()));
 
 drop policy if exists tenant_users_delete on public.tenant_users;
 create policy tenant_users_delete on public.tenant_users
   for delete
-  using (app.has_tenant_role(tenant_id, array['owner', 'manager']));
+  using (app.has_tenant_role(tenant_id, array['owner']) and user_id <> (select auth.uid()));
 
 -- tenant_invitations -------------------------------------------------------------
 drop policy if exists tenant_invitations_select on public.tenant_invitations;
@@ -94,9 +101,16 @@ create policy audit_events_select on public.audit_events
   using (app.has_tenant_role(tenant_id, array['owner', 'manager']));
 
 drop policy if exists audit_events_insert on public.audit_events;
+-- Actor-forgery backstop: the Hono API already stamps actor_user_id from the
+-- verified session (= auth.uid()) on the user-scoped client; this WITH CHECK is
+-- the DB-level backstop so a direct-PostgREST client cannot attribute an event
+-- to someone else. actor NULL = system row.
 create policy audit_events_insert on public.audit_events
   for insert
-  with check (tenant_id in (select app.current_tenant_ids()));
+  with check (
+    tenant_id in (select app.current_tenant_ids())
+    and (actor_user_id = (select auth.uid()) or actor_user_id is null)
+  );
 -- No update/delete policy, ever — corrections append via later definer functions.
 
 -- grants -------------------------------------------------------------------------
