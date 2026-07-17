@@ -35,6 +35,15 @@ jobs:
       - run: pnpm -w lint
       - run: pnpm -w test
       - run: pnpm -w build
+      - name: no secrets in built web artifacts
+        # Threat model §1/§6: the service-role key, the workers' pool string,
+        # and Stripe live-key prefixes must never reach the client bundle.
+        run: |
+          if grep -rIn -e 'SUPABASE_SERVICE_ROLE_KEY' -e 'SUPABASE_DB_URL' \
+              -e 'sk_live' -e 'rk_live' apps/web/dist; then
+            echo "::error::secret reference found in the built web bundle"
+            exit 1
+          fi
 
   secrets:
     name: secrets scan

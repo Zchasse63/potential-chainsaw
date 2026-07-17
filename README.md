@@ -28,8 +28,14 @@ Schema-as-code: `supabase/migrations/` deploys via the Supabase GitHub integrati
 
 ## Status
 
-Planning complete → **Phase 0 (Foundations + reality probes)** in progress.
-See the phase table in [plans/plan-final.md](plans/plan-final.md) §6.
+**Phase 0 (Foundations + reality probes): built** — workspace + `@kelo/contracts` (pinned Glofox
+sample contracts), tenancy + membership RLS + the generated cross-tenant attack suite (53 asserts
+green on Postgres 17, incl. intra-tenant hardening), the jobs queue + single scheduler tick
+(double-tick disjointness proven), the Hono API (freshness envelope, server-derived tenant,
+`/health`), and the operator web shell + Health v0 on the design-token contract. Items needing an
+owner/external action for live proof (Netlify deploy, Sentry DSN, heartbeat check, 10DLC filing,
+PITR drill) are tracked in [BLOCKERS.md](BLOCKERS.md) — built up to, not faked.
+Next: **Phase 1 (Import, correct & observable)**. Phase table: [plans/plan-final.md](plans/plan-final.md) §6.
 
 ## Setup
 
