@@ -126,8 +126,8 @@ uppercase labels, never sentences.
    Schedule · People · **Payments** · **Marketing** · Reports · **Health**; Desk is the launcher
    card into its full-screen route group; phone tabs = Today · Payments · People · Schedule ·
    More.
-5. **Wordmark status.** The circled-k monogram is the accepted *working* mark; the final mark
-   remains an open, non-gating owner decision (isolated to mark + favicon slots).
+5. **Wordmark status.** The circled-k monogram is the **final mark** (owner-confirmed
+   2026-07-17), lowercase `kelo` wordmark in Familjen Grotesk 700.
 6. **Canvas note.** App background = `surface.app` (#F5F6F6); #E5E7E8 in handoff frames is
    presentation chrome, not a token.
 7. **Today phone variant** added as `p0-today-phone.html` (composed from the component sheet per

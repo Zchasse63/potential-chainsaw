@@ -560,6 +560,6 @@ labels (§2), "Send test to me" in the approval ceremony (§3B), the verificatio
 streak on Health (§3F). Standing rules from the design review now bind the build: `neutral-400`
 is never a text color (floor = `neutral-600`); form controls use the dedicated ≥3:1 input-border
 token; charts use max 3 categorical hues (slate/amber/birch — green/red stay status-reserved)
-with patterns beyond; tenant text tokens are AA-validated mechanically at intake. Open,
-non-gating: final wordmark (circled-k is the working mark) and The Sauna Guys' real brand assets
-for the member-surface skin. **The design gate is closed.**
+with patterns beyond; tenant text tokens are AA-validated mechanically at intake. The circled-k monogram is the **final mark** (owner-confirmed 2026-07-17). Open, non-gating:
+The Sauna Guys' brand assets for the member-surface skin (owner: not needed right now).
+**The design gate is closed.**

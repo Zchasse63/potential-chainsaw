@@ -50,8 +50,8 @@ equally fine. Sources: [plan-final.md](plan-final.md), [plan-ux-final.md](plan-u
 The visual design guide is delivered, reviewed, amended, and accepted: [docs/design/](../docs/design/)
 (Route 01 "The Quiet Instrument" — guide, AA/CVD-validated token contract, stylescape, all P0+P1
 mockups incl. the Today phone variant). UX plan confirmed with design-round amendments
-(plan-ux-final.md Part III). Remaining, **non-gating**: final wordmark (circled-k is the working
-mark) and The Sauna Guys brand assets for the member-surface skin (C6 below).
+(plan-ux-final.md Part III). Wordmark: **final — circled-k monogram** (owner-confirmed 2026-07-17). Remaining, non-gating
+and owner-deprioritized: The Sauna Guys brand assets for the member-surface skin (C6, phase 8).
 
 ## C. Actions only you can take (start now — all have lead times)
 
