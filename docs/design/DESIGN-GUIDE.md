@@ -132,3 +132,72 @@ uppercase labels, never sentences.
    presentation chrome, not a token.
 7. **Today phone variant** added as `p0-today-phone.html` (composed from the component sheet per
    the system's rules; two-column KPI grid, no carousels).
+
+---
+
+## Amendments — round 2 (external design audit, 2026-07-17)
+
+Three frontier models audited the finalized system (45+ findings; verified against files before
+adoption). Token changes shipped in `tokens.json` v1.1 (canonical) + regenerated `tokens.css`:
+**semantic text roles** (primary/secondary/muted/placeholder/disabled — disabled is n600 @55%,
+tokenized and WCAG-exempt, never improvised), **action state matrices** (primary/secondary/ghost/
+destructive × hover/active/disabled + selected), **focus-ring tokens**, **scrim + closed z-index
+scale**, **spacing scale + density packs** (comfortable/dense/desk), **status-registry
+extensions** (refunded, written-off, change-pending, verifying-do-not-retry, hold-active,
+waitlist-offer, room-not-ready, queued-offline, receipt-deferred — shape grammar: solid=final,
+outlined=in-motion, dashed=in-transit, dotted=AI), **pinned status radii** (processing=r1;
+failed=3px dedicated token), **member-theme schema v1** (the exact tenant-overridable allowlist +
+AA intake validation; everything else immutable), corrected **shadcn mapping** (`--input` →
+`--kelo-border-input`; `--muted-foreground` → n600), **freshness-aged split** (dot n400 / text
+n600), **reduced-motion fix** (short opacity fades retained; transforms/shimmer banned — zeroing
+everything killed the promised confirmations), link/icon/avatar/badge/chart-tooltip tokens.
+
+**Content & conduct rules (mockups amended to comply):**
+1. **Verification-state trio, canonically:** *verified* (plain), *imported-unverified* (shown,
+   hatched + trailing `*` — honesty about provenance; does **not** break the trust streak),
+   *failed-check* (greyed out + reason; never rendered as a plain number — **this** breaks the
+   streak). The Health streak counts days with zero failed-check figures rendered and zero
+   unverified figures shown unmarked.
+2. **AI copy is evidence-only** — no unlabeled projections ("worth about $170" and "will sell
+   out by ~2:30p" are the canonical counter-examples, now removed): counts, windows, and
+   historical outcomes only. This is also a tone-lint rule.
+3. **No send action outside the ceremony.** Entry points (Today cards, palette) say
+   "Review & send…" and navigate to `ApprovalCeremony`; only the ceremony's final button sends,
+   and its verb names channel + count ("Send SMS to 18 people"). "Approve & send" is deprecated.
+   Ceremony required slots: audience + exclusions-by-name, exact content preview, cost,
+   quiet-hours check, **Send test to me**.
+4. **Toasts confirm; they never carry failures.** Failures are persistent inline/banner/result
+   states (the sheet's failure example is retitled as inline, not Toast).
+5. **No reply-CTA copy in v1** — there is no operator inbox; outreach may not solicit replies
+   Kelo processes ("Reply YES…" removed; replies go to the studio phone). Tone-lint enforces.
+6. **Refund ceremony state machine:** edit → consequence review (resulting balance +
+   credit/booking effects) → actor PIN re-auth (always) → manager step-up (above threshold) →
+   processing. The §05 mockup omits the auth steps; the state machine governs.
+7. **Heatmap tint = 30-day fill** (UX plan + revenue dictionary govern); the mockup's
+   "demand (searches + waitlists, 8w)" becomes a **separately named overlay** deferred until its
+   input signals exist (member-surface search arrives phase 8; waitlist-depth chips allowed
+   sooner). Tint and overlay are never one ambiguous layer.
+8. **Waitlist affordance is mandatory on full slots** (member funnel + Quick Book) and
+   **HoldTimer is mandatory on every post-selection booking state** — the mockups' omissions are
+   deviations; the UX plan governs.
+9. **Shared-device defaults:** Desk auto-locks after 2 min idle (15 s warning); PIN re-entry;
+   person search clears on lock; in-progress work parks as resumable cards.
+10. **Timezone labeling:** one persistent page-level studio-timezone label; per-value labels only
+    where zones differ (UX plan §4 relaxed to match).
+11. **Prototype frames are canvases:** fixed heights/`overflow:hidden` in mockups are
+    presentation cropping — build surfaces scroll and reflow at 200% zoom.
+12. **Touch targets:** pointer surfaces may render 36px controls with a ≥44px hit area; touch
+    surfaces (Desk, member, owner phone) render ≥44px visual.
+13. **Component allowlist clarified:** base shadcn/Radix primitives (Dialog, Sheet, Tabs,
+    Tooltip, Input, Select, Checkbox, Radio, OTP, DatePicker, Pagination, BottomNav) are
+    pre-approved; the written-reason rule guards *novel domain components* only.
+14. **Canonical mark:** the circled-k SVG as used in the P0 headers (viewBox 0 0 32, ring stroke
+    2.6, Familjen 700 "k") is the single source; the stylescape's concentric-rings mark (§01) is
+    **superseded** and must not be implemented.
+
+**Deferred spec debts (owned by build phases, not blockers):** Desk shell tab-group mock
+(phase 6 — UX plan §2 governs the structure), member Identify/Waiver/account frames (phase 8),
+CommandMenu results + AlertCenter panel anatomy (phase 2), ChartWithTable tooltip/table-toggle
+chrome + heatmap keyboard/table alternative (phase 2), receipt print template + printer states
+(phase 5), DataBoundary compositional-state model (phase 0 component work: primary render state +
+independent freshness/connectivity/mutation flags with banner precedence).

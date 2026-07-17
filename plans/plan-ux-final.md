@@ -377,8 +377,9 @@ delay, and never reset because a browser timed out.
 **Forms.** Visible labels (placeholders are examples); format-validate on blur, business-validate
 on submit; error summary with focus moved to it, inputs preserved; disabled buttons carry adjacent
 reasons; autosave for low-risk drafts only (outreach copy, schedule drafts) — never for approvals,
-sends, refunds, publishes; search-before-create mandatory for people; studio timezone labeled on
-every date/time.
+sends, refunds, publishes; search-before-create mandatory for people; timezone labeling: one
+persistent page-level studio-timezone label, per-value labels only where zones differ (relaxed
+2026-07-17 — labeling every value was audit-flagged as unimplementably strict).
 
 **Tables & reports.** One table system (sort, filter chips, column visibility, pagination/
 virtualization, keyboard nav); filters + ranges in the URL; summaries always drill to rows; mobile
@@ -563,3 +564,17 @@ token; charts use max 3 categorical hues (slate/amber/birch — green/red stay s
 with patterns beyond; tenant text tokens are AA-validated mechanically at intake. The circled-k monogram is the **final mark** (owner-confirmed 2026-07-17). Open, non-gating:
 The Sauna Guys' brand assets for the member-surface skin (owner: not needed right now).
 **The design gate is closed.**
+
+### Part III addendum — external design audit (2026-07-17)
+
+The finalized design system was audited by the three external council models (45+ findings,
+verified before adoption; full record: plans/audit-design-{grok,sol,kimi}.md). Fixes live in
+docs/design/ (tokens v1.1 semantic layer, guide Amendments round 2, mockup copy corrections).
+Deltas absorbed into this plan: timezone-labeling rule relaxed (§4); the component allowlist's
+written-reason rule guards novel domain components only — base shadcn/Radix primitives are
+pre-approved (§5); DataBoundary's taxonomy is compositional (primary render state + independent
+freshness/connectivity/mutation flags), not mutually exclusive (§4); the heatmap's tint is
+30-day fill with any demand overlay as a separately named, later layer (§3E). The audit's most
+important confirmations: no send action may exist outside the ApprovalCeremony, and the
+verification-state trio (verified / imported-unverified-marked / failed-check-suppressed) now
+has one canonical definition shared by the guide, the trust streak, and the intelligence plan.
