@@ -1,0 +1,28 @@
+{
+ "object": "list",
+ "page": 1,
+ "limit": 5,
+ "has_more": false,
+ "total_count": 1,
+ "data": [
+  {
+   "_id": "6a4c62b6bab17ce8bf020c70",
+   "namespace": "thesaunaguys",
+   "branch_id": "654e7d37c8a12ada310de13a",
+   "user_id": "6a4c2f0386a045048f09134c",
+   "membership_id": "67326cdcbd19321574004ccc",
+   "model": "programs",
+   "num_sessions": 1,
+   "active": true,
+   "bookings": [],
+   "start_date": 1783310400,
+   "modified": 1783390902,
+   "created": 1783390902,
+   "type": "usercredit",
+   "image_url": "<REDACTED:673e6ee5>",
+   "available": 1,
+   "membership_name": "Virtual Gift Cards"
+  }
+ ],
+ "total_value": 1
+}

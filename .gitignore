@@ -1,0 +1,19 @@
+# secrets — never commit
+.env
+.env.*
+
+# dependencies & build output
+node_modules/
+dist/
+.turbo/
+*.tsbuildinfo
+
+# supabase local
+supabase/.temp/
+supabase/.branches/
+
+# glofox scrape intermediates (regenerable source material)
+docs/glofox/_*
+
+# os
+.DS_Store

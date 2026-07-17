@@ -1,0 +1,1 @@
+[council] moonshot/kimi-k2.7-code: 30473 in + 10912 out = $0.0726

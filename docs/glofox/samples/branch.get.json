@@ -1,0 +1,273 @@
+{
+ "_id": "654e7d37c8a12ada310de13a",
+ "address": {
+  "street": "<REDACTED:1cbcdeb7>",
+  "city": "<REDACTED:71667a18>",
+  "state": "Florida",
+  "country": "United States of America (the)",
+  "country_code": "US",
+  "district": "Tampa",
+  "latitude": "<REDACTED:db13390c>",
+  "longitude": "<REDACTED:00a259f4>",
+  "currency": "USD",
+  "continent": "NA",
+  "timezone_id": "America/New_York",
+  "timezone_name": "America/New_York",
+  "postal_code": "<REDACTED:6265d77e>",
+  "location": {
+   "lat": 28.0072855,
+   "lng": -82.4474114
+  }
+ },
+ "categories": [
+  "56fbf81c778f3b4db5000004"
+ ],
+ "configuration": {
+  "only_payg": false,
+  "formats": {
+   "date": "MM/DD/YYYY",
+   "time": "h:mm a"
+  },
+  "webportal": {
+   "classes_view": "day",
+   "colors": {
+    "background": "EEF4F4",
+    "accent": "C4973A",
+    "text": "1F3A3F"
+   },
+   "features": {
+    "event_details": {
+     "facility_name": true,
+     "level": true,
+     "price": true,
+     "size": true,
+     "trainer_name": true,
+     "short_trainer_name": false,
+     "total_bookings": true,
+     "total_waiting_list": true
+    },
+    "filters": {
+     "classes": true,
+     "courses": true,
+     "facilities": true,
+     "trainers": true
+    },
+    "general": {
+     "app_download_link": false,
+     "classes": true,
+     "courses": false,
+     "facilities": false,
+     "memberships": true,
+     "show_past_events": true,
+     "trainers": false
+    }
+   }
+  },
+  "control_access": null,
+  "kiosk": null,
+  "facebookPixel": {
+   "pixelId": null
+  },
+  "sales_tax": {
+   "legal_name": "",
+   "tax_number": "",
+   "company_id": ""
+  }
+ },
+ "email": "<REDACTED:b08d2294>",
+ "facebook": "",
+ "features": {
+  "general": {
+   "login_method": "email",
+   "private_access": false,
+   "order": 0,
+   "enabled": false,
+   "minimum_age": 0
+  },
+  "classes": {
+   "order": 0,
+   "enabled": true,
+   "weeks_display": 4,
+   "levels": [
+    "All Levels",
+    "Mixed Levels",
+    "Beginner",
+    "Intermediate",
+    "Advanced"
+   ],
+   "total_display": false,
+   "books_display": true,
+   "books_detail_display": false
+  },
+  "booking": {
+   "order": 1,
+   "enabled": true,
+   "_booking_open_window": false,
+   "limit_booking_enabled": false,
+   "_cancel_credit_option": false,
+   "cancel_credit_option": "",
+   "refunded_credit_expiry": 0,
+   "guest_bookings": 0,
+   "booking_cancel_window": 12,
+   "booking_open_window": 0,
+   "waiting_list_enabled": true,
+   "auto_booking_enabled": true,
+   "waiting_list": 5,
+   "limit_booking_period": "hour",
+   "limit_booking": 0,
+   "late_cancellation_enabled": true,
+   "overbooking_enabled": false,
+   "strike_system": {
+    "enabled": false,
+    "max_strikes": 0
+   },
+   "booking_close_window": 0,
+   "_booking_close_window": false,
+   "active_limit_booking": {
+    "max_active": 0
+   }
+  },
+  "news": {
+   "order": 2,
+   "enabled": true
+  },
+  "trainers": {
+   "order": 3,
+   "enabled": true,
+   "_booking_open_window": false,
+   "_booking_close_window": false,
+   "booking_enabled": true,
+   "booking_weeks_display": 0,
+   "booking_cancel_window": 0,
+   "booking_open_window": 0,
+   "booking_close_window": 0,
+   "booking_time_slot_length": 0,
+   "bookings_weeks_display": 2
+  },
+  "facilities": {
+   "order": 4,
+   "enabled": true,
+   "_booking_open_window": false,
+   "_booking_close_window": false,
+   "booking_enabled": false,
+   "booking_weeks_display": 0,
+   "booking_cancel_window": 0,
+   "booking_open_window": 0,
+   "booking_close_window": 0,
+   "booking_time_slot_length": 0,
+   "bookings_weeks_display": 2,
+   "booking": {
+    "enabled": false
+   }
+  },
+  "club_info": {
+   "enabled": true,
+   "order": 5
+  },
+  "courses": {
+   "enabled": true,
+   "order": 6,
+   "guest_bookings": 0
+  },
+  "store": {
+   "enabled": false,
+   "order": 7
+  },
+  "memberships": {
+   "order": 8,
+   "enabled": true,
+   "payg": {
+    "enabled": true
+   },
+   "time": {
+    "enabled": true
+   },
+   "num_classes": {
+    "enabled": true
+   },
+   "time_classes": {
+    "enabled": true
+   },
+   "member_self_pause": {
+    "enabled": false
+   }
+  },
+  "conversations": {
+   "order": 9,
+   "enabled": false
+  },
+  "stripe_payment": {
+   "enabled": false,
+   "livemode": false,
+   "pay_app": true,
+   "pay_gym": true,
+   "publishable_key": "",
+   "cash_reciepts": true,
+   "charge_percentage": 0
+  },
+  "subscriptions": {
+   "order": 0,
+   "edit_price": {
+    "enabled": true
+   }
+  }
+ },
+ "name": "<REDACTED:a1f81804>",
+ "namespace": "thesaunaguys",
+ "phone": "",
+ "questions": [],
+ "twitter": "",
+ "instagram": "",
+ "website": "www.sauna-guys.com",
+ "working_hours": "",
+ "language": "en",
+ "opening_times": [
+  {
+   "dow": "MO",
+   "start": "09:00",
+   "end": "15:00",
+   "is_open": true
+  },
+  {
+   "dow": "TU",
+   "start": "09:00",
+   "end": "15:00",
+   "is_open": true
+  },
+  {
+   "dow": "WE",
+   "start": "09:00",
+   "end": "15:00",
+   "is_open": true
+  },
+  {
+   "dow": "TH",
+   "start": "09:00",
+   "end": "15:00",
+   "is_open": true
+  },
+  {
+   "dow": "FR",
+   "start": "09:00",
+   "end": "15:00",
+   "is_open": true
+  },
+  {
+   "dow": "SA",
+   "start": "09:00",
+   "end": "15:00",
+   "is_open": true
+  },
+  {
+   "dow": "SU",
+   "start": "09:00",
+   "end": "15:00",
+   "is_open": true
+  }
+ ],
+ "stripe_plan_code": "gold",
+ "type": "branch",
+ "image_url": "<REDACTED:723c141d>",
+ "about": "",
+ "corporate_id": ""
+}

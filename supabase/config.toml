@@ -1,0 +1,4 @@
+# Supabase project config — remote project ref: ysnijttvprwymwheyyfm
+# Migrations in supabase/migrations/ are the single source of schema truth,
+# deployed by the Supabase GitHub integration (merge to main = production).
+project_id = "kelo"

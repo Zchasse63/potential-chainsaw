@@ -1,0 +1,158 @@
+{
+ "object": "list",
+ "page": 1,
+ "limit": 2,
+ "has_more": true,
+ "total_count": 1366,
+ "data": [
+  {
+   "_id": "6a594a166bd76c06090d89e9",
+   "branch_id": "654e7d37c8a12ada310de13a",
+   "namespace": "thesaunaguys",
+   "first_name": "<REDACTED:2fdba0d2>",
+   "last_name": "<REDACTED:f7f3a0a7>",
+   "gender": "<REDACTED:511993d3>",
+   "phone": "<REDACTED:1ab2cdd6>",
+   "email": "<REDACTED:700ed2fe>",
+   "active": true,
+   "type": "member",
+   "membership": {
+    "type": "payg",
+    "start_date": 1784174400,
+    "user_membership_id": "6a594a1777a3572b066cb1f3",
+    "status": "ACTIVE"
+   },
+   "origin": "classpass",
+   "consent": {
+    "email": {
+     "active": false,
+     "modified_at": {
+      "sec": 1784236566,
+      "usec": 615000
+     },
+     "modified_by_user_id": "5a9fea1bfc4d3256baa1a6b3"
+    },
+    "sms": {
+     "active": false,
+     "modified_at": {
+      "sec": 1784236566,
+      "usec": 615000
+     },
+     "modified_by_user_id": "5a9fea1bfc4d3256baa1a6b3"
+    },
+    "push": {
+     "active": true,
+     "modified_at": {
+      "sec": 1784236567,
+      "usec": 228000
+     },
+     "modified_by_user_id": [
+      "5a9fea1bfc4d3256baa1a6b3"
+     ],
+     "modified_from_ip_address": [
+      "34.242.73.32",
+      "130.176.209.82",
+      "3.248.245.213"
+     ]
+    }
+   },
+   "modified": 1784236568,
+   "created": 1784236566,
+   "origin_branch_id": "654e7d37c8a12ada310de13a",
+   "leads": {
+    "status_modified": {
+     "sec": 1784236567,
+     "usec": 276000
+    },
+    "status": "LEAD"
+   },
+   "lead_status": "LEAD",
+   "source": "UNKNOWN",
+   "name": "<REDACTED:5e2f1be8>",
+   "image_url": "<REDACTED:90650b1c>",
+   "account_email": "<REDACTED:c0c972b8>",
+   "contact_email": "<REDACTED:c0c972b8>",
+   "role": "member"
+  },
+  {
+   "_id": "6a58e82e2ea59d87f000e45f",
+   "membership": {
+    "type": "payg",
+    "start_date": 1784174400,
+    "user_membership_id": "6a58e82f3fdef36c0062f689",
+    "status": "ACTIVE"
+   },
+   "first_name": "<REDACTED:0fb5853d>",
+   "last_name": "<REDACTED:d5df24af>",
+   "phone": "<REDACTED:0ef5e897>",
+   "email": "<REDACTED:abe2df7c>",
+   "branch_id": "654e7d37c8a12ada310de13a",
+   "birth": null,
+   "gender": {
+    "name": "<REDACTED:25eded02>",
+    "label": "PREFER NOT TO SAY"
+   },
+   "type": "member",
+   "active": true,
+   "emergency_contact": null,
+   "lead_status": "LEAD",
+   "namespace": "thesaunaguys",
+   "consent": {
+    "email": {
+     "active": false,
+     "modified_by_user_id": [
+      "guest",
+      "guest"
+     ],
+     "modified_at": {
+      "sec": 1784211502,
+      "usec": 730000
+     }
+    },
+    "push": {
+     "active": true,
+     "modified_by_user_id": [
+      "guest"
+     ],
+     "modified_from_ip_address": [
+      "47.205.26.171",
+      "172.68.12.90",
+      "130.176.214.148",
+      "3.248.246.132"
+     ],
+     "modified_at": {
+      "sec": 1784211502,
+      "usec": 730000
+     }
+    },
+    "sms": {
+     "active": false,
+     "modified_by_user_id": [
+      "guest",
+      "guest"
+     ],
+     "modified_at": {
+      "sec": 1784211502,
+      "usec": 730000
+     }
+    }
+   },
+   "modified": 1784211503,
+   "created": 1784211502,
+   "origin_branch_id": "654e7d37c8a12ada310de13a",
+   "leads": {
+    "status_modified": {
+     "sec": 1784211502,
+     "usec": 745000
+    },
+    "status": "LEAD"
+   },
+   "source": "WEBPORTAL",
+   "name": "<REDACTED:13dcdb3a>",
+   "image_url": "<REDACTED:313d36c5>",
+   "account_email": "<REDACTED:f8b7245f>",
+   "contact_email": "<REDACTED:f8b7245f>",
+   "role": "member"
+  }
+ ]
+}

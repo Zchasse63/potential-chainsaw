@@ -1,0 +1,392 @@
+{
+ "object": "list",
+ "page": 1,
+ "limit": 50,
+ "has_more": false,
+ "total_count": 6,
+ "data": [
+  {
+   "_id": "69d80c439f4158716c0068de",
+   "branch_id": "654e7d37c8a12ada310de13a",
+   "namespace": "thesaunaguys",
+   "active": true,
+   "name": "<REDACTED:64deda32>",
+   "description": "Drop in anytime for an hour of sauna and cold plunge contrast therapy. Bring a towel and water.",
+   "buy_just_once": false,
+   "plans": [
+    {
+     "code": 1775766556749,
+     "price": 40,
+     "type": "num_classes",
+     "upfront_fee": 0,
+     "credits": [
+      {
+       "branch_id": "654e7d37c8a12ada310de13a",
+       "namespace": "thesaunaguys",
+       "active": true,
+       "model": "programs",
+       "category_id": null,
+       "num_sessions": 1,
+       "model_ids": [],
+       "expiry": null,
+       "end_date": null
+      }
+     ],
+     "starts_on": "PURCHASE_DATE",
+     "is_group_membership": false,
+     "max_group_membership_size": null,
+     "free_time_unit_count": 0,
+     "_toggle": true,
+     "name": "<REDACTED:64deda32>",
+     "min_price": 0,
+     "auto_renewal": false
+    }
+   ],
+   "type": "membership",
+   "image_url": "<REDACTED:ce920c20>"
+  },
+  {
+   "_id": "69d808cffb6642d8430406d7",
+   "branch_id": "654e7d37c8a12ada310de13a",
+   "namespace": "thesaunaguys",
+   "active": true,
+   "name": "<REDACTED:137c209d>",
+   "description": "Our flexible Class Pack option! Purchase a limited number of credits with no commitment to auto-renewal and no expiration date. Explore classes at your own pace and convenience.",
+   "buy_just_once": false,
+   "plans": [
+    {
+     "code": 1775765553603,
+     "price": 150,
+     "type": "num_classes",
+     "upfront_fee": 0,
+     "credits": [
+      {
+       "branch_id": "654e7d37c8a12ada310de13a",
+       "namespace": "thesaunaguys",
+       "active": true,
+       "model": "programs",
+       "category_id": null,
+       "num_sessions": 4,
+       "model_ids": [],
+       "expiry": null,
+       "end_date": null
+      }
+     ],
+     "starts_on": "PURCHASE_DATE",
+     "is_group_membership": false,
+     "max_group_membership_size": null,
+     "free_time_unit_count": 0,
+     "_toggle": true,
+     "name": "<REDACTED:00a33704>",
+     "min_price": 0,
+     "auto_renewal": false
+    },
+    {
+     "code": 1775765656086,
+     "price": 280,
+     "type": "num_classes",
+     "upfront_fee": 0,
+     "credits": [
+      {
+       "branch_id": "654e7d37c8a12ada310de13a",
+       "namespace": "thesaunaguys",
+       "active": true,
+       "model": "programs",
+       "category_id": null,
+       "num_sessions": 8,
+       "model_ids": [],
+       "expiry": null,
+       "end_date": null
+      }
+     ],
+     "starts_on": "PURCHASE_DATE",
+     "is_group_membership": false,
+     "max_group_membership_size": null,
+     "free_time_unit_count": 0,
+     "_toggle": true,
+     "name": "<REDACTED:2f8552da>",
+     "min_price": 0,
+     "auto_renewal": false
+    }
+   ],
+   "type": "membership",
+   "image_url": "<REDACTED:d80ec585>"
+  },
+  {
+   "_id": "69d807d33ab9f0c5910e87ca",
+   "branch_id": "654e7d37c8a12ada310de13a",
+   "namespace": "thesaunaguys",
+   "active": true,
+   "name": "<REDACTED:8d4f5aeb>",
+   "description": "Choose 4 or 8 sessions per month to build your reset routine. One guest pass per month is included. 30-day cancellation notice required. 12-hour policy applies to individual bookings.",
+   "buy_just_once": false,
+   "plans": [
+    {
+     "code": 1775765031510,
+     "price": 99,
+     "type": "time_classes",
+     "duration_time_unit": "month",
+     "duration_time_unit_count": 1,
+     "upfront_fee": 0,
+     "credits": [
+      {
+       "branch_id": "654e7d37c8a12ada310de13a",
+       "namespace": "thesaunaguys",
+       "active": true,
+       "model": "programs",
+       "category_id": null,
+       "num_sessions": 4,
+       "model_ids": [],
+       "expiry": {
+        "interval": "month",
+        "interval_count": 1
+       },
+       "end_date": null
+      }
+     ],
+     "starts_on": "PURCHASE_DATE",
+     "is_group_membership": false,
+     "max_group_membership_size": null,
+     "free_time_unit_count": 0,
+     "_toggle": true,
+     "_subscription_plan_id": true,
+     "name": "<REDACTED:a9ea2103>",
+     "accepted_payment_methods": [
+      {
+       "type_id": "CARD",
+       "active": true
+      },
+      {
+       "type_id": "DIRECT_DEBIT",
+       "active": true
+      }
+     ],
+     "subscription_amount": 99,
+     "subscription_plan_id": "69d807d33ab9f0c5910e87cb",
+     "min_price": 0,
+     "_has_end": false,
+     "amount": 99,
+     "auto_renewal": false
+    },
+    {
+     "code": 1775765386086,
+     "price": 165,
+     "type": "time_classes",
+     "duration_time_unit": "month",
+     "duration_time_unit_count": 1,
+     "upfront_fee": 0,
+     "credits": [
+      {
+       "branch_id": "654e7d37c8a12ada310de13a",
+       "namespace": "thesaunaguys",
+       "active": true,
+       "model": "programs",
+       "category_id": null,
+       "num_sessions": 8,
+       "model_ids": [],
+       "expiry": {
+        "interval": "month",
+        "interval_count": 1
+       },
+       "end_date": null
+      }
+     ],
+     "starts_on": "PURCHASE_DATE",
+     "is_group_membership": false,
+     "max_group_membership_size": null,
+     "free_time_unit_count": 0,
+     "_toggle": true,
+     "_subscription_plan_id": true,
+     "name": "<REDACTED:597ab548>",
+     "accepted_payment_methods": [
+      {
+       "type_id": "CARD",
+       "active": true
+      },
+      {
+       "type_id": "DIRECT_DEBIT",
+       "active": true
+      }
+     ],
+     "subscription_amount": 165,
+     "subscription_plan_id": "69dad151446da4fcb7068669",
+     "min_price": 0,
+     "_has_end": false,
+     "amount": 165,
+     "auto_renewal": false
+    }
+   ],
+   "type": "membership",
+   "image_url": "<REDACTED:c31a8b8b>"
+  },
+  {
+   "_id": "69d805debc8ba02ac20e9223",
+   "branch_id": "654e7d37c8a12ada310de13a",
+   "namespace": "thesaunaguys",
+   "active": true,
+   "name": "<REDACTED:8c631ae2>",
+   "description": "Unlimited sauna and cold plunge access, whenever you need it. Two guest passes per month are included. 30-day cancellation notice required. 12-hour policy applies to individual bookings.",
+   "buy_just_once": false,
+   "plans": [
+    {
+     "code": 1775764931828,
+     "price": 199,
+     "type": "time",
+     "duration_time_unit": "month",
+     "duration_time_unit_count": 1,
+     "upfront_fee": 0,
+     "credits": [],
+     "starts_on": "PURCHASE_DATE",
+     "is_group_membership": false,
+     "max_group_membership_size": null,
+     "free_time_unit_count": 0,
+     "_toggle": true,
+     "_subscription_plan_id": true,
+     "name": "<REDACTED:8c631ae2>",
+     "accepted_payment_methods": [
+      {
+       "type_id": "CARD",
+       "active": true
+      },
+      {
+       "type_id": "DIRECT_DEBIT",
+       "active": true
+      }
+     ],
+     "subscription_amount": 199,
+     "subscription_plan_id": "69d805debc8ba02ac20e9224",
+     "min_price": 0,
+     "_has_end": false,
+     "amount": 199,
+     "auto_renewal": false
+    }
+   ],
+   "type": "membership",
+   "image_url": "<REDACTED:a5e0f89c>"
+  },
+  {
+   "_id": "69bc2f3a09e043bf300d7302",
+   "branch_id": "654e7d37c8a12ada310de13a",
+   "namespace": "thesaunaguys",
+   "active": true,
+   "name": "<REDACTED:e812851a>",
+   "description": "Experience the benefits of consistent sauna use - unlimited sessions for 14 days!",
+   "buy_just_once": true,
+   "plans": [
+    {
+     "code": 1773940337477,
+     "price": 89,
+     "type": "time",
+     "duration_time_unit": "week",
+     "duration_time_unit_count": 2,
+     "upfront_fee": 0,
+     "credits": [],
+     "starts_on": "PURCHASE_DATE",
+     "is_group_membership": false,
+     "max_group_membership_size": null,
+     "free_time_unit_count": 0,
+     "_toggle": true,
+     "name": "<REDACTED:e812851a>",
+     "min_price": 0,
+     "auto_renewal": false
+    }
+   ],
+   "type": "membership",
+   "image_url": "<REDACTED:9a9274dc>"
+  },
+  {
+   "_id": "67326cdcbd19321574004ccc",
+   "branch_id": "654e7d37c8a12ada310de13a",
+   "namespace": "thesaunaguys",
+   "active": true,
+   "name": "<REDACTED:7979adc5>",
+   "description": "Emailed Gift cards will be redeemed directly through the recipients personal Sauna Guy's account. Upon purchase, The Sauna Guys will add the purchased credits into the recipients personal Sauna Guys account.",
+   "buy_just_once": false,
+   "plans": [
+    {
+     "code": 1731357715989,
+     "price": 40,
+     "type": "num_classes",
+     "upfront_fee": 0,
+     "credits": [
+      {
+       "branch_id": "654e7d37c8a12ada310de13a",
+       "namespace": "thesaunaguys",
+       "active": true,
+       "model": "programs",
+       "category_id": null,
+       "num_sessions": 1,
+       "model_ids": [],
+       "expiry": null,
+       "end_date": null
+      }
+     ],
+     "starts_on": "PURCHASE_DATE",
+     "is_group_membership": false,
+     "max_group_membership_size": null,
+     "free_time_unit_count": 0,
+     "_toggle": true,
+     "name": "<REDACTED:abaee2a2>",
+     "min_price": 0,
+     "auto_renewal": false
+    },
+    {
+     "code": 1731357748183,
+     "price": 150,
+     "type": "num_classes",
+     "upfront_fee": 0,
+     "credits": [
+      {
+       "branch_id": "654e7d37c8a12ada310de13a",
+       "namespace": "thesaunaguys",
+       "active": true,
+       "model": "programs",
+       "category_id": null,
+       "num_sessions": 4,
+       "model_ids": [],
+       "expiry": null,
+       "end_date": null
+      }
+     ],
+     "starts_on": "PURCHASE_DATE",
+     "is_group_membership": false,
+     "max_group_membership_size": null,
+     "free_time_unit_count": 0,
+     "_toggle": true,
+     "name": "<REDACTED:b4df80ed>",
+     "min_price": 0,
+     "auto_renewal": false
+    },
+    {
+     "code": 1731357780100,
+     "price": 280,
+     "type": "num_classes",
+     "upfront_fee": 0,
+     "credits": [
+      {
+       "branch_id": "654e7d37c8a12ada310de13a",
+       "namespace": "thesaunaguys",
+       "active": true,
+       "model": "programs",
+       "category_id": null,
+       "num_sessions": 8,
+       "model_ids": [],
+       "expiry": null,
+       "end_date": null
+      }
+     ],
+     "starts_on": "PURCHASE_DATE",
+     "is_group_membership": false,
+     "max_group_membership_size": null,
+     "free_time_unit_count": 0,
+     "_toggle": true,
+     "name": "<REDACTED:25783537>",
+     "min_price": 0,
+     "auto_renewal": false
+    }
+   ],
+   "type": "membership",
+   "image_url": "<REDACTED:fad92b95>"
+  }
+ ]
+}
