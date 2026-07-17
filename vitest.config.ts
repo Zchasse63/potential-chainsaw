@@ -19,6 +19,9 @@ export default defineConfig({
     include: [
       "packages/*/test/**/*.test.ts",
       "apps/*/test/**/*.test.ts",
+      // apps/web component tests (React TSX; each file opts into the jsdom
+      // environment via its @vitest-environment docblock).
+      "apps/*/test/**/*.test.tsx",
       "workers/test/**/*.test.ts",
     ],
   },

@@ -3,20 +3,31 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "Operator app (placeholder — real Vite + React SPA lands in a later unit).",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    }
-  },
-  "files": [
-    "dist"
-  ],
+  "description": "Operator app — Vite + React SPA (TanStack Router/Query, Tailwind on the Kelo token contract). Phase 0: AppShell + Health v0 trust surface.",
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
-    "@kelo/contracts": "workspace:*"
+    "@kelo/contracts": "workspace:*",
+    "@sentry/react": "10.66.0",
+    "@supabase/supabase-js": "2.110.7",
+    "@tanstack/react-query": "5.101.2",
+    "@tanstack/react-router": "1.170.18",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/react": "16.3.2",
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "4.7.0",
+    "autoprefixer": "10.5.4",
+    "postcss": "8.5.19",
+    "tailwindcss": "3.4.19",
+    "vite": "5.4.21"
   }
 }

@@ -1,0 +1,236 @@
+/* COPIED from docs/design/tokens.css (canonical) — regenerate, do not hand-edit */
+/* Kelo — Route 01 "The Quiet Instrument" · CSS custom properties
+   Drop into the shadcn/ui + Tailwind token layer (globals.css :root).
+   Light mode only for v1; names leave room for a dark pair later. */
+
+@import url('https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600;700&family=Schibsted+Grotesk:wght@400;500;600;700;800&family=Spline+Sans+Mono:wght@400;500;600&display=swap');
+/* Self-host in production; all three are SIL OFL. */
+
+:root {
+  /* Neutral — birch smoke (cool gray, blue undertone) */
+  --kelo-neutral-000: #F5F6F6; --kelo-neutral-050: #EFF1F1;
+  --kelo-neutral-100: #E7EAEA; --kelo-neutral-200: #D8DCDD;
+  --kelo-neutral-300: #BEC4C6; --kelo-neutral-400: #97A0A4;
+  --kelo-neutral-500: #6F7A80; --kelo-neutral-600: #555F66;
+  --kelo-neutral-700: #40494F; --kelo-neutral-800: #2A3238;
+  --kelo-neutral-900: #191F24; --kelo-ink: #10161B;
+
+  --kelo-surface-app: #F5F6F6;
+  --kelo-surface-card: #FCFCFC;
+  --kelo-surface-input: #FFFFFF;
+  --kelo-surface-inverse: #10161B;
+
+  /* Brand — smoke slate */
+  --kelo-brand-050: #EDF1F4; --kelo-brand-100: #DCE4EA;
+  --kelo-brand-200: #C1CFD9; --kelo-brand-300: #9BB0C0;
+  --kelo-brand-400: #7290A5; --kelo-brand-500: #4F708A;
+  --kelo-brand-600: #3E5A74; /* primary */
+  --kelo-brand-700: #324A60; --kelo-brand-800: #27394A;
+  --kelo-brand-900: #1C2A37;
+
+  /* Birch — material, never status */
+  --kelo-birch-050: #F5F0E6; --kelo-birch-100: #EBE1CE;
+  --kelo-birch-200: #D9C9A9; --kelo-birch-300: #C1AB82;
+  --kelo-birch-400: #9C875F; --kelo-birch-500: #746348;
+  --kelo-birch-text: #5E4F38;
+
+  /* Functional */
+  --kelo-success: #2E7D56; --kelo-success-tint: #E3F1E9; --kelo-success-on-tint: #265F44; --kelo-success-border: #BFE0CE;
+  --kelo-warning: #9A6B14; --kelo-warning-tint: #FAF1DC; --kelo-warning-on-tint: #7A540F; --kelo-warning-border: #E0C98E;
+  --kelo-danger:  #B3453C; --kelo-danger-tint:  #FAEAE8; --kelo-danger-on-tint:  #8F362E; --kelo-danger-border:  #E5B3AD;
+  --kelo-info:    #3C6B96; --kelo-info-tint:    #E7F0F8; --kelo-info-on-tint:    #305577; --kelo-info-border:    #9BB0C0;
+
+  /* Domain semantics */
+  --kelo-status-confirmed: var(--kelo-success);
+  --kelo-status-processing: var(--kelo-info);
+  --kelo-status-failed: var(--kelo-danger);
+  --kelo-status-refund-pending: var(--kelo-warning);
+  --kelo-freshness-live: var(--kelo-success);
+  --kelo-freshness-aged-dot: var(--kelo-neutral-400);   /* dot only — never text */
+  --kelo-freshness-aged-text: var(--kelo-neutral-600);
+  --kelo-freshness-stale: var(--kelo-warning);
+  --kelo-freshness-stale-critical: var(--kelo-danger);
+  --kelo-ai-accent: #2F7B80;
+  --kelo-ai-tint: #E3F1F1;
+  --kelo-ai-surface: #F7FBFB;
+  --kelo-ai-on-tint: #266064;
+  --kelo-ai-border-tint: #A8D2D3;
+  --kelo-imported-hatch: repeating-linear-gradient(-45deg, #F5F0E6 0 8px, #EBE1CE 8px 16px);
+
+  /* Borders */
+  --kelo-hairline: rgba(16,22,27,.10);
+  --kelo-border-strong: rgba(16,22,27,.16);
+
+  /* Type */
+  --kelo-font-display: 'Familjen Grotesk', sans-serif;
+  --kelo-font-ui: 'Schibsted Grotesk', sans-serif;
+  --kelo-font-mono: 'Spline Sans Mono', monospace;
+
+  /* Radius (px) */
+  --kelo-radius-1: 4px; --kelo-radius-2: 6px; --kelo-radius-3: 10px;
+  --kelo-radius-4: 16px; --kelo-radius-full: 999px;
+
+  /* Elevation */
+  --kelo-shadow-1: 0 1px 2px rgba(16,22,27,.06);
+  --kelo-shadow-2: 0 2px 8px rgba(16,22,27,.10);
+  --kelo-shadow-3: 0 8px 24px rgba(16,22,27,.14);
+
+  /* Motion */
+  --kelo-duration-1: 120ms; --kelo-duration-2: 200ms; --kelo-duration-3: 320ms;
+  --kelo-ease-standard: cubic-bezier(.2, 0, 0, 1);
+  --kelo-ease-exit: cubic-bezier(.4, 0, 1, 1);
+}
+
+/* shadcn/ui variable mapping — CORRECTED in the v1.1 audit round
+   (the original mapped --input to decorative borders and --muted-foreground
+   below the text-ink floor; both were audit findings):
+   --background        <- --kelo-surface-app
+   --card              <- --kelo-surface-card
+   --foreground        <- --kelo-text-primary
+   --muted             <- --kelo-neutral-050
+   --muted-foreground  <- --kelo-text-muted        (n600 — the ink floor)
+   --primary           <- --kelo-action-primary    (foreground: --kelo-text-on-brand)
+   --secondary         <- --kelo-brand-050         (foreground: --kelo-brand-700)
+   --accent            <- --kelo-brand-050
+   --destructive       <- --kelo-danger            (foreground: white)
+   --border            <- --kelo-hairline          (decorative rules ONLY)
+   --input             <- --kelo-border-input      (form-control boundaries)
+   --ring              <- --kelo-focus-ring-color
+   --radius            <- 6px (r2; cards override to 10px)
+*/
+
+@media (prefers-reduced-motion: reduce) {
+  /* Opacity-only, NOT motionless: fades keep a short duration so state
+     changes still confirm; transform/translate/scale/shimmer animations are
+     banned under reduced motion (CI-enforced), which zeroed movement implied
+     but did not guarantee. (Audit fix: zeroing all durations killed even the
+     opacity confirmations the guide promises.) */
+  :root {
+    --kelo-duration-1: 80ms; --kelo-duration-2: 120ms; --kelo-duration-3: 120ms;
+  }
+}
+
+/* ── Amendments — 2026-07-17 review (accepted) ─────────────────────────── */
+:root {
+  /* Form-control boundary: >=3:1 on card white (hairlines stay decorative) */
+  --kelo-border-input: #8A9296;
+
+  /* Charts — max 3 categorical hues; series 4+ use patterns on repeats.
+     Green/red never appear as neutral categories (status-reserved). */
+  --kelo-chart-1: #3E5A74;         /* slate  */
+  --kelo-chart-2: #9A6B14;         /* amber  */
+  --kelo-chart-3: #746348;         /* birch  */
+  --kelo-chart-series: #4F708A;    /* single-series lines/sparklines */
+  --kelo-chart-demand-1: rgba(62,90,116,.05);
+  --kelo-chart-demand-2: rgba(62,90,116,.11);
+  --kelo-chart-demand-3: rgba(62,90,116,.18);
+  --kelo-chart-demand-4: rgba(62,90,116,.27);
+}
+/* Usage rules (enforced in CI, not just documented):
+   - neutral-400 is never a text color; lightest text ink is neutral-600.
+   - Tenant text tokens are AA-validated at intake; failures are rejected. */
+
+/* ── v1.1 — Semantic layer (external audit round, 2026-07-17) ───────────────
+   The three-layer architecture, materialized: feature code uses THESE, never
+   raw scales. tokens.json is canonical; this file is generated from it (CI
+   parity check is a build task). */
+:root {
+  /* Text roles — the ink floor made executable */
+  --kelo-text-primary: var(--kelo-ink);
+  --kelo-text-secondary: var(--kelo-neutral-700);
+  --kelo-text-muted: var(--kelo-neutral-600);        /* the floor: #555F66 */
+  --kelo-text-placeholder: var(--kelo-neutral-600);
+  --kelo-text-disabled: rgba(85,95,102,.55);         /* n600 @55% — WCAG-exempt, tokenized, never improvised */
+  --kelo-text-on-brand: #FFFFFF;
+  --kelo-link: var(--kelo-brand-600);
+  --kelo-link-hover: var(--kelo-brand-700);
+
+  /* Action matrix — no more guessed hovers */
+  --kelo-action-primary: var(--kelo-brand-600);
+  --kelo-action-primary-hover: var(--kelo-brand-700);
+  --kelo-action-primary-active: var(--kelo-brand-800);
+  --kelo-action-primary-disabled-bg: var(--kelo-neutral-050);
+  --kelo-action-secondary-bg: var(--kelo-surface-card);
+  --kelo-action-secondary-hover: #F1F3F4;
+  --kelo-action-secondary-active: var(--kelo-neutral-100);
+  --kelo-action-secondary-border: var(--kelo-border-strong);
+  --kelo-action-ghost-hover: #F1F3F4;
+  --kelo-action-destructive: var(--kelo-danger);
+  --kelo-action-destructive-hover: #9E3B33;
+  --kelo-action-destructive-active: #8A342C;
+  --kelo-selected-bg: var(--kelo-brand-050);         /* nav items, table rows, slots */
+  --kelo-selected-border: var(--kelo-brand-600);
+
+  /* Focus — tokenized, not prose */
+  --kelo-focus-ring-color: var(--kelo-brand-600);
+  --kelo-focus-ring-width: 2px;
+  --kelo-focus-ring-offset: 2px;
+
+  /* Overlay + stacking — closed scale */
+  --kelo-scrim: rgba(16,22,27,.44);
+  --kelo-z-dropdown: 1000; --kelo-z-sticky: 1020; --kelo-z-banner: 1030;
+  --kelo-z-drawer: 1040;   --kelo-z-modal: 1050;  --kelo-z-toast: 1060;
+  --kelo-z-palette: 1070;  --kelo-z-critical: 1080;
+
+  /* Spacing scale (4px grid) */
+  --kelo-space-1: 4px;  --kelo-space-2: 8px;  --kelo-space-3: 12px;
+  --kelo-space-4: 16px; --kelo-space-5: 20px; --kelo-space-6: 24px;
+  --kelo-space-8: 32px; --kelo-space-10: 40px; --kelo-space-12: 48px;
+  --kelo-space-16: 64px;
+
+  /* Density packs — comfortable (default) / dense (tables) / desk (counter) */
+  --kelo-control-h: 36px;        --kelo-row-h: 44px;       --kelo-cell-pad: 12px;
+  --kelo-dense-control-h: 32px;  --kelo-dense-row-h: 36px; --kelo-dense-cell-pad: 8px;
+  --kelo-desk-control-h: 48px;   --kelo-desk-primary-h: 56px;
+  --kelo-desk-row-h: 64px;       --kelo-desk-cell-pad: 16px;
+  /* Hit-target law: pointer surfaces may render 36px controls but carry a
+     >=44px hit area (padding extension); touch surfaces (Desk, member,
+     owner phone) render >=44px visual. */
+
+  /* Status shape pins (audit: "radius 4-5" and "radius 3" were ambiguous) */
+  --kelo-radius-status-processing: var(--kelo-radius-1);  /* 4px */
+  --kelo-radius-status-failed: 3px;                       /* intentionally sharper than r1 — the alarm shape */
+
+  /* Charts — secondary chrome */
+  --kelo-chart-tooltip-bg: var(--kelo-surface-card);
+  --kelo-chart-tooltip-shadow: var(--kelo-shadow-2);
+
+  /* Icon / avatar / badge scales */
+  --kelo-icon-1: 12px; --kelo-icon-2: 16px; --kelo-icon-3: 20px; --kelo-icon-4: 24px;
+  --kelo-avatar-1: 24px; --kelo-avatar-2: 32px; --kelo-avatar-3: 40px;
+  --kelo-badge-min: 16px;
+
+  /* Missing from v1 CSS (present in JSON) */
+  --kelo-surface-inverse-brand: #1C2A37;
+}
+
+/* ── v1.1 round 3 — Kimi K3 audit closure (2026-07-17) ──────────────────────
+   Executable vars for the round-3 tokens.json additions. tokens.json is
+   canonical; a CI parity check reconciles the two. */
+:root {
+  /* Input state borders (K17) — rest uses --kelo-border-input above */
+  --kelo-focus-glow: 0 0 0 3px rgba(62,90,116,.18);   /* input focus glow (buttons/links use the offset ring) */
+  --kelo-input-border-focus: var(--kelo-brand-600);   /* 1.5px */
+  --kelo-input-border-error: var(--kelo-danger);      /* 1.5px */
+
+  /* Chrome hexes admitted to the semantic layer (K18) */
+  --kelo-icon-inactive: #8A939A;
+  --kelo-warning-surface-weak: #FDF8EC;               /* row-level warning wash */
+  --kelo-warning-emphasis-text: #5C3F0B;              /* banner titles on warning tint */
+
+  /* Micro rules that are single values (K19) */
+  --kelo-fill-bar-complete: var(--kelo-brand-700);
+  --kelo-selected-border-strong: var(--kelo-brand-600); /* 2px slots/tender */
+  --kelo-selected-border-chip: var(--kelo-brand-600);   /* 1px filter chips */
+
+  /* Radii (K11, K26) */
+  --kelo-radius-desk: 8px;                             /* desk buttons, phone tabs */
+  --kelo-radius-status-critical-dot: 2px;             /* stale-critical squared dot */
+
+  /* Skeleton (K20) — static, no shimmer */
+  --kelo-skeleton-base: var(--kelo-neutral-100);      /* #E7EAEA */
+  --kelo-skeleton-highlight: var(--kelo-neutral-050); /* #EFF1F1 */
+}
+/* Reserved-hue collision (member-theme intake, K7): tenant-action must sit
+   outside collision distance of danger #B3453C, success #2E7D56, ai #2F7B80.
+   Enforced in the intake validator, not CSS. */

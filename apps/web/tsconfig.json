@@ -3,9 +3,13 @@
   "compilerOptions": {
     "composite": true,
     "declaration": true,
-    "rootDir": "src",
-    "outDir": "dist",
-    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo"
+    "emitDeclarationOnly": true,
+    "rootDir": ".",
+    "outDir": "dist-test",
+    "tsBuildInfoFile": "dist-test/tsconfig.tsbuildinfo",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["vite/client"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "test/**/*.tsx", "vite.config.ts"]
 }
