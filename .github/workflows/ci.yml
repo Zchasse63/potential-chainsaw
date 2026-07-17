@@ -8,13 +8,14 @@ on:
 permissions:
   contents: read
 
-# NOTE (next unit): two more jobs land here —
-#   1. a DB/RLS cross-tenant attack-suite job (CLAUDE.md invariant #7: every new
-#      table/matview/RPC gets a generated attack test; a new table without a
-#      policy fails the build), and
-#   2. the Supabase preview-branch integration (plan-final §1: PRs get preview
-#      branches; migrations deploy via the GitHub integration on merge to main).
-# Both need the first migration, which arrives with the next unit.
+# The `db` job below is the RLS security gate (CLAUDE.md invariant #7: every
+# tenant-scoped table gets a generated cross-tenant attack test; a table without
+# a policy fails the build). It runs the portable plpgsql suite on a plain
+# Postgres 17 container via the Supabase shim — no Docker/Supabase-local needed.
+# Real-Supabase parity comes from the Supabase GitHub integration, which applies
+# supabase/migrations/*.sql to a preview branch on every PR (plan-final §1).
+# NOTE (next unit): the jobs-queue concurrency ("double-tick executes once") test
+# is added to the `db` job when the queue migration lands.
 
 jobs:
   check:
@@ -75,3 +76,30 @@ jobs:
       - name: dependency audit (non-blocking)
         continue-on-error: true
         run: pnpm audit --prod
+
+  db:
+    name: RLS attack suite (Postgres 17)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: install postgresql-client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: bootstrap + migrations + RLS attack suite
+        # scripts/db-test.sh: _bootstrap.sql (Supabase shim) → migrations in order
+        # → rls_attack.sql. Any failed assertion RAISEs → psql non-zero → job fails.
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: ./scripts/db-test.sh
