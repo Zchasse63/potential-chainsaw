@@ -1,0 +1,8 @@
+pnpm-lock.yaml
+**/dist/
+**/dist-test/
+# Hand-maintained prose docs — prettier must not reformat these.
+/*.md
+plans/
+docs/
+supabase/

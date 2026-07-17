@@ -5,6 +5,7 @@
 # dependencies & build output
 node_modules/
 dist/
+dist-test/
 .turbo/
 *.tsbuildinfo
 

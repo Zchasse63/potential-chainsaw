@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# NOTE (next unit): two more jobs land here —
+#   1. a DB/RLS cross-tenant attack-suite job (CLAUDE.md invariant #7: every new
+#      table/matview/RPC gets a generated attack test; a new table without a
+#      policy fails the build), and
+#   2. the Supabase preview-branch integration (plan-final §1: PRs get preview
+#      branches; migrations deploy via the GitHub integration on merge to main).
+# Both need the first migration, which arrives with the next unit.
+
+jobs:
+  check:
+    name: typecheck · lint · test · build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -w typecheck
+      - run: pnpm -w lint
+      - run: pnpm -w test
+      - run: pnpm -w build
+
+  secrets:
+    name: secrets scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+      - name: no Supabase service-role JWT committed
+        # Supabase JWTs are HS256; a service-role token's payload base64-encodes
+        # `"role":"service_role"` ("c2VydmljZV9yb2xl"). Best-effort grep —
+        # gitleaks above is the real detector.
+        run: |
+          if grep -rInE 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*c2VydmljZV9yb2xl[A-Za-z0-9_.-]*' . \
+              --exclude-dir=.git --exclude-dir=node_modules; then
+            echo "::error::possible Supabase service-role JWT committed"
+            exit 1
+          fi
+
+      - name: no service-role reference in apps/web sources
+        # Invariant: the service role key bypasses RLS and never appears
+        # client-side (ESLint guardrail catches it locally; this is the CI gate).
+        run: |
+          if grep -rIn 'SUPABASE_SERVICE_ROLE_KEY' apps/web \
+              --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' \
+              --include='*.mts' --include='*.mjs'; then
+            echo "::error::SUPABASE_SERVICE_ROLE_KEY referenced from apps/web"
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - name: dependency audit (non-blocking)
+        continue-on-error: true
+        run: pnpm audit --prod

@@ -1,0 +1,22 @@
+{
+  "name": "@kelo/db",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Typed Supabase client factories + generated DB types (stub until first migration).",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.110.7"
+  }
+}

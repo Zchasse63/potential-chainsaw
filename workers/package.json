@@ -1,0 +1,23 @@
+{
+  "name": "@kelo/workers",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Job processors as Netlify Background Functions (placeholder — processors land in a later unit).",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@kelo/contracts": "workspace:*",
+    "@kelo/db": "workspace:*"
+  }
+}
