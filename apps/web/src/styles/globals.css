@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-surface-app font-ui text-ink antialiased;
+  }
+
+  /* Focus ring (design guide §10): 2px brand-600, 2px offset — tokenized. */
+  :focus-visible {
+    outline: var(--kelo-focus-ring-width) solid var(--kelo-focus-ring-color);
+    outline-offset: var(--kelo-focus-ring-offset);
+  }
+}
+
+@layer utilities {
+  /* Imported-data material (design guide §4): birch hatch is a background
+     image, so it can't be a Tailwind color utility. */
+  .bg-hatch {
+    background-image: var(--kelo-imported-hatch);
+  }
+}

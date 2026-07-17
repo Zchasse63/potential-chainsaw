@@ -1,0 +1,12 @@
+title = "Kelo gitleaks config"
+
+# Keep the full default rule set; this file only adds repo-specific allowlists.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Not secrets: pinned PII-redacted Glofox samples (every value is a '<REDACTED:…>' placeholder) and the empty env template."
+paths = [
+  '''^docs/glofox/samples/''',
+  '''^\.env\.example$''',
+]

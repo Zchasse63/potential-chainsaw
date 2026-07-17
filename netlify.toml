@@ -1,0 +1,23 @@
+# Netlify deploy config (Phase 0.4). The deploy itself is the director's/owner's
+# action (BLOCKERS P0-3): create/link the site, then set env in the Netlify UI —
+#   SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY (workers only),
+#   SUPABASE_DB_URL, HEARTBEAT_PING_URL, WORKER_SHARED_SECRET, SENTRY_DSN
+# Nothing secret ever lands in this file.
+
+[build]
+  command = "pnpm -w build"
+  # apps/web is still a placeholder stub (the real Vite SPA lands in a later
+  # unit); publish points at its tsc dist until then.
+  publish = "apps/web/dist"
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+# /api/* → the one Hono app (netlify/functions/api.mts). Status 200 = rewrite:
+# the function receives the original /api/v1/... path, matching the app's
+# basePath.
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200

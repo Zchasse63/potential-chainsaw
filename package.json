@@ -3,6 +3,26 @@
   "private": true,
   "version": "0.0.1",
   "description": "Studio-operations platform for recovery/wellness studios with an AI intelligence layer",
-  "engines": { "node": ">=20" },
-  "packageManager": "pnpm@9.15.0"
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "typecheck": "tsc -b",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "test": "vitest run",
+    "build": "pnpm -r build"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "@types/node": "20.19.43",
+    "eslint": "9.39.5",
+    "jsdom": "29.1.1",
+    "prettier": "3.9.5",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.64.0",
+    "vitest": "4.1.10"
+  }
 }

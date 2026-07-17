@@ -1,4 +1,11 @@
 packages:
   - "packages/*"
   - "apps/*"
+  # @kelo/workers is a single package at workers/ (plan-final §1); the workers/*
+  # glob stays so future split-out packages are picked up without editing this file.
+  - "workers"
   - "workers/*"
+  # @kelo/netlify-functions is a single package at netlify/ (Phase 0.4): the
+  # Netlify Function entrypoints (api adapter, the one scheduler tick, worker
+  # background function).
+  - "netlify"

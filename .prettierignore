@@ -1,0 +1,11 @@
+pnpm-lock.yaml
+**/dist/
+**/dist-test/
+# Hand-maintained prose docs — prettier must not reformat these.
+/*.md
+plans/
+docs/
+supabase/
+# Vendored copy of docs/design/tokens.css — must stay byte-identical to the
+# canonical file (see its header comment); formatting it is drift.
+apps/web/src/styles/tokens.css

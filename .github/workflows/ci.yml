@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# The `db` job below is the RLS security gate (CLAUDE.md invariant #7: every
+# tenant-scoped table gets a generated cross-tenant attack test; a table without
+# a policy fails the build). It runs the portable plpgsql suite on a plain
+# Postgres 17 container via the Supabase shim — no Docker/Supabase-local needed.
+# Real-Supabase parity comes from the Supabase GitHub integration, which applies
+# supabase/migrations/*.sql to a preview branch on every PR (plan-final §1).
+# NOTE (next unit): the jobs-queue concurrency ("double-tick executes once") test
+# is added to the `db` job when the queue migration lands.
+
+jobs:
+  check:
+    name: typecheck · lint · test · build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -w typecheck
+      - run: pnpm -w lint
+      - run: pnpm -w test
+      - run: pnpm -w build
+      - name: no secrets in built web artifacts
+        # Threat model §1/§6: the service-role key, the workers' pool string,
+        # and Stripe live-key prefixes must never reach the client bundle.
+        run: |
+          if grep -rIn -e 'SUPABASE_SERVICE_ROLE_KEY' -e 'SUPABASE_DB_URL' \
+              -e 'sk_live' -e 'rk_live' apps/web/dist; then
+            echo "::error::secret reference found in the built web bundle"
+            exit 1
+          fi
+
+  secrets:
+    name: secrets scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so gitleaks can scan the PR commit range (a shallow
+          # depth-1 clone makes the range unresolvable → the action errors out).
+          fetch-depth: 0
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          # gitleaks-action v2 requires the auto-created token to scan PRs.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+      - name: no Supabase service-role JWT committed
+        # Supabase JWTs are HS256; a service-role token's payload base64-encodes
+        # `"role":"service_role"` ("c2VydmljZV9yb2xl"). Best-effort grep —
+        # gitleaks above is the real detector.
+        run: |
+          if grep -rInE 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*c2VydmljZV9yb2xl[A-Za-z0-9_.-]*' . \
+              --exclude-dir=.git --exclude-dir=node_modules; then
+            echo "::error::possible Supabase service-role JWT committed"
+            exit 1
+          fi
+
+      - name: no service-role reference in apps/web sources
+        # Invariant: the service role key bypasses RLS and never appears
+        # client-side (ESLint guardrail catches it locally; this is the CI gate).
+        run: |
+          if grep -rIn 'SUPABASE_SERVICE_ROLE_KEY' apps/web \
+              --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' \
+              --include='*.mts' --include='*.mjs'; then
+            echo "::error::SUPABASE_SERVICE_ROLE_KEY referenced from apps/web"
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - name: dependency audit (non-blocking)
+        continue-on-error: true
+        run: pnpm audit --prod
+
+  db:
+    name: DB gate — RLS attack + queue concurrency (Postgres 17)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - name: install postgresql-client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: bootstrap + migrations + RLS attack suite
+        # scripts/db-test.sh: _bootstrap.sql (Supabase shim) → migrations in order
+        # → rls_attack.sql. Any failed assertion RAISEs → psql non-zero → job fails.
+        run: ./scripts/db-test.sh
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: jobs-queue concurrency (double-tick executes once)
+        # Migrations are already applied (db-test.sh above); this runs the
+        # two-connection SKIP-LOCKED proof against the same Postgres service.
+        # Invoked at repo root so the root vitest config's include globs resolve
+        # (DATABASE_URL is set at the job level → the skipIf gate goes active).
+        run: pnpm exec vitest run packages/db/test/jobs_concurrency.test.ts

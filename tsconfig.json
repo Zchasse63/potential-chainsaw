@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/contracts" },
+    { "path": "packages/contracts/tsconfig.test.json" },
+    { "path": "packages/db" },
+    { "path": "apps/api" },
+    { "path": "apps/web" },
+    { "path": "workers" },
+    { "path": "netlify" }
+  ]
+}
