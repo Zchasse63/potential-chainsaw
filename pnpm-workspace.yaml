@@ -5,3 +5,7 @@ packages:
   # glob stays so future split-out packages are picked up without editing this file.
   - "workers"
   - "workers/*"
+  # @kelo/netlify-functions is a single package at netlify/ (Phase 0.4): the
+  # Netlify Function entrypoints (api adapter, the one scheduler tick, worker
+  # background function).
+  - "netlify"

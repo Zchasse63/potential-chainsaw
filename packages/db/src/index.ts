@@ -18,6 +18,21 @@ export function createAnonClient(): KeloSupabaseClient {
 }
 
 /**
+ * User-scoped client — every query runs AS the authenticated user, RLS
+ * enforced (invariant #7). The API's requireAuth middleware builds one per
+ * request from the verified Bearer token: the anon key identifies the project,
+ * the `Authorization: Bearer <accessToken>` global header makes PostgREST and
+ * auth.admin treat every call as that user (their JWT is forwarded, so RLS
+ * policies see auth.uid() = the verified user). NEVER the service role.
+ */
+export function createUserClient(accessToken: string): KeloSupabaseClient {
+  return createClient<Database>(requireEnv("SUPABASE_URL"), requireEnv("SUPABASE_ANON_KEY"), {
+    global: { headers: { Authorization: `Bearer ${accessToken}` } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
+
+/**
  * Service-role client — BYPASSES RLS. Workers/webhooks only, NEVER apps/web
  * (ESLint guardrail + CI secrets grep enforce). Every service-role query must
  * still filter tenant explicitly and write an audit event.
