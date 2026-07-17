@@ -158,7 +158,10 @@ provider dimension and alert on unknown wrappers).
 ```
 StripeCharge: { _id, id, transaction_status (PAID|ERROR|REFUNDED [LIVE]), transaction_provider_id,
   amount (float), currency, customer, paid, invoice_id, event_id, description,
-  transaction_group_id, amount_refunded, status, taxes, created, modified (string unix),
+  transaction_group_id, amount_refunded, status, taxes,
+  created, modified (branch-LOCAL wall-time strings "YYYY-MM-DD HH:MM:SS", NO zone — convert via
+  the branch timezone; corrected 2026-07-17 against the pinned sample, which shows
+  "2026-07-17 04:32:52", not string unix),
   metadata: { namespace, branch_id, glofox_event, stripe_subscription_id, user_id, user_name,
               membership_id, plan_code, payment_method, resource_id, environment,
               is_payment_link, balance, user_tax_id } }
