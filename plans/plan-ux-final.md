@@ -134,10 +134,12 @@ the counter); **unsubscribe/opt-out as designed UX**; **real-user performance mo
 
 ## 2. Information architecture
 
-**Owner/manager, desktop:** persistent left rail — **Today · Schedule · People · Outreach ·
-Money · Reports** — plus **Desk** (below) and **More** (Retail & gift cards *(phase 4–5)*, Staff,
-Waivers, Health, Setup, Settings, Audit log). Not user-customizable. Owner lands on Today.
-**Phone:** bottom tabs **Today · Money · People · Schedule · More**; KPI strip renders as a
+**Owner/manager, desktop:** persistent left rail — **Today · Schedule · People · Payments ·
+Marketing · Reports · Health** *(labels amended 2026-07-17 to match the accepted design; Health
+promoted to the rail with a quiet status dot — fitting for a trust-first product)* — plus the
+**Desk-mode launcher card** (below) and **More** (Retail & gift cards *(phase 4–5)*, Staff,
+Waivers, Setup, Settings, Audit log). Not user-customizable. Owner lands on Today.
+**Phone:** bottom tabs **Today · Payments · People · Schedule · More**; KPI strip renders as a
 two-column grid; deep links from Today bypass navigation.
 
 **Desk** — a separate full-screen route group (same app, same session, role-gated), tablet-first:
@@ -200,7 +202,9 @@ ranked people (evidence chips, consent/contactability state, existing-outreach s
 panel (Email/SMS tabs, rationale, **tracked changes vs the AI draft**, per-person merge-field
 preview, SMS segment count, unverifiable-claim warnings) → **two-checkpoint ceremony on one
 screen** (Audience: "18 selected, 3 excluded — reasons shown by name" / Content: exact final
-preview) → button: **"Send email to 18 people"** → durable per-person send monitor (queued / sent /
+preview) → buttons: **"Send email to 18 people"** plus **"Send test to me"** (a real send to the
+owner's own contact — the cheapest trust builder in the ceremony, adopted from the design round)
+→ durable per-person send monitor (queued / sent /
 delivered / failed / skipped-with-reason; failures retry-able, never silent) → immutable per-person
 comms log. Consent re-validated at send; quiet hours enforced in the **studio location's timezone**
 (aligned with the build plan — members of a physical studio are local; revisit only if a tenant
@@ -302,7 +306,10 @@ material); labels in plain language ("Imported from Glofox," "Live in Kelo"); de
 tap (absolute + relative time, source, run id, reconciliation state, Health link). Health page:
 current issues (each naming its *operational consequence* — "Bookings are 4h stale; don't trust
 imported availability"), entity freshness, authority matrix (read source / write source / cadence /
-**countdown-to-cutover narrative**), import runs, quarantine, reconciliation history. **The
+**countdown-to-cutover narrative**), import runs, quarantine, reconciliation history, a
+**verification ledger** (append-only, exportable feed of every automated check with pass/fail
+and counts), and the trust-streak headline **"days since an unverified figure shown"** (both
+adopted from the design round — the founding trauma turned into a number). **The
 "prove this number" gesture** (new, universal): every KPI and briefing-cited metric offers a
 two-tap path → constituent rows + envelope metadata + export. Trust is a gesture, not a promise.
 **Anti-habituation controls** (new): alerts dedupe into incidents; banners are relevance-scoped
@@ -540,3 +547,19 @@ UX findings that should modify [plan-final.md](plan-final.md):
      a cached app shell risks stale-as-fresh, which the freshness contract cannot tolerate.
    - **Quiet hours**: confirmed studio-location timezone (aligned; no per-person timezone data
      needed).
+
+---
+
+## Part III — Design-round amendments (2026-07-17, accepted by owner)
+
+The visual design guide is delivered and accepted: **[docs/design/](../docs/design/)** —
+`DESIGN-GUIDE.md` (Route 01 "The Quiet Instrument" + accepted amendments), `tokens.json` /
+`tokens.css` (the machine-readable contract, AA- and CVD-validated), the stylescape, all P0+P1
+screen mockups, and the Today phone variant. Changes absorbed into this plan: rail/phone nav
+labels (§2), "Send test to me" in the approval ceremony (§3B), the verification ledger + trust
+streak on Health (§3F). Standing rules from the design review now bind the build: `neutral-400`
+is never a text color (floor = `neutral-600`); form controls use the dedicated ≥3:1 input-border
+token; charts use max 3 categorical hues (slate/amber/birch — green/red stay status-reserved)
+with patterns beyond; tenant text tokens are AA-validated mechanically at intake. Open,
+non-gating: final wordmark (circled-k is the working mark) and The Sauna Guys' real brand assets
+for the member-surface skin. **The design gate is closed.**

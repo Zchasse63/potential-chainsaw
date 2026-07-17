@@ -104,3 +104,31 @@ WCAG 2.2 AA. All fg/bg pairs in `tokens.json` pass at their listed pairings (CI-
 change). Status never by color alone (shapes/icons above). Focus ring: 2px brand-600, 2px
 offset. Text minimums: 12px desktop chrome, 13px tables, micro mono 10.5px only for
 uppercase labels, never sentences.
+
+---
+
+## Amendments — 2026-07-17 review (accepted by owner)
+
+1. **Text-ink floor.** `neutral-400` is never a text color at any size — the lightest text ink is
+   `neutral-600` (#555F66). This corrects four mockup usages (source micro-labels, struck
+   "FULL" slot times, and the member-skin placeholder grays); the P0/P1 mockups are prototypes —
+   the build follows this rule, not the prototype's ink choices. Tenant (white-label) text
+   tokens are **AA-validated mechanically at intake**: sub-AA values are rejected.
+2. **Input boundary token.** `--kelo-border-input: #8A9296` (3.05:1 on card white) for form
+   controls; 10–16%-ink hairlines remain decorative-only. Rationale: fields must be findable on a
+   glare-lit counter tablet — the boundary is operational.
+3. **Chart palette (validated for AA + deutan/protan separability).** Categorical: slate
+   `#3E5A74` → amber `#9A6B14` → birch `#746348`, **max 3 hues per chart**; series 4+ repeat hues
+   with patterns (hatch/dash — already this system's language) or the chart gets rethought.
+   Green/red never appear as neutral categories: a series colored success/danger must *be* that
+   status. Single-series marks use `#4F708A`; the demand heatmap keeps its brand-alpha ramp.
+4. **Navigation labels adopted from the mockups** (UX plan amended to match): rail = Today ·
+   Schedule · People · **Payments** · **Marketing** · Reports · **Health**; Desk is the launcher
+   card into its full-screen route group; phone tabs = Today · Payments · People · Schedule ·
+   More.
+5. **Wordmark status.** The circled-k monogram is the accepted *working* mark; the final mark
+   remains an open, non-gating owner decision (isolated to mark + favicon slots).
+6. **Canvas note.** App background = `surface.app` (#F5F6F6); #E5E7E8 in handoff frames is
+   presentation chrome, not a token.
+7. **Today phone variant** added as `p0-today-phone.html` (composed from the component sheet per
+   the system's rules; two-column KPI grid, no carousels).

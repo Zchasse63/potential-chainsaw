@@ -98,3 +98,23 @@
 @media (prefers-reduced-motion: reduce) {
   :root { --kelo-duration-1: 0ms; --kelo-duration-2: 0ms; --kelo-duration-3: 0ms; }
 }
+
+/* ── Amendments — 2026-07-17 review (accepted) ─────────────────────────── */
+:root {
+  /* Form-control boundary: >=3:1 on card white (hairlines stay decorative) */
+  --kelo-border-input: #8A9296;
+
+  /* Charts — max 3 categorical hues; series 4+ use patterns on repeats.
+     Green/red never appear as neutral categories (status-reserved). */
+  --kelo-chart-1: #3E5A74;         /* slate  */
+  --kelo-chart-2: #9A6B14;         /* amber  */
+  --kelo-chart-3: #746348;         /* birch  */
+  --kelo-chart-series: #4F708A;    /* single-series lines/sparklines */
+  --kelo-chart-demand-1: rgba(62,90,116,.05);
+  --kelo-chart-demand-2: rgba(62,90,116,.11);
+  --kelo-chart-demand-3: rgba(62,90,116,.18);
+  --kelo-chart-demand-4: rgba(62,90,116,.27);
+}
+/* Usage rules (enforced in CI, not just documented):
+   - neutral-400 is never a text color; lightest text ink is neutral-600.
+   - Tenant text tokens are AA-validated at intake; failures are rejected. */

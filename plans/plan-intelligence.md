@@ -57,7 +57,7 @@ window, before the briefing hour); a draft-generation job follows each run, rege
 for any segment whose membership changed; drafts carry a 7-day TTL and an on-demand refresh from
 the approval screen (counted against the token budget). Criterion 5's denominator = the 12
 outreach-bearing segments (`active-recurring` excluded by design); **draft-readiness coverage is
-a tracked §4 metric** alongside the briefing-open rate.
+a tracked §4 metric** alongside the briefing-open rate and the **trust streak** (§5).
 
 ## 2. The daily briefing
 
@@ -142,6 +142,7 @@ caps with alerting (**[OWNER]** default $50/tenant/mo, single-tenant reality ≈
 | **LTV (simple)** | Lifetime collected revenue per person. | Labeled "lifetime collected," no projection. |
 | **Walk-ins** | Same-day front-desk-channel bookings. | |
 | **Aggregator revenue** | Recorded net payout when known; otherwise flagged `estimated` with the assumption shown. | **[OWNER]** what does ClassPass actually pay per visit today? |
+| **Trust streak** | Consecutive days with zero unverified figures shown (a day breaks the streak if any screen rendered a number whose verification check failed or was skipped — computed from the verification ledger). | Adopted from the design round (2026-07-17): the Health page's headline number. The founding trauma, inverted into a metric. |
 | **Conversion rate (the product's KPI — canonical definition)** | Numerator: people whose `primary_relationship` transitioned to `recurring_member` during the month (from `person_relationship_log`). Denominator: people whose `primary_relationship` was `pack_holder`, `guest`, or `aggregator` **on the first day of that month**. | The growth engine, measured honestly. `hooked → member` is a secondary segment-level lens, not this KPI. |
 
 ## 6. Gold-label protocol (phase 1, owner task, ~2 hours)

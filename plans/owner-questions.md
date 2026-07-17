@@ -45,6 +45,14 @@ equally fine. Sources: [plan-final.md](plan-final.md), [plan-ux-final.md](plan-u
 | B16 | SMS geo-permissions | US-only sending | Phase 3 (blocks SMS-pumping attacks) |
 | B17 | Comms/AI retention: message bodies 2 years, AI artifacts 1 year | Confirm | Phase 3 retention matrix |
 
+## Design gate — CLOSED 2026-07-17
+
+The visual design guide is delivered, reviewed, amended, and accepted: [docs/design/](../docs/design/)
+(Route 01 "The Quiet Instrument" — guide, AA/CVD-validated token contract, stylescape, all P0+P1
+mockups incl. the Today phone variant). UX plan confirmed with design-round amendments
+(plan-ux-final.md Part III). Remaining, **non-gating**: final wordmark (circled-k is the working
+mark) and The Sauna Guys brand assets for the member-surface skin (C6 below).
+
 ## C. Actions only you can take (start now — all have lead times)
 
 1. **Buy `getkelo.com` and `kelo.studio`** — minutes, no legal gate, do it today.
@@ -55,6 +63,8 @@ equally fine. Sources: [plan-final.md](plan-final.md), [plan-ux-final.md](plan-u
 3. **Call the insurance broker** — digital-waiver coverage + any required waiver wording (phase 4).
 4. **Locate Glofox contract + API credentials** (A3) and answer the Stripe dashboard question (A1).
 5. **Sign Anthropic zero-data-retention terms** when the account is set up (phase 2).
+6. **Send The Sauna Guys brand assets** (logo, any existing colors/type) — slots into the member-
+   surface skin via the validated tenant tokens; non-gating until phase 8.
 
 ## D. Two build-plan choices you may want to weigh in on (defaults chosen, reversible)
 
