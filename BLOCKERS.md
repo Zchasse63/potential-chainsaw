@@ -21,6 +21,7 @@ _Last updated: 2026-07-17 (Phase 0 in progress)._
 | P0-7 | **Glofox webhook signing secret** (A3b) | Email `glofox.apisupport@abcfitness.com` for the studio's webhook secret | 🟧 (phase 1) | Webhook-inbox pattern designed; secret needed to verify HMAC-SHA256 signatures. |
 | P0-8 | **PITR + restore drill #1** | Enable Supabase PITR (paid tier feature) on project `ysnijttvprwymwheyyfm`; run a rehearsed restore | 🟧 | Restore-drill runbook to be written; PITR toggle + drill require the owner + a paid plan. |
 | P0-9 | **Domains** (owner-questions C1) | Buy `getkelo.com` + `kelo.studio` | 🟧 | Not code-blocking; needed before the public skeleton privacy page + member surface. |
+| P0-10 | **Supabase branching / preview DBs disabled** | Enable branching on the Supabase GitHub integration (dashboard → Branches) so PRs get preview DBs (plan-final §1) | 🟧 | On PR #1 the "Supabase Preview" check reports **skipping** — branching is off. Migrations are verified another way (CI `db` job on Postgres 17 + non-destructive real-Supabase rollback probes via MCP). Also unverified: whether merge-to-main auto-applies migrations; if not, the director applies via MCP `apply_migration`. Enabling branching restores the intended preview-DB-per-PR flow. |
 
 ## Phase 2+ (recorded early so we don't forget)
 
