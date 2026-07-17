@@ -446,6 +446,135 @@ end
 $$;
 
 -- ---------------------------------------------------------------------------
+-- (15) INTRA-TENANT: a MANAGER cannot escalate — tenant_users writes are
+--      owner-only, so uM's self-promotion, self-deletion, and promotion of
+--      another member must each match 0 rows (USING filters them silently).
+--      Seeds uM as manager of tenant A (as superuser) for this and probe (16).
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_ua uuid; v_um uuid; n int; v_role text;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_ua from app_test.ctx where key = 'user_a';
+
+  insert into auth.users (id, email) values (gen_random_uuid(), 'um@example.test')
+    returning id into v_um;
+  insert into public.tenant_users (tenant_id, user_id, role)
+    values (v_a, v_um, 'manager');
+  insert into app_test.ctx (key, val) values ('user_m', v_um::text);
+
+  -- self-escalation: manager → owner
+  perform app_test.become(v_um);
+  update public.tenant_users set role = 'owner' where user_id = v_um;
+  get diagnostics n = row_count;
+  perform app_test.assert(n = 0, '(15) manager uM could self-escalate to owner');
+  reset role;
+  select role into v_role from public.tenant_users
+    where tenant_id = v_a and user_id = v_um;
+  perform app_test.assert(v_role = 'manager',
+    '(15) uM role was changed by the self-escalation attempt');
+
+  -- self-removal: delete own membership row
+  perform app_test.become(v_um);
+  delete from public.tenant_users where user_id = v_um;
+  get diagnostics n = row_count;
+  perform app_test.assert(n = 0, '(15) manager uM could delete their own membership');
+  reset role;
+  select count(*) into n from public.tenant_users
+    where tenant_id = v_a and user_id = v_um;
+  perform app_test.assert(n = 1, '(15) uM membership row was deleted');
+
+  -- promote someone else: still not owner, so also 0 rows
+  perform app_test.become(v_um);
+  update public.tenant_users set role = 'owner' where user_id = v_ua;
+  get diagnostics n = row_count;
+  perform app_test.assert(n = 0, '(15) manager uM could promote uA to owner');
+  reset role;
+  select role into v_role from public.tenant_users
+    where tenant_id = v_a and user_id = v_ua;
+  perform app_test.assert(v_role = 'owner',
+    '(15) uA role was changed by the manager escalation attempt');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (16) INTRA-TENANT: even an OWNER cannot modify their OWN membership row
+--      (self-deactivation must match 0 rows) — but CAN modify OTHER members
+--      (POSITIVE control: uA demotes uM to trainer, 1 row). Proves the
+--      no-self rule without vacuously breaking owner administration.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_ua uuid; v_um uuid; n int; v_text text;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_ua from app_test.ctx where key = 'user_a';
+  select val::uuid into v_um from app_test.ctx where key = 'user_m';
+
+  perform app_test.become(v_ua);
+  update public.tenant_users set status = 'deactivated' where user_id = v_ua;
+  get diagnostics n = row_count;
+  perform app_test.assert(n = 0, '(16) owner uA could modify their own membership row');
+  reset role;
+  select status into v_text from public.tenant_users
+    where tenant_id = v_a and user_id = v_ua;
+  perform app_test.assert(v_text = 'active',
+    '(16) uA status was changed by the self-modification attempt');
+
+  perform app_test.become(v_ua);
+  update public.tenant_users set role = 'trainer' where user_id = v_um;
+  get diagnostics n = row_count;
+  perform app_test.assert(n = 1, '(16) owner uA could not modify another member (uM)');
+  reset role;
+  select role into v_text from public.tenant_users
+    where tenant_id = v_a and user_id = v_um;
+  perform app_test.assert(v_text = 'trainer',
+    '(16) uM role was not updated by owner uA');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (17) EVIDENCE FORGERY: an audit_events insert attributing the action to
+--      SOMEONE ELSE must raise (WITH CHECK: actor = self or NULL); self- and
+--      null-actor inserts must succeed (positive controls).
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_b uuid; v_ua uuid; v_ub uuid; n int; raised boolean := false;
+begin
+  reset role;
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ua from app_test.ctx where key = 'user_a';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+  perform app_test.become(v_ub);
+
+  begin
+    insert into public.audit_events (tenant_id, actor_user_id, action)
+      values (v_b, v_ua, 'forged');
+  exception
+    when others then raised := true;
+  end;
+  perform app_test.assert(raised,
+    '(17) uB could forge actor_user_id on audit_events');
+
+  insert into public.audit_events (tenant_id, actor_user_id, action)
+    values (v_b, v_ub, 'self-ok');
+  get diagnostics n = row_count;
+  perform app_test.assert(n = 1,
+    '(17) uB could not insert a self-attributed audit event');
+
+  insert into public.audit_events (tenant_id, actor_user_id, action)
+    values (v_b, null, 'system-ok');
+  get diagnostics n = row_count;
+  perform app_test.assert(n = 1,
+    '(17) uB could not insert a null-actor (system) audit event');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
 -- Verdict
 -- ---------------------------------------------------------------------------
 do $$
