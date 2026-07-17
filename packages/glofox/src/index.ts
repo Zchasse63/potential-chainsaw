@@ -8,3 +8,4 @@ export * from "./errors.js";
 export * from "./client.js";
 export * from "./endpoints.js";
 export * from "./raw.js";
+export * from "./mappers/index.js";
