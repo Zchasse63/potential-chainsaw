@@ -1,0 +1,100 @@
+/* Kelo — Route 01 "The Quiet Instrument" · CSS custom properties
+   Drop into the shadcn/ui + Tailwind token layer (globals.css :root).
+   Light mode only for v1; names leave room for a dark pair later. */
+
+@import url('https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600;700&family=Schibsted+Grotesk:wght@400;500;600;700;800&family=Spline+Sans+Mono:wght@400;500;600&display=swap');
+/* Self-host in production; all three are SIL OFL. */
+
+:root {
+  /* Neutral — birch smoke (cool gray, blue undertone) */
+  --kelo-neutral-000: #F5F6F6; --kelo-neutral-050: #EFF1F1;
+  --kelo-neutral-100: #E7EAEA; --kelo-neutral-200: #D8DCDD;
+  --kelo-neutral-300: #BEC4C6; --kelo-neutral-400: #97A0A4;
+  --kelo-neutral-500: #6F7A80; --kelo-neutral-600: #555F66;
+  --kelo-neutral-700: #40494F; --kelo-neutral-800: #2A3238;
+  --kelo-neutral-900: #191F24; --kelo-ink: #10161B;
+
+  --kelo-surface-app: #F5F6F6;
+  --kelo-surface-card: #FCFCFC;
+  --kelo-surface-input: #FFFFFF;
+  --kelo-surface-inverse: #10161B;
+
+  /* Brand — smoke slate */
+  --kelo-brand-050: #EDF1F4; --kelo-brand-100: #DCE4EA;
+  --kelo-brand-200: #C1CFD9; --kelo-brand-300: #9BB0C0;
+  --kelo-brand-400: #7290A5; --kelo-brand-500: #4F708A;
+  --kelo-brand-600: #3E5A74; /* primary */
+  --kelo-brand-700: #324A60; --kelo-brand-800: #27394A;
+  --kelo-brand-900: #1C2A37;
+
+  /* Birch — material, never status */
+  --kelo-birch-050: #F5F0E6; --kelo-birch-100: #EBE1CE;
+  --kelo-birch-200: #D9C9A9; --kelo-birch-300: #C1AB82;
+  --kelo-birch-400: #9C875F; --kelo-birch-500: #746348;
+  --kelo-birch-text: #5E4F38;
+
+  /* Functional */
+  --kelo-success: #2E7D56; --kelo-success-tint: #E3F1E9; --kelo-success-on-tint: #265F44; --kelo-success-border: #BFE0CE;
+  --kelo-warning: #9A6B14; --kelo-warning-tint: #FAF1DC; --kelo-warning-on-tint: #7A540F; --kelo-warning-border: #E0C98E;
+  --kelo-danger:  #B3453C; --kelo-danger-tint:  #FAEAE8; --kelo-danger-on-tint:  #8F362E; --kelo-danger-border:  #E5B3AD;
+  --kelo-info:    #3C6B96; --kelo-info-tint:    #E7F0F8; --kelo-info-on-tint:    #305577; --kelo-info-border:    #9BB0C0;
+
+  /* Domain semantics */
+  --kelo-status-confirmed: var(--kelo-success);
+  --kelo-status-processing: var(--kelo-info);
+  --kelo-status-failed: var(--kelo-danger);
+  --kelo-status-refund-pending: var(--kelo-warning);
+  --kelo-freshness-live: var(--kelo-success);
+  --kelo-freshness-aged: var(--kelo-neutral-400);
+  --kelo-freshness-stale: var(--kelo-warning);
+  --kelo-freshness-stale-critical: var(--kelo-danger);
+  --kelo-ai-accent: #2F7B80;
+  --kelo-ai-tint: #E3F1F1;
+  --kelo-ai-surface: #F7FBFB;
+  --kelo-ai-on-tint: #266064;
+  --kelo-ai-border-tint: #A8D2D3;
+  --kelo-imported-hatch: repeating-linear-gradient(-45deg, #F5F0E6 0 8px, #EBE1CE 8px 16px);
+
+  /* Borders */
+  --kelo-hairline: rgba(16,22,27,.10);
+  --kelo-border-strong: rgba(16,22,27,.16);
+
+  /* Type */
+  --kelo-font-display: 'Familjen Grotesk', sans-serif;
+  --kelo-font-ui: 'Schibsted Grotesk', sans-serif;
+  --kelo-font-mono: 'Spline Sans Mono', monospace;
+
+  /* Radius (px) */
+  --kelo-radius-1: 4px; --kelo-radius-2: 6px; --kelo-radius-3: 10px;
+  --kelo-radius-4: 16px; --kelo-radius-full: 999px;
+
+  /* Elevation */
+  --kelo-shadow-1: 0 1px 2px rgba(16,22,27,.06);
+  --kelo-shadow-2: 0 2px 8px rgba(16,22,27,.10);
+  --kelo-shadow-3: 0 8px 24px rgba(16,22,27,.14);
+
+  /* Motion */
+  --kelo-duration-1: 120ms; --kelo-duration-2: 200ms; --kelo-duration-3: 320ms;
+  --kelo-ease-standard: cubic-bezier(.2, 0, 0, 1);
+  --kelo-ease-exit: cubic-bezier(.4, 0, 1, 1);
+}
+
+/* shadcn/ui variable mapping (hsl not required if using tailwind arbitrary values;
+   otherwise convert the hex above):
+   --background        <- --kelo-surface-app
+   --card              <- --kelo-surface-card
+   --foreground        <- --kelo-ink
+   --muted             <- --kelo-neutral-050
+   --muted-foreground  <- --kelo-neutral-500
+   --primary           <- --kelo-brand-600   (foreground: white)
+   --secondary         <- --kelo-brand-050   (foreground: --kelo-brand-700)
+   --accent            <- --kelo-brand-050
+   --destructive       <- --kelo-danger      (foreground: white)
+   --border / --input  <- --kelo-hairline / --kelo-border-strong
+   --ring              <- --kelo-brand-600
+   --radius            <- 6px (r2; cards override to 10px)
+*/
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --kelo-duration-1: 0ms; --kelo-duration-2: 0ms; --kelo-duration-3: 0ms; }
+}
