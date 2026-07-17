@@ -18,6 +18,8 @@
   },
   "dependencies": {
     "@kelo/contracts": "workspace:*",
-    "@kelo/db": "workspace:*"
+    "@kelo/db": "workspace:*",
+    "@kelo/glofox": "workspace:*",
+    "zod": "3.25.76"
   }
 }

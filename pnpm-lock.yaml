@@ -171,6 +171,12 @@ importers:
       '@kelo/db':
         specifier: workspace:*
         version: link:../packages/db
+      '@kelo/glofox':
+        specifier: workspace:*
+        version: link:../packages/glofox
+      zod:
+        specifier: 3.25.76
+        version: 3.25.76
 
 packages:
 
