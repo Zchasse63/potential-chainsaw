@@ -120,4 +120,6 @@ jobs:
       - name: jobs-queue concurrency (double-tick executes once)
         # Migrations are already applied (db-test.sh above); this runs the
         # two-connection SKIP-LOCKED proof against the same Postgres service.
-        run: pnpm --filter @kelo/db test:db
+        # Invoked at repo root so the root vitest config's include globs resolve
+        # (DATABASE_URL is set at the job level → the skipIf gate goes active).
+        run: pnpm exec vitest run packages/db/test/jobs_concurrency.test.ts
