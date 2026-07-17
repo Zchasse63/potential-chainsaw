@@ -94,23 +94,27 @@ end
 $$;
 
 -- ---------------------------------------------------------------------------
--- (2) MATVIEW GUARD: matviews support neither RLS nor security_invoker, so any
---     public matview MUST be unreadable by client roles (threat model §1).
---     Phase 0 has none → no-op, but the guard must exist.
+-- (2) MATVIEW GUARD: matviews support neither RLS nor security_invoker, so
+--     every matview in public OR app MUST be unreadable by client roles
+--     (threat model §1); app matviews are read only through tenancy-verifying
+--     definer functions (e.g. app.person_credit_balance over
+--     app.credit_balances, migration 0008).
 -- ---------------------------------------------------------------------------
 do $$
 declare
   r record;
 begin
   for r in
-    select matviewname from pg_catalog.pg_matviews where schemaname = 'public'
+    select schemaname, matviewname
+    from pg_catalog.pg_matviews
+    where schemaname in ('public', 'app')
   loop
     perform app_test.assert(
-      not has_table_privilege('anon', format('public.%I', r.matviewname), 'select'),
-      format('(2) matview public.%s is readable by anon', r.matviewname));
+      not has_table_privilege('anon', format('%I.%I', r.schemaname, r.matviewname), 'select'),
+      format('(2) matview %s.%s is readable by anon', r.schemaname, r.matviewname));
     perform app_test.assert(
-      not has_table_privilege('authenticated', format('public.%I', r.matviewname), 'select'),
-      format('(2) matview public.%s is readable by authenticated', r.matviewname));
+      not has_table_privilege('authenticated', format('%I.%I', r.schemaname, r.matviewname), 'select'),
+      format('(2) matview %s.%s is readable by authenticated', r.schemaname, r.matviewname));
   end loop;
 end
 $$;
@@ -665,6 +669,167 @@ begin
   perform app_test.assert(
     has_column_privilege('authenticated', 'public.import_quarantine', 'status', 'update'),
     '(19) authenticated lacks column UPDATE on import_quarantine.status — review UI cannot resolve');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (20) People + plan_catalog slice (migration 0008): member-read isolation,
+--      no client writes on people, and the A8 kelo_type column-grant scoping
+--      on plan_catalog — asserted in both directions with a positive control.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; n int; raised boolean := false;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+
+  insert into public.people (tenant_id, first_name, external_ref)
+    values (v_a, 'Alice', 'gf-a-1');
+  insert into public.people (tenant_id, first_name, external_ref)
+    values (v_b, 'Bob', 'gf-b-1');
+  insert into public.plan_catalog (tenant_id, external_ref, name, plan_code, glofox_type)
+    values (v_a, 'mem-a', 'Plan A', '100', 'time');
+  insert into public.plan_catalog (tenant_id, external_ref, name, plan_code, glofox_type)
+    values (v_b, 'mem-b', 'Plan B', '200', 'num_classes');
+
+  perform app_test.become(v_ub);
+  select count(*) into n from public.people where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(20) uB can SELECT tenant A people');
+  select count(*) into n from public.people where tenant_id = v_b;
+  perform app_test.assert(n = 1, '(20) uB cannot read her OWN people');
+
+  begin
+    insert into public.people (tenant_id, first_name) values (v_b, 'Forged');
+  exception
+    when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(20) uB could INSERT into people');
+
+  -- A8 mapping: owner updates kelo_type on her OWN tenant's row (positive
+  -- control, 1 row) but a cross-tenant update matches 0 rows.
+  update public.plan_catalog set kelo_type = 'unlimited' where tenant_id = v_b;
+  get diagnostics n = row_count;
+  perform app_test.assert(n = 1, '(20) owner uB could not set kelo_type on her own catalog');
+  update public.plan_catalog set kelo_type = 'pack' where tenant_id = v_a;
+  get diagnostics n = row_count;
+  perform app_test.assert(n = 0, '(20) uB cross-tenant kelo_type update matched rows');
+
+  reset role;
+  perform app_test.assert(
+    has_column_privilege('authenticated', 'public.plan_catalog', 'kelo_type', 'update'),
+    '(20) authenticated lacks the kelo_type column grant — A8 mapping UI cannot work');
+  perform app_test.assert(
+    not has_column_privilege('authenticated', 'public.plan_catalog', 'name', 'update'),
+    '(20) authenticated can UPDATE plan_catalog.name — imported catalog must be client-immutable');
+  perform app_test.assert(
+    not has_column_privilege('authenticated', 'public.plan_catalog', 'price', 'update'),
+    '(20) authenticated can UPDATE plan_catalog.price — imported catalog must be client-immutable');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (21) credit_ledger (invariant #6): member-read isolation; NO client INSERT;
+--      append-only at the PRIVILEGE level — even service_role cannot
+--      UPDATE/DELETE ledger rows.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; v_pa uuid; v_pb uuid; n int; raised boolean := false;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+  select id into v_pa from public.people where tenant_id = v_a limit 1;
+  select id into v_pb from public.people where tenant_id = v_b limit 1;
+
+  insert into public.credit_ledger (tenant_id, person_id, entry_type, delta, external_ref)
+    values (v_a, v_pa, 'grant', 10, 'credit-a-1');
+  insert into public.credit_ledger (tenant_id, person_id, entry_type, delta, external_ref)
+    values (v_b, v_pb, 'grant', 5, 'credit-b-1');
+
+  perform app_test.become(v_ub);
+  select count(*) into n from public.credit_ledger where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(21) uB can SELECT tenant A credit_ledger');
+  select count(*) into n from public.credit_ledger where tenant_id = v_b;
+  perform app_test.assert(n = 1, '(21) uB cannot read her OWN credit_ledger');
+
+  begin
+    insert into public.credit_ledger (tenant_id, person_id, entry_type, delta)
+      values (v_b, v_pb, 'grant', 99);
+  exception
+    when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(21) uB could INSERT into credit_ledger');
+
+  reset role;
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'public.credit_ledger', 'update'),
+    '(21) service_role holds UPDATE on credit_ledger — the ledger must be append-only');
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'public.credit_ledger', 'delete'),
+    '(21) service_role holds DELETE on credit_ledger — the ledger must be append-only');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (22) Facts slice (migration 0009) + the balance read path: transactions
+--      member-isolation; app.credit_balances unreadable by every app role;
+--      app.person_credit_balance returns own-tenant data (positive control)
+--      and ZERO rows cross-tenant.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; v_pa uuid; v_pb uuid; n int; v_balance int;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+  select id into v_pa from public.people where tenant_id = v_a limit 1;
+  select id into v_pb from public.people where tenant_id = v_b limit 1;
+
+  insert into public.glofox_transactions
+    (tenant_id, external_ref, transaction_status, amount, currency, glofox_event_class)
+    values (v_a, 'txn-a-1', 'PAID', 42.00, 'USD', 'book_class');
+  insert into public.glofox_transactions
+    (tenant_id, external_ref, transaction_status, amount, currency, glofox_event_class)
+    values (v_b, 'txn-b-1', 'ERROR', 30.00, 'USD', 'subscription_payment');
+
+  -- Refresh the matview so the definer reader has rows (non-concurrent inside
+  -- this transaction: the seeded ledger rows above are not yet visible to a
+  -- concurrent refresh, and plain refresh is fine for the probe).
+  refresh materialized view app.credit_balances;
+
+  perform app_test.become(v_ub);
+  select count(*) into n from public.glofox_transactions where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(22) uB can SELECT tenant A glofox_transactions');
+  select count(*) into n from public.glofox_transactions where tenant_id = v_b;
+  perform app_test.assert(n = 1, '(22) uB cannot read her OWN glofox_transactions');
+
+  -- The balance read path: own tenant returns the seeded balance (positive
+  -- control)…
+  select balance into v_balance from app.person_credit_balance(v_b, v_pb);
+  perform app_test.assert(v_balance = 5,
+    '(22) person_credit_balance did not return uB''s own-tenant balance');
+  -- …and a cross-tenant call returns ZERO ROWS (indistinguishable from empty).
+  select count(*) into n from app.person_credit_balance(v_a, v_pa);
+  perform app_test.assert(n = 0,
+    '(22) person_credit_balance leaked a cross-tenant balance to uB');
+
+  reset role;
+  perform app_test.assert(
+    not has_table_privilege('anon', 'app.credit_balances', 'select'),
+    '(22) anon can read app.credit_balances');
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'app.credit_balances', 'select'),
+    '(22) authenticated can read app.credit_balances');
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'app.credit_balances', 'select'),
+    '(22) service_role can read app.credit_balances directly — the definer fn is the only path');
 end
 $$;
 

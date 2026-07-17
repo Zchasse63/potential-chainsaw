@@ -9,7 +9,14 @@ import { glofoxEnvelopeB } from "./envelopes.js";
  * the boundary here; the mapper owns timezone-aware conversion later.
  */
 
-/** Observed live; the vendor documents more (SPEC lists "…") — extend when a sample shows one. */
+/**
+ * The KNOWN status vocabulary (observed live; the vendor documents more — SPEC
+ * lists "…"). This is a CLASSIFIER, not the boundary type: the booking schema
+ * keeps `status` a raw string so ONE novel status can never fail a whole page
+ * parse before the quarantine path runs (invariant #8, widen-then-classify —
+ * the same posture as `glofox_event`). Mappers safeParse against this set and
+ * quarantine unknowns; the DB's generated `status_known` keeps them visible.
+ */
 export const glofoxBookingStatusSchema = z.enum([
   "BOOKED",
   "WAITING",
@@ -36,7 +43,8 @@ export const glofoxBookingSchema = z.object({
   course_id: z.string().nullable(),
   session_id: z.string().nullable(),
   guest_bookings: z.number().int(),
-  status: glofoxBookingStatusSchema,
+  /** RAW string at the boundary (see glofoxBookingStatusSchema note). */
+  status: z.string(),
   /** The check-in fact. */
   attended: z.boolean(),
   paid: z.boolean(),

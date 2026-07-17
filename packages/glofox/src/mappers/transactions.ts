@@ -25,8 +25,8 @@
  */
 import {
   classifyGlofoxEvent,
+  glofoxStripeChargeSchema,
   glofoxTransactionStatusSchema,
-  type GlofoxStripeCharge,
 } from "@kelo/contracts";
 import {
   blankToNull,
@@ -78,15 +78,25 @@ export function mapTransactionRow(
     };
   }
   const charge = (detail as Record<string, unknown>)[provider];
-  if (typeof charge !== "object" || charge === null || Array.isArray(charge)) {
+  // PER-ROW SALVAGE (invariant #8): the report envelope leaves rows unknown so
+  // one malformed row can't fail the page; the STRICT contract parse happens
+  // HERE, per row, and a failure quarantines this row only.
+  const parsed = glofoxStripeChargeSchema.safeParse(charge);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
     return {
       row: null,
-      quarantine: [quarantine(ENTITY, null, "malformed StripeCharge detail", detail)],
+      quarantine: [
+        quarantine(
+          ENTITY,
+          null,
+          `StripeCharge failed contract parse: ${issue ? `${issue.path.join(".")}: ${issue.message}` : "unknown issue"}`,
+          detail,
+        ),
+      ],
     };
   }
-  // Boundary-parsed upstream by contracts; the defensive checks below cover
-  // anything that reaches the mapper without crossing the Zod boundary.
-  const stripeCharge = charge as GlofoxStripeCharge;
+  const stripeCharge = parsed.data;
 
   const externalRef = blankToNull(stripeCharge._id);
   if (externalRef === null) {

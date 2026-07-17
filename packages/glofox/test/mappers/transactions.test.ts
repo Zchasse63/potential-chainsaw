@@ -144,7 +144,12 @@ describe("mapTransactionRow (glofox_transactions)", () => {
     });
     const { row, quarantine } = mapTransactionRow(detail, ctx);
     expect(row).toBeNull();
-    expect(quarantine[0]?.reason).toContain("invalid transaction amount");
+    // The strict per-row contract parse catches it first (integration change:
+    // per-row salvage) — the reason cites the exact contract path. The
+    // mapper's own amount guard remains as the post-parse backstop.
+    expect(quarantine[0]?.reason).toMatch(
+      /StripeCharge failed contract parse: amount|invalid transaction amount/,
+    );
   });
 
   it("is deterministic and versioned", () => {
