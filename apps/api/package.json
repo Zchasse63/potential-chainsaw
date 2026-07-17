@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "Hono API app on Netlify Functions (placeholder — real app lands in a later unit).",
+  "description": "One Hono API app on Netlify Functions (plan-final §1/§3): /api/v1, freshness envelope on every response, structured errors, server-side tenant resolution.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -14,9 +14,16 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "dev": "node dist/server.js"
   },
   "dependencies": {
-    "@kelo/contracts": "workspace:*"
+    "@hono/node-server": "2.0.10",
+    "@kelo/contracts": "workspace:*",
+    "@kelo/db": "workspace:*",
+    "@sentry/node": "10.66.0",
+    "@supabase/supabase-js": "2.110.7",
+    "hono": "4.12.30",
+    "zod": "3.25.76"
   }
 }

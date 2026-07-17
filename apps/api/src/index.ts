@@ -1,8 +1,9 @@
 /**
- * @kelo/api — placeholder so the workspace resolves and the typecheck graph is
- * complete. The real app (plan-final §1/§3: one Hono app on Netlify Functions,
- * `/api/v1`, Zod-validated at every boundary with @kelo/contracts, freshness
- * envelope on every response, typed client via hono/client) is a later unit.
- * Nothing real is exported yet.
+ * @kelo/api — the ONE Hono API app (plan-final §1/§3): /api/v1, freshness
+ * envelope on every success response, structured non-200 errors, tenant id
+ * derived server-side from membership only (threat model §1).
  */
-export {};
+export { createApp } from "./app.js";
+export { default as app } from "./app.js";
+export type { AppDeps, AppEnv, OkHelper, OkOptions } from "./types.js";
+export { ApiError, AuthError, TenantError } from "./errors.js";
