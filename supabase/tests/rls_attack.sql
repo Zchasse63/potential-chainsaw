@@ -345,6 +345,107 @@ end
 $$;
 
 -- ---------------------------------------------------------------------------
+-- (12) Member-read isolation on observability tables: seed one sync_state and
+--      one alerts row per tenant (as superuser); uB must see ZERO of tenant
+--      A's rows and exactly her own tenant's (member-readable, not world-).
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; n int;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+
+  insert into public.sync_state (tenant_id, entity) values (v_a, 'members');
+  insert into public.sync_state (tenant_id, entity) values (v_b, 'members');
+  insert into public.alerts (tenant_id, kind, severity, title)
+    values (v_a, 'import_failed', 'critical', 'tenant A alert');
+  insert into public.alerts (tenant_id, kind, severity, title)
+    values (v_b, 'import_failed', 'critical', 'tenant B alert');
+
+  perform app_test.become(v_ub);
+  select count(*) into n from public.sync_state where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(12) uB can SELECT tenant A sync_state');
+  select count(*) into n from public.alerts where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(12) uB can SELECT tenant A alerts');
+  select count(*) into n from public.sync_state where tenant_id = v_b;
+  perform app_test.assert(n = 1, '(12) uB cannot read her OWN sync_state');
+  select count(*) into n from public.alerts where tenant_id = v_b;
+  perform app_test.assert(n = 1, '(12) uB cannot read her OWN alerts');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (13) jobs/job_runs are service-role only: seed one of each (as superuser),
+--      then as uB a SELECT must return 0 rows OR raise — leakage impossible
+--      (deny-all policy + revoked grants). Probing a seeded row, not an empty
+--      table, is what makes this a real leak test.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_ub uuid; v_job uuid; n int := 0; raised boolean := false;
+begin
+  reset role;
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+
+  insert into public.jobs (kind) values ('noop') returning id into v_job;
+  insert into public.job_runs (job_id, attempt, worker, status)
+    values (v_job, 1, 'seed', 'running');
+
+  perform app_test.become(v_ub);
+  begin
+    select count(*) into n from public.jobs;
+  exception
+    when others then raised := true;
+  end;
+  perform app_test.assert(raised or n = 0, '(13) uB can read public.jobs');
+
+  n := 0; raised := false;
+  begin
+    select count(*) into n from public.job_runs;
+  exception
+    when others then raised := true;
+  end;
+  perform app_test.assert(raised or n = 0, '(13) uB can read public.job_runs');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (14) Clients can read observability tables but NEVER write them, even for
+--      their OWN tenant: uB's INSERT into sync_state/alerts must raise
+--      (no client write policy, no grant — the service role writes).
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_b uuid; v_ub uuid; raised boolean;
+begin
+  reset role;
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+  perform app_test.become(v_ub);
+
+  raised := false;
+  begin
+    insert into public.sync_state (tenant_id, entity) values (v_b, 'payments');
+  exception
+    when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(14) uB could INSERT into sync_state');
+
+  raised := false;
+  begin
+    insert into public.alerts (tenant_id, kind, severity, title)
+      values (v_b, 'forged', 'info', 'forged alert');
+  exception
+    when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(14) uB could INSERT into alerts');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
 -- Verdict
 -- ---------------------------------------------------------------------------
 do $$

@@ -84,7 +84,7 @@ jobs:
         run: pnpm audit --prod
 
   db:
-    name: RLS attack suite (Postgres 17)
+    name: DB gate — RLS attack + queue concurrency (Postgres 17)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -99,6 +99,8 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v4
       - name: install postgresql-client
@@ -106,6 +108,16 @@ jobs:
       - name: bootstrap + migrations + RLS attack suite
         # scripts/db-test.sh: _bootstrap.sql (Supabase shim) → migrations in order
         # → rls_attack.sql. Any failed assertion RAISEs → psql non-zero → job fails.
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
         run: ./scripts/db-test.sh
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: jobs-queue concurrency (double-tick executes once)
+        # Migrations are already applied (db-test.sh above); this runs the
+        # two-connection SKIP-LOCKED proof against the same Postgres service.
+        run: pnpm --filter @kelo/db test:db

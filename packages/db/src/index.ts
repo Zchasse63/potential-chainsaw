@@ -1,23 +1,13 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "./database.types.js";
+import { requireEnv } from "./env.js";
 
 export type { Database } from "./database.types.js";
+export { createDbPool } from "./pool.js";
+export { requireEnv } from "./env.js";
 
 /** Typed Supabase client for Kelo's (currently stubbed) schema. */
 export type KeloSupabaseClient = SupabaseClient<Database>;
-
-/**
- * Reads a required env var BY NAME — values live in .env locally and in
- * Netlify/Supabase env in deploys (per-tenant Glofox credentials move to
- * Supabase Vault). Nothing is ever hardcoded here.
- */
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (value === undefined || value === "") {
-    throw new Error(`@kelo/db: missing required environment variable ${name}`);
-  }
-  return value;
-}
 
 /**
  * Anon-key client — RLS applies (invariant #7). The right choice for anything

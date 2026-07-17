@@ -1,6 +1,8 @@
 # secrets — never commit
 .env
 .env.*
+# ...but the committed template (names only, no values) is tracked on purpose.
+!.env.example
 
 # dependencies & build output
 node_modules/

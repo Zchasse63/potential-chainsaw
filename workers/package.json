@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "Job processors as Netlify Background Functions (placeholder — processors land in a later unit).",
+  "description": "Scheduler tick + job processors for the Postgres jobs queue (Netlify Scheduled/Background Function wrappers land next unit).",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
