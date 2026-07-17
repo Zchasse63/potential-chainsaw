@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   fetchInvitations,
   fetchTenant,
+  fetchTenantUser,
   fetchTenantUsers,
   insertAuditEvent,
   insertInvitation,
@@ -113,11 +114,15 @@ export function registerTenantRoutes(app: Hono<AppEnv>, deps: ResolvedDeps): voi
 
   // Update a member's role/status. `:id` is the tenant_users ROW id, scoped
   // to the resolved tenant (RLS + explicit filter — cross-tenant ids 404).
+  // OWNER-only, and never one's OWN membership row — mirrors the hardened RLS
+  // policy (migration 0004: owner-only + user_id <> auth.uid(), the
+  // manager-self-escalation fix). The API rejects loudly what RLS would
+  // silently filter to 0 rows, so callers get a clear 403 instead of a 404.
   app.patch(
     "/tenant/users/:id",
     requireAuth(deps),
     resolveTenant,
-    requireRole("owner", "manager"),
+    requireRole("owner"),
     requireIdempotencyKey,
     async (c) => {
       const { userId, userClient } = authOf(c);
@@ -128,6 +133,18 @@ export function registerTenantRoutes(app: Hono<AppEnv>, deps: ResolvedDeps): voi
       const patch: MemberPatch = {};
       if (body.role !== undefined) patch.role = body.role;
       if (body.status !== undefined) patch.status = body.status;
+
+      const existing = await fetchTenantUser(userClient, tenantId, id);
+      if (existing === null) {
+        throw new ApiError(404, "member_not_found", "member not found");
+      }
+      if (existing.user_id === userId) {
+        throw new ApiError(
+          403,
+          "cannot_modify_own_membership",
+          "you cannot modify your own membership row — another owner must",
+        );
+      }
 
       const updated = await updateTenantUser(userClient, tenantId, id, patch);
       if (updated === null) {

@@ -178,6 +178,23 @@ export async function fetchTenantUsers(
   return parseInternal(z.array(tenantUserRowSchema), data ?? [], "fetchTenantUsers");
 }
 
+/** One member row by tenant_users row id, scoped to the resolved tenant. */
+export async function fetchTenantUser(
+  client: KeloSupabaseClient,
+  tenantId: string,
+  memberId: string,
+): Promise<TenantUserRow | null> {
+  const data = await run(
+    from(client, "tenant_users")
+      .select(TENANT_USER_COLUMNS)
+      .eq("id", memberId)
+      .eq("tenant_id", tenantId),
+    "fetchTenantUser",
+  );
+  const rows = parseInternal(z.array(tenantUserRowSchema), data ?? [], "fetchTenantUser");
+  return rows[0] ?? null;
+}
+
 export interface MemberPatch {
   role?: TenantRole;
   status?: MemberStatus;
