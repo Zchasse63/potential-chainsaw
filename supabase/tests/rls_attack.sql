@@ -575,6 +575,100 @@ end
 $$;
 
 -- ---------------------------------------------------------------------------
+-- (18) glofox_raw is service-only + APPEND-ONLY: seed one row for tenant B
+--      (as superuser); as uB a SELECT must return 0 rows OR raise (deny-all
+--      policy + revoked grants — probing a seeded row, not an empty table).
+--      The append-only invariant is verified at the PRIVILEGE level (a
+--      superuser bypasses RLS, so statement probes as superuser prove
+--      nothing): no app role holds UPDATE/DELETE on the raw zone.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_b uuid; v_ub uuid; n int := 0; raised boolean := false;
+begin
+  reset role;
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+
+  insert into public.glofox_raw (tenant_id, endpoint, payload, payload_hash)
+    values (v_b, 'members.list', '{"seed": true}', 'seed-hash');
+
+  perform app_test.become(v_ub);
+  begin
+    select count(*) into n from public.glofox_raw;
+  exception
+    when others then raised := true;
+  end;
+  perform app_test.assert(raised or n = 0, '(18) uB can read public.glofox_raw');
+
+  reset role;
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'public.glofox_raw', 'select'),
+    '(18) authenticated holds SELECT on glofox_raw — raw zone is service-only');
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'public.glofox_raw', 'update'),
+    '(18) service_role holds UPDATE on glofox_raw — raw zone must be immutable');
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'public.glofox_raw', 'delete'),
+    '(18) service_role holds DELETE on glofox_raw — raw zone must be immutable');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (19) import_quarantine: member-SELECT isolation + owner/manager resolution.
+--      Seed one row per tenant (as superuser); uB (owner of B) sees ONLY her
+--      own tenant's row, CAN resolve it (POSITIVE control, 1 row — the review
+--      UI path), and CANNOT insert (must raise — the service role writes).
+--      The column-list grant is asserted directly: resolution columns only.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; n int; raised boolean := false;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+
+  insert into public.import_quarantine (tenant_id, entity, external_ref, payload, reason)
+    values (v_a, 'members', 'glofox-a-1', '{}', 'unknown glofox_event');
+  insert into public.import_quarantine (tenant_id, entity, external_ref, payload, reason)
+    values (v_b, 'members', 'glofox-b-1', '{}', 'unknown glofox_event');
+
+  perform app_test.become(v_ub);
+  select count(*) into n from public.import_quarantine where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(19) uB can SELECT tenant A import_quarantine');
+  select count(*) into n from public.import_quarantine where tenant_id = v_b;
+  perform app_test.assert(n = 1, '(19) uB cannot read her OWN import_quarantine');
+
+  -- Positive control: an owner resolves her own tenant's row (review UI).
+  update public.import_quarantine
+    set status = 'resolved', resolved_at = now(), resolution_note = 'fixed mapping'
+    where tenant_id = v_b;
+  get diagnostics n = row_count;
+  perform app_test.assert(n = 1,
+    '(19) owner uB could not resolve her own quarantine row');
+
+  -- No client INSERT, even for her own tenant (the service role writes).
+  begin
+    insert into public.import_quarantine (tenant_id, entity, payload, reason)
+      values (v_b, 'members', '{}', 'forged');
+  exception
+    when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(19) uB could INSERT into import_quarantine');
+
+  reset role;
+  perform app_test.assert(
+    not has_column_privilege('authenticated', 'public.import_quarantine', 'payload', 'update'),
+    '(19) authenticated holds column UPDATE on import_quarantine.payload — evidence must be immutable');
+  perform app_test.assert(
+    has_column_privilege('authenticated', 'public.import_quarantine', 'status', 'update'),
+    '(19) authenticated lacks column UPDATE on import_quarantine.status — review UI cannot resolve');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
 -- Verdict
 -- ---------------------------------------------------------------------------
 do $$
