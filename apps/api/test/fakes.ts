@@ -21,13 +21,17 @@ export interface FakeResult {
 }
 
 export type TableHandler = (tableCalls: RecordedCall[]) => FakeResult;
+export type RpcHandler = (params: Record<string, unknown>) => FakeResult;
 
 export interface FakeUserClient {
   client: KeloSupabaseClient;
   calls: RecordedCall[];
 }
 
-export function fakeUserClient(handlers: Record<string, TableHandler>): FakeUserClient {
+export function fakeUserClient(
+  handlers: Record<string, TableHandler>,
+  rpcHandlers: Record<string, RpcHandler> = {},
+): FakeUserClient {
   const calls: RecordedCall[] = [];
 
   const client = {
@@ -52,6 +56,12 @@ export function fakeUserClient(handlers: Record<string, TableHandler>): FakeUser
         },
       });
       return proxy;
+    },
+    rpc(name: string, params: Record<string, unknown> = {}) {
+      calls.push({ table: name, method: "rpc", args: [params] });
+      const handler = rpcHandlers[name];
+      const result = handler !== undefined ? handler(params) : { data: null };
+      return Promise.resolve({ data: result.data, error: result.error ?? null });
     },
   };
 
