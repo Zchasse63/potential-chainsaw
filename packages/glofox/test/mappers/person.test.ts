@@ -131,6 +131,59 @@ describe("mapMember — synthetic edge cases", () => {
     expect(person[0]!.active).toBe(false);
   });
 
+  it("carries membership-record fields without classifying them", () => {
+    const member = glofoxMemberSchema.parse(
+      minimalMemberRaw({
+        membership: {
+          type: "time_classes",
+          status: "ACTIVE",
+          user_membership_id: "um-1",
+          start_date: 1784174400,
+        },
+      }),
+    );
+    const { person } = partitionPersonRows(mapMember(member, { tenantId: TENANT }));
+
+    expect(person[0]).toMatchObject({
+      membership_type: "time_classes",
+      membership_status: "ACTIVE",
+      user_membership_id: "um-1",
+      membership_started_at: new Date(1784174400 * 1000),
+    });
+  });
+
+  it("absent membership object → all membership evidence NULL", () => {
+    const parsed = glofoxMemberSchema.parse(minimalMemberRaw());
+    const member = { ...parsed, membership: undefined } as unknown as GlofoxMember;
+    const { person } = partitionPersonRows(mapMember(member, { tenantId: TENANT }));
+
+    expect(person[0]).toMatchObject({
+      membership_type: null,
+      membership_status: null,
+      user_membership_id: null,
+      membership_started_at: null,
+    });
+  });
+
+  it("blank membership strings → NULL", () => {
+    const member = glofoxMemberSchema.parse(
+      minimalMemberRaw({
+        membership: {
+          type: "  ",
+          status: "",
+          user_membership_id: "\t",
+          start_date: 1784174400,
+        },
+      }),
+    );
+    const { person } = partitionPersonRows(mapMember(member, { tenantId: TENANT }));
+
+    expect(person[0]!.membership_type).toBeNull();
+    expect(person[0]!.membership_status).toBeNull();
+    expect(person[0]!.user_membership_id).toBeNull();
+    expect(person[0]!.membership_started_at).toEqual(new Date(1784174400 * 1000));
+  });
+
   it("missing/empty _id → quarantine ('missing external id'), no rows", () => {
     // Empty string survives schema parsing (z.string()) and is still junk.
     const emptyId = glofoxMemberSchema.parse(minimalMemberRaw({ _id: "" }));
@@ -151,8 +204,8 @@ describe("mapMember — synthetic edge cases", () => {
     expect(b.quarantine[0]!.reason).toBe("missing external id");
   });
 
-  it("MAPPER_VERSION is exported (= 1) via the module and the package barrel", () => {
-    expect(MAPPER_VERSION).toBe(1);
+  it("MAPPER_VERSION is exported (= 2) via the module and the package barrel", () => {
+    expect(MAPPER_VERSION).toBe(2);
     expect(PERSON_MAPPER_VERSION).toBe(MAPPER_VERSION);
   });
 });

@@ -57,8 +57,9 @@ async function upsertPerson(
       `insert into public.people (
          tenant_id, email, phone, first_name, last_name, source, external_ref, active,
          source_created_at, first_activity_at, cohort_anchor_basis, date_quality,
-         lead_status, next_action, pipeline_owner, consent_email, consent_sms, consent_push
-       ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+         lead_status, next_action, pipeline_owner, consent_email, consent_sms, consent_push,
+         membership_type, membership_status, user_membership_id, membership_started_at
+       ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
        on conflict (tenant_id, external_ref) where external_ref is not null
        do update set
          email = excluded.email,
@@ -69,7 +70,11 @@ async function upsertPerson(
          source_created_at = excluded.source_created_at,
          consent_email = excluded.consent_email,
          consent_sms = excluded.consent_sms,
-         consent_push = excluded.consent_push
+         consent_push = excluded.consent_push,
+         membership_type = excluded.membership_type,
+         membership_status = excluded.membership_status,
+         user_membership_id = excluded.user_membership_id,
+         membership_started_at = excluded.membership_started_at
        -- The NATIVE pipeline surface (lead_status, next_action, pipeline_owner,
        -- first_activity_at, cohort_anchor_basis) and date_quality (the phase-1
        -- validation study's upgrade) are NOT import-owned: never clobbered.
@@ -93,6 +98,10 @@ async function upsertPerson(
         person.consent_email,
         person.consent_sms,
         person.consent_push,
+        person.membership_type,
+        person.membership_status,
+        person.user_membership_id,
+        iso(person.membership_started_at),
       ],
     );
     await tx.query("release savepoint person_row");

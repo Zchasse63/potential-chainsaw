@@ -1,18 +1,20 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import {
-  createGlofoxProcessors,
-  DERIVE_RELATIONSHIPS_KIND,
-} from "../../src/glofox/processors.js";
+import { createGlofoxProcessors, DERIVE_RELATIONSHIPS_KIND } from "../../src/glofox/processors.js";
 import { processors, type TickCtx } from "../../src/processors.js";
 import { callsMatching, createFakePool, makeJob, TENANT } from "./helpers.js";
 
 const MIGRATION = readFileSync(
   new URL(
-    "../../../supabase/migrations/20260717170100_0012_relationship_typing.sql",
+    "../../../supabase/migrations/20260717180100_0013_membership_signal.sql",
     import.meta.url,
   ),
   "utf8",
+);
+
+const RECURRING_RULE = MIGRATION.slice(
+  MIGRATION.indexOf("v_recurring :="),
+  MIGRATION.indexOf("if v_recurring then"),
 );
 
 function makeCtx(pool: ReturnType<typeof createFakePool>): TickCtx {
@@ -53,26 +55,50 @@ describe("derive.relationships processor", () => {
   });
 });
 
-describe("relationship SQL rule-version 1 contract", () => {
-  it("classifies a recent subscription_payment as recurring_member", () => {
-    expect(MIGRATION).toContain("gt.glofox_event_class = 'subscription_payment'");
-    expect(MIGRATION).toContain(
-      "gt.transaction_created_at >= v_now - make_interval(days => 30 + v_grace_days)",
-    );
+describe("relationship SQL rule-version 2 contract", () => {
+  it("ACTIVE + time classifies as recurring_member", () => {
+    expect(MIGRATION).toContain("v_rule_version constant int := 2");
+    expect(RECURRING_RULE).toContain("v_membership_status in ('ACTIVE', 'PAUSED')");
+    expect(RECURRING_RULE).toContain("v_membership_type in ('time', 'time_classes')");
     expect(MIGRATION).toContain(
       "v_holding_types := array_append(v_holding_types, 'recurring_member')",
     );
   });
 
+  it("ACTIVE + payg classifies as recurring_member through an A8 recurring catalog mapping", () => {
+    expect(RECURRING_RULE).toContain("from public.plan_catalog pc");
+    expect(RECURRING_RULE).toContain("pc.tenant_id = p_tenant");
+    expect(RECURRING_RULE).toContain("pc.external_ref = v_user_membership_id");
+    expect(RECURRING_RULE).toContain("pc.kelo_type in ('recurring', 'unlimited', 'intro')");
+  });
+
+  it("ACTIVE + payg without a recurring catalog mapping does not qualify", () => {
+    expect(RECURRING_RULE).not.toContain("'payg'");
+    expect(RECURRING_RULE).toMatch(/v_membership_type in \('time', 'time_classes'\)\s+or exists/s);
+    expect(MIGRATION).toContain("if cardinality(v_holding_types) = 0 then");
+    expect(MIGRATION).toContain("v_primary := 'guest'");
+  });
+
+  it("PAUSED + time_classes classifies as recurring_member", () => {
+    expect(RECURRING_RULE).toContain("v_membership_status in ('ACTIVE', 'PAUSED')");
+    expect(RECURRING_RULE).toContain("v_membership_type in ('time', 'time_classes')");
+  });
+
+  it("null/CANCELLED status does not qualify even with a subscription_payment", () => {
+    expect(RECURRING_RULE).not.toContain("'CANCELLED'");
+    expect(RECURRING_RULE).not.toContain("subscription_payment");
+    expect(MIGRATION).toContain("gt.glofox_event_class = 'subscription_payment'");
+    expect(MIGRATION).toContain("'corroborating_subscription_payment', v_subscription_id");
+    expect(MIGRATION).toContain("'phase_1_rule', 'membership-status-based v2'");
+  });
+
   it("classifies positive unexpired credit balance as pack_holder", () => {
     expect(MIGRATION).toContain("from app.person_credit_balance(p_tenant, p_person) pcb");
     expect(MIGRATION).toContain("v_pack := v_credit_balance > 0");
-    expect(MIGRATION).toContain(
-      "v_holding_types := array_append(v_holding_types, 'pack_holder')",
-    );
+    expect(MIGRATION).toContain("v_holding_types := array_append(v_holding_types, 'pack_holder')");
   });
 
-  it("keeps member and pack facts concurrently while member wins precedence", () => {
+  it("recurring_member still wins precedence over a concurrent pack", () => {
     const recurringFact = MIGRATION.indexOf(
       "v_holding_types := array_append(v_holding_types, 'recurring_member')",
     );
