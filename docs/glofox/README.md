@@ -115,6 +115,16 @@ sources. Full details per operation: [openapi.json](openapi.json).
   `people` (mapMember + a people migration) and derive `recurring_member` from membership.status
   ACTIVE (+ recurring type), with `subscription_payment` as CORROBORATION, not a hard requirement.
   The remaining ~2-3 gap to ~23 is gold-label territory (comped/edge members the owner adjudicates).
+- **GROUND TRUTH PINNED (owner dashboard export "Current Members", 2026-07-17): exactly 22 members
+  = 21 ACTIVE + 1 PAUSED.** Breakdown: 6 unlimited (`Monthly Unlimited`/`New Monthly Unlimited`) +
+  ~14 class-based (`4/6/8/10-Class`, `Monthly Recurring`) + 2 NOEQL comps ($1 CASH / 100% discount).
+  Definition (canonical): a member = an **ACTIVE-or-PAUSED membership on a RECURRING plan** (unlimited
+  / N-class / recurring / comp) — NOT drop-in `payg`, NOT a bare `num_classes` credit pack.
+  membership.status + the plan's recurring-ness is the signal; subscription_payment recency is
+  corroboration only. The API `membership.type` scan gets 19-20; the 2 NOEQL comps read as `payg`
+  (100%-comp structure) and are recovered by the owner's A8 catalog mapping marking NOEQL recurring.
+  **The member-count canary target is 22 (not 23); the owner's member list is the gold-label positive
+  set.** (Member PII stays OUT of the repo — public — used only at validation via service creds.)
 
 ### Plan catalog — `GET /2.0/memberships` [LIVE] ([samples/memberships.get.json](samples/memberships.get.json))
 
