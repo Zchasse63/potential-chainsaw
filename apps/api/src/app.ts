@@ -17,6 +17,7 @@ import { registerHealthRoutes } from "./routes/health.js";
 import { registerImportRoutes } from "./routes/import.js";
 import { registerReportRoutes } from "./routes/reports.js";
 import { registerScheduleRoutes } from "./routes/schedule.js";
+import { registerSchedulingAuthoringRoutes } from "./routes/scheduling-authoring.js";
 import { registerStaffRoutes } from "./routes/staff.js";
 import { registerMarketingRoutes } from "./routes/marketing.js";
 import { registerPeopleRoutes } from "./routes/people.js";
@@ -102,6 +103,7 @@ export function createApp(deps: AppDeps & WebhookDeps & StaffDeps = {}): Hono<Ap
   registerBriefingRoutes(app, resolved);
   registerAskRoutes(app, resolved, { fetchImpl: deps.anthropicFetch, env: deps.env });
   registerScheduleRoutes(app, resolved);
+  registerSchedulingAuthoringRoutes(app, resolved);
   registerMarketingRoutes(app, resolved);
   registerPeopleRoutes(app, resolved);
   registerStaffRoutes(app, resolved, deps.env, deps.createStepUpClient);
