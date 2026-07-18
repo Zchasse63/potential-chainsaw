@@ -1,4 +1,4 @@
-import { errorResponseSchema } from "@kelo/contracts";
+import { errorResponseSchema, IDEMPOTENCY_KEY_HEADER } from "@kelo/contracts";
 import { API_BASE_URL } from "./env.js";
 
 /**
@@ -22,15 +22,23 @@ export class ApiRequestError extends Error {
 }
 
 /**
- * GET an envelope-carrying endpoint with the Supabase access token as a
- * Bearer header (the same header apps/api/src/middleware/auth.ts verifies).
- * Non-2xx → ApiRequestError carrying the structured error's correlation id.
+ * Shared request path: Bearer auth, structured-error mapping (non-2xx →
+ * ApiRequestError carrying the correlation id), success body as unknown.
  */
-export async function fetchEnvelope(path: string, accessToken: string): Promise<unknown> {
+async function requestEnvelope(
+  path: string,
+  accessToken: string,
+  init?: RequestInit,
+): Promise<unknown> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
-      headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" },
+      ...init,
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        accept: "application/json",
+        ...(init?.headers ?? {}),
+      },
     });
   } catch {
     throw new ApiRequestError(
@@ -61,4 +69,33 @@ export async function fetchEnvelope(path: string, accessToken: string): Promise<
   }
 
   return (await response.json()) as unknown;
+}
+
+/**
+ * GET an envelope-carrying endpoint with the Supabase access token as a
+ * Bearer header (the same header apps/api/src/middleware/auth.ts verifies).
+ */
+export async function fetchEnvelope(path: string, accessToken: string): Promise<unknown> {
+  return requestEnvelope(path, accessToken);
+}
+
+/**
+ * POST a mutation. Every mutation carries a client-generated Idempotency-Key
+ * (plan-final §3; apps/api/src/middleware/mutation.ts 422s without one). The
+ * caller decides what to do with the confirmed envelope — NO optimistic
+ * success anywhere on mutation paths (money-action discipline).
+ */
+export async function postEnvelope(
+  path: string,
+  accessToken: string,
+  body: unknown,
+): Promise<unknown> {
+  return requestEnvelope(path, accessToken, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      [IDEMPOTENCY_KEY_HEADER]: crypto.randomUUID(),
+    },
+    body: JSON.stringify(body),
+  });
 }

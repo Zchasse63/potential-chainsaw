@@ -61,6 +61,34 @@ function buildApp() {
         },
       ],
     }),
+    import_quarantine: () => ({
+      data: [
+        { entity: "members", reason: "unknown_glofox_event" },
+        { entity: "members", reason: "unknown_glofox_event" },
+        { entity: "transactions", reason: "missing_namespace" },
+      ],
+    }),
+    reconciliations: () => ({
+      data: [
+        {
+          id: "99999999-9999-4999-8999-999999999999",
+          tenant_id: TENANT_A,
+          entity: "transactions",
+          window_start: new Date(now - 86_400_000).toISOString(),
+          window_end: new Date(now).toISOString(),
+          glofox_count: 41,
+          kelo_count: 40,
+          glofox_sum: 1234.5,
+          kelo_sum: 1204.5,
+          drift_count: 1,
+          drift_sum: 30,
+          status: "drift",
+          detail: {},
+          checked_at: new Date(now - 60_000).toISOString(),
+          created_at: new Date(now - 60_000).toISOString(),
+        },
+      ],
+    }),
   });
   const app = createApp({
     verifyAccessToken: async () => ({ userId: USER_ID }),
@@ -121,5 +149,60 @@ describe("GET /api/v1/health", () => {
     for (const entry of body.data.authority) {
       expect(entry.state).toBe("glofox_authoritative");
     }
+  });
+
+  it("carries the quarantine summary + recent reconciliation (unit 1.6 additions)", async () => {
+    const { app } = buildApp();
+    const res = await app.request("/api/v1/health", authed);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      data: {
+        quarantine: {
+          open_count: number;
+          by_cause: Array<{ entity: string; reason: string; open_count: number }>;
+        };
+        reconciliation: { pending: boolean; recent: Array<Record<string, unknown>> };
+      };
+    };
+
+    expect(body.data.quarantine.open_count).toBe(3);
+    expect(body.data.quarantine.by_cause).toEqual([
+      { entity: "members", reason: "unknown_glofox_event", open_count: 2 },
+      { entity: "transactions", reason: "missing_namespace", open_count: 1 },
+    ]);
+
+    expect(body.data.reconciliation.pending).toBe(false);
+    expect(body.data.reconciliation.recent).toHaveLength(1);
+    expect(body.data.reconciliation.recent[0]?.["status"]).toBe("drift");
+  });
+
+  it("reconciliation 42P01 (unit 1.5 table not landed yet) degrades to pending, never 500", async () => {
+    const fake = fakeUserClient({
+      tenant_users: () => ({ data: [{ tenant_id: TENANT_A, role: "owner" }] }),
+      sync_state: () => ({ data: [] }),
+      sync_runs: () => ({ data: [] }),
+      alerts: () => ({ data: [] }),
+      import_quarantine: () => ({ data: [] }),
+      reconciliations: () => ({
+        data: null,
+        error: { message: 'relation "public.reconciliations" does not exist', code: "42P01" },
+      }),
+    });
+    const app = createApp({
+      verifyAccessToken: async () => ({ userId: USER_ID }),
+      createUserClient: () => fake.client,
+    });
+
+    const res = await app.request("/api/v1/health", authed);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      data: {
+        quarantine: { open_count: number };
+        reconciliation: { pending: boolean; recent: unknown[] };
+      };
+    };
+    expect(body.data.reconciliation.pending).toBe(true);
+    expect(body.data.reconciliation.recent).toEqual([]);
+    expect(body.data.quarantine.open_count).toBe(0);
   });
 });
