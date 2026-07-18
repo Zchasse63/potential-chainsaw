@@ -1,4 +1,4 @@
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { z } from "zod";
 import {
   createOfferingTemplate,
@@ -249,7 +249,7 @@ export function registerSchedulingAuthoringRoutes(app: Hono<AppEnv>, deps: Resol
     const session = await createScheduledSession(userClient, { tenant_id: tenantId, offering_template_id: body.offering_template_id, resource_id: body.resource_id, capacity: body.capacity ?? template.default_capacity ?? resource.capacity, status: "draft", schedule_rule_id: null, created_by: userId, published_at: null, ...times });
     return c.json(c.var.ok({ session, timezone, local_date: body.local_date, local_start_time: body.local_start_time }, native), 201);
   });
-  const editSession = async (c: Parameters<Parameters<typeof app.post>[2]>[0]) => {
+  const editSession = async (c: Context<AppEnv>) => {
     const { id } = parseParams(c, idParams); const body = await parseBody(c, sessionPatch); const { userClient } = authOf(c); const { tenantId } = tenantOf(c);
     const existing = await fetchScheduledSession(userClient, tenantId, id); if (existing === null) notFound("scheduled_session");
     if (existing.status !== "draft") throw new ApiError(409, "session_not_draft", "only draft sessions can be edited");

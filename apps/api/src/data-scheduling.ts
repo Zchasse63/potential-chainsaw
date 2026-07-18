@@ -381,7 +381,7 @@ export function expandScheduleRule(
 
   for (let cursor = ruleStart; cursor <= upper; cursor = addDays(cursor, 1)) {
     const diff = dayDiff(cursor, ruleStart);
-    const weekday = WEEKDAY[cursor.getUTCDay()];
+    const weekday = WEEKDAY[cursor.getUTCDay()] as string;
     const matches = parsed.frequency === "DAILY"
       ? diff % parsed.interval === 0 && (parsed.byDay === null || parsed.byDay.has(weekday))
       : Math.floor(diff / 7) % parsed.interval === 0 && (parsed.byDay?.has(weekday) ?? cursor.getUTCDay() === ruleStart.getUTCDay());
