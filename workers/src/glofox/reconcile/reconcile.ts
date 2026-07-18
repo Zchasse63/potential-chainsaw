@@ -38,20 +38,17 @@ import type { PooledQueryable, SyncGlofoxClient, SyncRunContext } from "../types
  *                    the proxy with the authoritative primary_relationship
  *                    count.
  *
- *   transactions   — THE MONEY RECONCILIATION. Window = trailing 30 days
- *                    (payload.windowDays override). Glofox side = the report
- *                    details; Kelo side = glofox_transactions in the same
- *                    window. NET rule, IDENTICAL both sides: count = PAID +
- *                    REFUNDED rows; sum = PAID amounts − REFUNDED amounts
- *                    (ERROR rows are failed payments — no money moved — and are
- *                    excluded from the net on BOTH sides; every status still
- *                    appears in detail's per-status breakdown). Report rows
- *                    that fail the lenient {status, amount} read are counted in
- *                    detail.unreadable_rows and excluded (the import mapper
- *                    quarantines the same rows — visible, never silent).
+ *   transactions   — ID SET-DIFFERENCE over the trailing report window. The
+ *                    report uses Glofox wall-time `created`, while Kelo stores
+ *                    its UTC conversion. Kelo therefore reads a ±1-day window
+ *                    plus all-time membership for every report ID. Report IDs
+ *                    found anywhere in Kelo match; Kelo-only rows more than
+ *                    36h inside both edges are real drift. Edge rows are
+ *                    counted in detail.boundary_rows and excluded from drift.
+ *                    drift_count = |only_in_glofox| − |only_in_kelo|.
  *
- *   bookings       — FULL-HISTORY count: bookings.list meta.totalCount vs
- *                    count(*) glofox_bookings. NO window: the API's only
+ *   bookings       — FULL-HISTORY active count: paginated bookings.list rows
+ *                    vs count(*) glofox_bookings where deleted_at is null. NO window: the API's only
  *                    bookings filter is modified_start_date, which has no
  *                    Kelo-side counterpart (glofox_bookings.updated_at is
  *                    re-touched by every re-import), so any windowed comparison
@@ -76,12 +73,21 @@ import type { PooledQueryable, SyncGlofoxClient, SyncRunContext } from "../types
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** The canonical entity set + order (payload.entities filters THIS list). */
-export const RECONCILE_ENTITIES = ["members", "members_active", "transactions", "bookings"] as const;
+export const RECONCILE_ENTITIES = [
+  "members",
+  "members_active",
+  "transactions",
+  "bookings",
+] as const;
 
 /** The member-canary proxy window (the recurring-payment evidence chain). */
 const ACTIVE_PROXY_WINDOW_DAYS = 45;
 /** Transactions reconciliation window default (payload.windowDays overrides). */
 const DEFAULT_WINDOW_DAYS = 30;
+/** Kelo's UTC conversion can straddle the report's Glofox wall-time edges. */
+const TRANSACTION_WINDOW_WIDEN_DAYS = 1;
+/** Rows this close to either report edge are explained boundary artifacts. */
+const TRANSACTION_BOUNDARY_HOURS = 36;
 
 export interface ReconcileConfig {
   readonly entities: readonly string[];
@@ -141,11 +147,6 @@ function asNumber(value: unknown): number {
   const n = Number(value);
   if (!Number.isFinite(n)) throw new Error(`expected a numeric result, got ${String(value)}`);
   return n;
-}
-
-/** Money drift compares at cents precision — float fuzz is not drift. */
-function money(value: number): number {
-  return Math.round(value * 100) / 100;
 }
 
 async function insertReconciliation(
@@ -238,40 +239,64 @@ async function keloActiveMemberProxyCount(
   return asNumber((result.rows[0] as { n?: unknown } | undefined)?.n ?? 0);
 }
 
-async function keloBookingsCount(pool: PooledQueryable, tenantId: string): Promise<number> {
-  const result = await pool.query(
-    `select count(*)::int as n from public.glofox_bookings where tenant_id = $1`,
-    [tenantId],
-  );
-  return asNumber((result.rows[0] as { n?: unknown } | undefined)?.n ?? 0);
-}
-
-interface StatusBreakdown {
-  readonly count: number;
-  readonly sum: number;
-}
-
-async function keloTransactionBreakdown(
+async function keloBookingsCounts(
   pool: PooledQueryable,
   tenantId: string,
-  windowStart: Date,
-  windowEnd: Date,
-): Promise<Record<string, StatusBreakdown>> {
-  const result = await pool.query(
-    `select transaction_status as status, count(*)::int as n,
-            coalesce(sum(amount), 0)::float8 as total
-     from public.glofox_transactions
-     where tenant_id = $1 and transaction_created_at >= $2 and transaction_created_at < $3
-     group by transaction_status`,
-    [tenantId, windowStart.toISOString(), windowEnd.toISOString()],
+): Promise<{ active: number; softDeleted: number }> {
+  const activeResult = await pool.query(
+    `select count(*)::int as n
+     from public.glofox_bookings
+     where tenant_id = $1 and deleted_at is null`,
+    [tenantId],
   );
-  const breakdown: Record<string, StatusBreakdown> = {};
+  const softDeletedResult = await pool.query(
+    `select count(*)::int as n
+     from public.glofox_bookings
+     where tenant_id = $1 and deleted_at is not null`,
+    [tenantId],
+  );
+  return {
+    active: asNumber((activeResult.rows[0] as { n?: unknown } | undefined)?.n ?? 0),
+    softDeleted: asNumber((softDeletedResult.rows[0] as { n?: unknown } | undefined)?.n ?? 0),
+  };
+}
+
+interface KeloTransactionRef {
+  readonly externalRef: string;
+  readonly createdAt: Date | null;
+}
+
+function asDateOrNull(value: unknown): Date | null {
+  if (value === null || value === undefined) return null;
+  const date = value instanceof Date ? value : new Date(String(value));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+async function keloTransactionRefs(
+  pool: PooledQueryable,
+  tenantId: string,
+  widenedStart: Date,
+  widenedEnd: Date,
+  reportIds: readonly string[],
+): Promise<KeloTransactionRef[]> {
+  const result = await pool.query(
+    `select external_ref, transaction_created_at
+     from public.glofox_transactions
+     where tenant_id = $1
+       and ((transaction_created_at >= $2 and transaction_created_at < $3)
+            or external_ref = any($4::text[]))`,
+    [tenantId, widenedStart.toISOString(), widenedEnd.toISOString(), reportIds],
+  );
+  const refs: KeloTransactionRef[] = [];
   for (const row of result.rows) {
-    const r = row as { status?: unknown; n?: unknown; total?: unknown };
-    if (typeof r.status !== "string") continue;
-    breakdown[r.status] = { count: asNumber(r.n ?? 0), sum: money(asNumber(r.total ?? 0)) };
+    const parsed = row as { external_ref?: unknown; transaction_created_at?: unknown };
+    if (typeof parsed.external_ref !== "string") continue;
+    refs.push({
+      externalRef: parsed.external_ref,
+      createdAt: asDateOrNull(parsed.transaction_created_at),
+    });
   }
-  return breakdown;
+  return refs;
 }
 
 // --- Glofox-side reads (strict envelope parse: schema drift here is LOUD — it
@@ -308,21 +333,19 @@ async function glofoxBookingsTotal(client: SyncGlofoxClient, ctx: SyncRunContext
   return total;
 }
 
-/** Lenient per-row read for the money totals — the mapper owns the STRICT row;
- * reconciliation needs only {status, amount}. Failures are counted, not fatal. */
-const chargeTotalsSchema = z.object({
+/** Identity-only read: set reconciliation needs no amounts, status, or PII. */
+const chargeRefSchema = z.object({
   StripeCharge: z.object({
-    transaction_status: z.string(),
-    amount: z.number(),
+    _id: z.string(),
   }),
 });
 
-async function glofoxTransactionBreakdown(
+async function glofoxTransactionRefs(
   client: SyncGlofoxClient,
   ctx: SyncRunContext,
   windowStart: Date,
   windowEnd: Date,
-): Promise<{ breakdown: Record<string, StatusBreakdown>; unreadableRows: number }> {
+): Promise<{ refs: string[]; unreadableRows: number }> {
   if (ctx.branchId === undefined || ctx.namespace === undefined) {
     // Trap 2 is a SILENT EMPTY report — missing identity config must be loud.
     throw new Error("transactions reconciliation requires ctx.branchId and ctx.namespace");
@@ -336,26 +359,17 @@ async function glofoxTransactionBreakdown(
   });
   const payload = await client.fetch("/Analytics/report", { method: "POST", body });
   const details = extractTransactionsRows(payload);
-  const breakdown: Record<string, StatusBreakdown> = {};
+  const refs = new Set<string>();
   let unreadableRows = 0;
   for (const detail of details) {
-    const parsed = chargeTotalsSchema.safeParse(detail);
+    const parsed = chargeRefSchema.safeParse(detail);
     if (!parsed.success) {
       unreadableRows += 1;
       continue;
     }
-    const { transaction_status: status, amount } = parsed.data.StripeCharge;
-    const prior = breakdown[status] ?? { count: 0, sum: 0 };
-    breakdown[status] = { count: prior.count + 1, sum: money(prior.sum + amount) };
+    refs.add(parsed.data.StripeCharge._id);
   }
-  return { breakdown, unreadableRows };
-}
-
-/** The NET money rule — IDENTICAL both sides (the module header documents it). */
-function netTotals(breakdown: Record<string, StatusBreakdown>): { count: number; sum: number } {
-  const paid = breakdown["PAID"] ?? { count: 0, sum: 0 };
-  const refunded = breakdown["REFUNDED"] ?? { count: 0, sum: 0 };
-  return { count: paid.count + refunded.count, sum: money(paid.sum - refunded.sum) };
+  return { refs: [...refs], unreadableRows };
 }
 
 // --- the per-entity checks ------------------------------------------------------
@@ -410,8 +424,10 @@ const checkMembersActive: EntityCheck = async (pool, _client, ctx) => {
       window_days: ACTIVE_PROXY_WINDOW_DAYS,
       single_sided:
         "the Glofox-side equivalent (members with membership.type != 'payg') needs a full ~1500-row pull — not cheap; the owner eyeballs kelo_count against ground truth instead",
-      owner_ground_truth: "~23 active members (BLOCKERS gold label — SURFACED, never asserted as pass/fail)",
-      phase_2: "replaced by the authoritative primary_relationship count when relationship derivation lands",
+      owner_ground_truth:
+        "~23 active members (BLOCKERS gold label — SURFACED, never asserted as pass/fail)",
+      phase_2:
+        "replaced by the authoritative primary_relationship count when relationship derivation lands",
     },
   };
 };
@@ -419,37 +435,84 @@ const checkMembersActive: EntityCheck = async (pool, _client, ctx) => {
 const checkTransactions: EntityCheck = async (pool, client, ctx, cfg) => {
   const windowEnd = ctx.now();
   const windowStart = new Date(windowEnd.getTime() - cfg.windowDays * DAY_MS);
-  const glofox = await glofoxTransactionBreakdown(client, ctx, windowStart, windowEnd);
-  const kelo = await keloTransactionBreakdown(pool, ctx.tenantId, windowStart, windowEnd);
-  const glofoxNet = netTotals(glofox.breakdown);
-  const keloNet = netTotals(kelo);
-  const driftCount = glofoxNet.count - keloNet.count;
-  const driftSum = money(glofoxNet.sum - keloNet.sum);
+  const widenedStart = new Date(windowStart.getTime() - TRANSACTION_WINDOW_WIDEN_DAYS * DAY_MS);
+  const widenedEnd = new Date(windowEnd.getTime() + TRANSACTION_WINDOW_WIDEN_DAYS * DAY_MS);
+  const glofox = await glofoxTransactionRefs(client, ctx, windowStart, windowEnd);
+  const reportRefs = new Set(glofox.refs);
+  const keloRows = await keloTransactionRefs(
+    pool,
+    ctx.tenantId,
+    widenedStart,
+    widenedEnd,
+    glofox.refs,
+  );
+
+  const keloByRef = new Map<string, Date | null>();
+  for (const row of keloRows) keloByRef.set(row.externalRef, row.createdAt);
+
+  const keloInWindow = new Set<string>();
+  for (const [ref, createdAt] of keloByRef) {
+    if (
+      createdAt !== null &&
+      createdAt.getTime() >= windowStart.getTime() &&
+      createdAt.getTime() < windowEnd.getTime()
+    ) {
+      keloInWindow.add(ref);
+    }
+  }
+
+  const onlyInGlofox = [...reportRefs].filter((ref) => !keloByRef.has(ref)).sort();
+  const onlyInKelo: string[] = [];
+  const boundaryRefs = new Set<string>();
+  const interiorStart = windowStart.getTime() + TRANSACTION_BOUNDARY_HOURS * 60 * 60 * 1000;
+  const interiorEnd = windowEnd.getTime() - TRANSACTION_BOUNDARY_HOURS * 60 * 60 * 1000;
+
+  // A report row matches if Kelo has that identity AT ALL. If its converted
+  // UTC timestamp falls outside the report window, the count delta is an
+  // explained wall-time boundary artifact rather than missing data.
+  for (const ref of reportRefs) {
+    if (keloByRef.has(ref) && !keloInWindow.has(ref)) boundaryRefs.add(ref);
+  }
+
+  for (const [ref, createdAt] of keloByRef) {
+    if (reportRefs.has(ref) || createdAt === null) continue;
+    const createdMs = createdAt.getTime();
+    const isInterior = createdMs > interiorStart && createdMs < interiorEnd;
+    if (isInterior) onlyInKelo.push(ref);
+    else boundaryRefs.add(ref);
+  }
+  onlyInKelo.sort();
+
+  const driftCount = onlyInGlofox.length - onlyInKelo.length;
   return {
     windowStart,
     windowEnd,
-    glofoxCount: glofoxNet.count,
-    keloCount: keloNet.count,
-    glofoxSum: glofoxNet.sum,
-    keloSum: keloNet.sum,
+    glofoxCount: reportRefs.size,
+    keloCount: keloInWindow.size,
+    glofoxSum: null,
+    keloSum: null,
     driftCount,
-    driftSum,
-    status: driftCount === 0 && driftSum === 0 ? "match" : "drift",
+    driftSum: null,
+    status: driftCount === 0 ? "match" : "drift",
     detail: {
-      net_rule:
-        "count = PAID + REFUNDED rows; sum = PAID amounts − REFUNDED amounts (ERROR rows are failed payments, excluded from the net on BOTH sides)",
+      set_rule:
+        "drift_count = |only_in_glofox| - |only_in_kelo|; report IDs match if their external_ref exists in Kelo at all; Kelo-only rows must be more than 36h inside both report edges to count as drift",
       window_days: cfg.windowDays,
-      glofox_by_status: glofox.breakdown,
-      kelo_by_status: kelo,
+      only_in_glofox: onlyInGlofox,
+      only_in_kelo: onlyInKelo,
+      boundary_rows: boundaryRefs.size,
       unreadable_rows: glofox.unreadableRows,
-      note: "same source both sides — drift means an import bug, which is exactly what this check exists to catch",
+      kelo_window_widened_days: TRANSACTION_WINDOW_WIDEN_DAYS,
+      boundary_hours: TRANSACTION_BOUNDARY_HOURS,
+      note: "IDs only; no transaction payload or PII is persisted in reconciliation detail",
     },
   };
 };
 
 const checkBookings: EntityCheck = async (pool, client, ctx) => {
   const glofoxCount = await glofoxBookingsTotal(client, ctx);
-  const keloCount = await keloBookingsCount(pool, ctx.tenantId);
+  const kelo = await keloBookingsCounts(pool, ctx.tenantId);
+  const keloCount = kelo.active;
   const driftCount = glofoxCount - keloCount;
   return {
     windowStart: null,
@@ -465,8 +528,9 @@ const checkBookings: EntityCheck = async (pool, client, ctx) => {
       window: "full-history",
       why_no_window:
         "bookings.list filters only by modified_start_date, which has no Kelo-side counterpart (glofox_bookings.updated_at is re-touched by every re-import) — the full count is the apples-to-apples check",
-      glofox_source: "bookings.list meta.totalCount (page 1, limit 1)",
-      kelo_source: "count(*) glofox_bookings",
+      glofox_source: "bookings.list paginated data-row count (meta.totalCount is unreliable)",
+      kelo_source: "count(*) glofox_bookings where deleted_at is null",
+      soft_deleted: kelo.softDeleted,
     },
   };
 };

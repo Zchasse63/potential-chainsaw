@@ -30,6 +30,19 @@ function membersClient(pages: Record<string, unknown>[]) {
   });
 }
 
+function membersCtx() {
+  return makeCtx({ payload: { entities: ["members"] } });
+}
+
+function bookingsPage(rows: unknown[], page = 1): unknown {
+  return {
+    data: rows,
+    success: true,
+    // Deliberately untrustworthy: deletion pagination must use page fullness.
+    meta: { totalCount: 2, page, limit: 100 },
+  };
+}
+
 function refsPool(
   keloRefs: string[],
   previousRefs: string[] | null,
@@ -58,7 +71,7 @@ describe("the two-consecutive-snapshot law", () => {
     const pool = refsPool(["a", "b", "c"], null);
     const client = membersClient([styleAPage([{ _id: "a" }, { _id: "b" }])]);
 
-    const outcomes = await runDeletionDetection(pool, client, makeCtx());
+    const outcomes = await runDeletionDetection(pool, client, membersCtx());
 
     expect(outcomes).toEqual([
       {
@@ -100,7 +113,7 @@ describe("the two-consecutive-snapshot law", () => {
     const pool = refsPool(["a", "b", "c"], ["a", "b"]);
     const client = membersClient([styleAPage([{ _id: "a" }, { _id: "b" }])]);
 
-    const outcomes = await runDeletionDetection(pool, client, makeCtx());
+    const outcomes = await runDeletionDetection(pool, client, membersCtx());
 
     expect(outcomes[0]?.newCandidates).toBe(0);
     expect(outcomes[0]?.confirmed).toBe(1);
@@ -123,7 +136,7 @@ describe("the two-consecutive-snapshot law", () => {
     const pool = refsPool(["a", "b", "c"], ["a", "b", "c"]);
     const client = membersClient([styleAPage([{ _id: "a" }, { _id: "b" }])]);
 
-    const outcomes = await runDeletionDetection(pool, client, makeCtx());
+    const outcomes = await runDeletionDetection(pool, client, membersCtx());
 
     expect(outcomes[0]?.newCandidates).toBe(1);
     expect(outcomes[0]?.confirmed).toBe(0);
@@ -137,7 +150,7 @@ describe("the two-consecutive-snapshot law", () => {
     });
     const client = membersClient([styleAPage([{ _id: "a" }, { _id: "b" }, { _id: "c" }])]);
 
-    const outcomes = await runDeletionDetection(pool, client, makeCtx());
+    const outcomes = await runDeletionDetection(pool, client, membersCtx());
 
     // Nothing missing → no candidates, no alert.
     expect(outcomes[0]?.newCandidates).toBe(0);
@@ -162,7 +175,7 @@ describe("the two-consecutive-snapshot law", () => {
       styleAPage([{ _id: "b" }], 2, false),
     ]);
 
-    const outcomes = await runDeletionDetection(pool, client, makeCtx());
+    const outcomes = await runDeletionDetection(pool, client, membersCtx());
 
     expect(client.calls).toHaveLength(2);
     expect(client.calls[1]?.path).toContain("page=2");
@@ -176,7 +189,7 @@ describe("safety rules", () => {
     const pool = refsPool(["a", "b", "c"], ["a"]);
     const client = membersClient([styleAPage([{ _id: "a" }])]);
 
-    const outcomes = await runDeletionDetection(pool, client, makeCtx());
+    const outcomes = await runDeletionDetection(pool, client, membersCtx());
 
     expect(outcomes[0]?.confirmed).toBe(2); // b and c both confirmed-missing…
     for (const call of pool.calls) {
@@ -190,7 +203,7 @@ describe("safety rules", () => {
     const pool = refsPool(["a", "b"], ["a", "b"]);
     const client = membersClient([styleAPage([{ _id: "a" }, { email: "no-id@example.com" }])]);
 
-    const outcomes = await runDeletionDetection(pool, client, makeCtx());
+    const outcomes = await runDeletionDetection(pool, client, membersCtx());
 
     expect(outcomes[0]?.status).toBe("error");
     expect(String(outcomes[0]?.error)).toContain("_id");
@@ -200,5 +213,75 @@ describe("safety rules", () => {
     const alerts = callsMatching(pool.calls, "insert into public.alerts");
     expect(alerts).toHaveLength(1);
     expect(alerts[0]?.values?.[1]).toBe("deletion_detection_error");
+  });
+});
+
+describe("bookings deletion-in-source fact marks", () => {
+  function bookingRefsPool(keloRefs: string[], previousRefs: string[] | null) {
+    return createFakePool({
+      respond: (text) => {
+        if (text.includes("from public.import_snapshots")) {
+          return previousRefs === null
+            ? { rows: [] }
+            : {
+                rows: [
+                  {
+                    external_refs: previousRefs,
+                    snapshot_at: "2026-07-16T23:00:00.000Z",
+                  },
+                ],
+              };
+        }
+        if (text.includes("from public.glofox_bookings")) {
+          return { rows: keloRefs.map((external_ref) => ({ external_ref })) };
+        }
+        if (text.includes("update public.deletion_candidates")) return { rows: [] };
+        return undefined;
+      },
+    });
+  }
+
+  it("first miss creates a candidate but does not mark the booking deleted", async () => {
+    const pool = bookingRefsPool(["a", "gone"], null);
+    const client = createFakeClient(() => bookingsPage([{ _id: "a" }]));
+
+    const outcomes = await runDeletionDetection(
+      pool,
+      client,
+      makeCtx({ payload: { entities: ["bookings"] } }),
+    );
+
+    expect(outcomes[0]).toMatchObject({
+      entity: "bookings",
+      newCandidates: 1,
+      confirmed: 0,
+    });
+    expect(callsMatching(pool.calls, "update public.glofox_bookings")).toHaveLength(0);
+    const candidate = callsMatching(pool.calls, "insert into public.deletion_candidates")[0]!;
+    expect(candidate.values?.[2]).toBe("gone");
+    expect(candidate.text).toContain("'candidate'");
+  });
+
+  it("second consecutive miss confirms and soft-deletes only that booking fact", async () => {
+    const pool = bookingRefsPool(["a", "gone"], ["a"]);
+    const client = createFakeClient(() => bookingsPage([{ _id: "a" }]));
+
+    const outcomes = await runDeletionDetection(
+      pool,
+      client,
+      makeCtx({ payload: { entities: ["bookings"] } }),
+    );
+
+    expect(outcomes[0]).toMatchObject({
+      entity: "bookings",
+      newCandidates: 0,
+      confirmed: 1,
+    });
+    const factMark = callsMatching(pool.calls, "update public.glofox_bookings");
+    expect(factMark).toHaveLength(1);
+    expect(factMark[0]?.text).toContain("set deleted_at = now()");
+    expect(factMark[0]?.text).toContain("deleted_at is null");
+    expect(factMark[0]?.values).toEqual([TENANT, ["gone"]]);
+    expect(factMark[0]?.text).not.toContain("delete from");
   });
 });
