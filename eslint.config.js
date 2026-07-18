@@ -7,6 +7,8 @@ import tseslint from "typescript-eslint";
 export default tseslint.config(
   {
     ignores: [
+      // Director ops script — plain node .mjs, runs outside the TS project.
+      "scripts/backfill-runner.mjs",
       "**/dist/**",
       "**/dist-test/**",
       "**/node_modules/**",
