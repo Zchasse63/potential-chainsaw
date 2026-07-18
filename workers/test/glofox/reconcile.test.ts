@@ -53,20 +53,12 @@ function bookingsCountPage(totalCount: number): unknown {
   };
 }
 
-/** A StripeCharge-wrapped detail row with identity, status, amount overridden. */
-function charge(id: string, status: string, amount: number): Record<string, unknown> {
-  const detail = stripeChargeRow(id);
-  const inner = detail["StripeCharge"] as Record<string, unknown>;
-  inner["transaction_status"] = status;
-  inner["amount"] = amount;
-  return detail;
-}
-
 /** The fake pool responder for the Kelo-side counts, keyed by query text. */
 function keloCounts(counts: {
   people?: number;
   membersActive?: number;
   bookings?: number;
+  softDeletedBookings?: number;
   transactions?: { rows: unknown[] };
 }) {
   return (text: string) => {
@@ -79,7 +71,11 @@ function keloCounts(counts: {
       return { rows: [{ n: counts.membersActive ?? 0 }] };
     }
     if (text.includes("from public.people")) return { rows: [{ n: counts.people ?? 0 }] };
-    if (text.includes("from public.glofox_bookings")) return { rows: [{ n: counts.bookings ?? 0 }] };
+    if (text.includes("from public.glofox_bookings") && text.includes("deleted_at is not null")) {
+      return { rows: [{ n: counts.softDeletedBookings ?? 0 }] };
+    }
+    if (text.includes("from public.glofox_bookings"))
+      return { rows: [{ n: counts.bookings ?? 0 }] };
     if (text.includes("from public.glofox_transactions")) {
       return counts.transactions ?? { rows: [] };
     }
@@ -221,27 +217,22 @@ describe("members_active canary — the phase-1 single-sided proxy", () => {
   });
 });
 
-describe("transactions — the money reconciliation (negative branch)", () => {
+describe("transactions — boundary-aware ID set reconciliation", () => {
   const windowStart = new Date(NOW.getTime() - 30 * DAY_MS);
 
-  it("net PAID+REFUNDED both sides: drift in count and sum → 'drift' row + alert", async () => {
+  it("identical ID sets write a match and request the exact report window", async () => {
     const pool = createFakePool({
       respond: keloCounts({
         transactions: {
           rows: [
-            { status: "PAID", n: 1, total: 100 },
-            { status: "REFUNDED", n: 1, total: 30 },
+            { external_ref: "t1", transaction_created_at: "2026-07-10T12:00:00.000Z" },
+            { external_ref: "t2", transaction_created_at: "2026-07-11T12:00:00.000Z" },
           ],
         },
       }),
     });
     const client = createFakeClient(() =>
-      reportPage([
-        charge("t1", "PAID", 100),
-        charge("t2", "PAID", 50),
-        charge("t3", "REFUNDED", 30),
-        charge("t4", "ERROR", 75), // failed payment — excluded from the net BOTH sides
-      ]),
+      reportPage([stripeChargeRow("t1"), stripeChargeRow("t2")]),
     );
 
     const outcomes = await runReconciliation(
@@ -250,46 +241,17 @@ describe("transactions — the money reconciliation (negative branch)", () => {
       makeCtx({ payload: { entities: ["transactions"] } }),
     );
 
-    // Glofox net: count 3 (2 PAID + 1 REFUNDED), sum 100+50−30 = 120.
-    // Kelo net:   count 2, sum 100−30 = 70. Drift: count 1, sum 50.
-    expect(outcomes[0]?.status).toBe("drift");
-    const row = reconRow(callsMatching(pool.calls, "insert into public.reconciliations")[0]!);
-    expect(row.entity).toBe("transactions");
-    expect(row.windowStart).toBe(windowStart.toISOString());
-    expect(row.windowEnd).toBe(NOW.toISOString());
-    expect(row.glofoxCount).toBe(3);
-    expect(row.keloCount).toBe(2);
-    expect(row.glofoxSum).toBe(120);
-    expect(row.keloSum).toBe(70);
-    expect(row.driftCount).toBe(1);
-    expect(row.driftSum).toBe(50);
-    expect(row.status).toBe("drift");
-    expect((row.detail["glofox_by_status"] as Record<string, unknown>)["ERROR"]).toBeDefined();
-    expect((row.detail["kelo_by_status"] as Record<string, unknown>)["PAID"]).toBeDefined();
-
-    const alerts = callsMatching(pool.calls, "insert into public.alerts");
-    expect(alerts).toHaveLength(1);
-    expect(alerts[0]?.values?.[1]).toBe("reconciliation_drift");
-    expect(alerts[0]?.values?.[2]).toBe("warning"); // any nonzero money drift → warning
-  });
-
-  it("identical nets write a 'match' row; the report request carries branch + namespace + window", async () => {
-    const pool = createFakePool({
-      respond: keloCounts({
-        transactions: { rows: [{ status: "PAID", n: 2, total: 150 }] },
-      }),
+    expect(outcomes[0]).toMatchObject({
+      status: "match",
+      glofoxCount: 2,
+      keloCount: 2,
+      driftCount: 0,
+      driftSum: null,
     });
-    const client = createFakeClient(() =>
-      reportPage([charge("t1", "PAID", 100), charge("t2", "PAID", 50)]),
-    );
-
-    const outcomes = await runReconciliation(
-      pool,
-      client,
-      makeCtx({ payload: { entities: ["transactions"] } }),
-    );
-
-    expect(outcomes[0]?.status).toBe("match");
+    const row = reconRow(callsMatching(pool.calls, "insert into public.reconciliations")[0]!);
+    expect(row.detail["only_in_glofox"]).toEqual([]);
+    expect(row.detail["only_in_kelo"]).toEqual([]);
+    expect(row.detail["boundary_rows"]).toBe(0);
     const report = client.calls.find((c) => c.path.startsWith("/Analytics/report"));
     expect(report?.init?.method).toBe("POST");
     const body = report?.init?.body as Record<string, unknown>;
@@ -297,6 +259,74 @@ describe("transactions — the money reconciliation (negative branch)", () => {
     expect(body["namespace"]).toBe("test-namespace"); // trap 2 guard
     expect(body["start"]).toBe(String(Math.floor(windowStart.getTime() / 1000)));
     expect(body["end"]).toBe(String(Math.floor(NOW.getTime() / 1000)));
+    const keloRead = callsMatching(pool.calls, "select external_ref, transaction_created_at")[0]!;
+    expect(keloRead.values?.[1]).toBe(new Date(windowStart.getTime() - DAY_MS).toISOString());
+    expect(keloRead.values?.[2]).toBe(new Date(NOW.getTime() + DAY_MS).toISOString());
+    expect(keloRead.values?.[3]).toEqual(["t1", "t2"]);
+    expect(callsMatching(pool.calls, "insert into public.alerts")).toHaveLength(0);
+  });
+
+  it("a report ID whose UTC conversion falls over the edge is an explained match", async () => {
+    const pool = createFakePool({
+      respond: keloCounts({
+        transactions: {
+          rows: [
+            {
+              external_ref: "edge-id",
+              transaction_created_at: new Date(windowStart.getTime() - 4 * 60 * 60 * 1000),
+            },
+          ],
+        },
+      }),
+    });
+    const client = createFakeClient(() => reportPage([stripeChargeRow("edge-id")]));
+
+    await runReconciliation(pool, client, makeCtx({ payload: { entities: ["transactions"] } }));
+
+    const row = reconRow(callsMatching(pool.calls, "insert into public.reconciliations")[0]!);
+    expect(row.glofoxCount).toBe(1);
+    expect(row.keloCount).toBe(0);
+    expect(row.driftCount).toBe(0);
+    expect(row.status).toBe("match");
+    expect(row.detail["only_in_glofox"]).toEqual([]);
+    expect(row.detail["only_in_kelo"]).toEqual([]);
+    expect(row.detail["boundary_rows"]).toBe(1);
+    expect(callsMatching(pool.calls, "insert into public.alerts")).toHaveLength(0);
+  });
+
+  it("a genuinely absent report ID is positive drift and is listed by ID only", async () => {
+    const pool = createFakePool({
+      respond: keloCounts({ transactions: { rows: [] } }),
+    });
+    const client = createFakeClient(() => reportPage([stripeChargeRow("missing-id")]));
+
+    await runReconciliation(pool, client, makeCtx({ payload: { entities: ["transactions"] } }));
+
+    const row = reconRow(callsMatching(pool.calls, "insert into public.reconciliations")[0]!);
+    expect(row.driftCount).toBe(1);
+    expect(row.status).toBe("drift");
+    expect(row.detail["only_in_glofox"]).toEqual(["missing-id"]);
+    expect(row.detail["only_in_kelo"]).toEqual([]);
+    expect(row.detail["boundary_rows"]).toBe(0);
+  });
+
+  it("a Kelo-only interior ID preserves negative signed drift", async () => {
+    const pool = createFakePool({
+      respond: keloCounts({
+        transactions: {
+          rows: [{ external_ref: "kelo-only", transaction_created_at: "2026-07-10T12:00:00.000Z" }],
+        },
+      }),
+    });
+    const client = createFakeClient(() => reportPage([]));
+
+    await runReconciliation(pool, client, makeCtx({ payload: { entities: ["transactions"] } }));
+
+    const row = reconRow(callsMatching(pool.calls, "insert into public.reconciliations")[0]!);
+    expect(row.driftCount).toBe(-1);
+    expect(row.status).toBe("drift");
+    expect(row.detail["only_in_glofox"]).toEqual([]);
+    expect(row.detail["only_in_kelo"]).toEqual(["kelo-only"]);
   });
 
   it("payload.windowDays overrides the default trailing-30-days window", async () => {
@@ -312,6 +342,34 @@ describe("transactions — the money reconciliation (negative branch)", () => {
     const row = reconRow(callsMatching(pool.calls, "insert into public.reconciliations")[0]!);
     expect(row.windowStart).toBe(new Date(NOW.getTime() - 7 * DAY_MS).toISOString());
     expect(row.detail["window_days"]).toBe(7);
+  });
+});
+
+describe("bookings — active facts only", () => {
+  it("excludes soft-deleted rows and reports their retained count", async () => {
+    const pool = createFakePool({
+      respond: keloCounts({ bookings: 3, softDeletedBookings: 6 }),
+    });
+    const client = createFakeClient(() => bookingsCountPage(3));
+
+    const outcomes = await runReconciliation(
+      pool,
+      client,
+      makeCtx({ payload: { entities: ["bookings"] } }),
+    );
+
+    expect(outcomes[0]).toMatchObject({
+      entity: "bookings",
+      status: "match",
+      glofoxCount: 3,
+      keloCount: 3,
+      driftCount: 0,
+    });
+    const row = reconRow(callsMatching(pool.calls, "insert into public.reconciliations")[0]!);
+    expect(row.detail["soft_deleted"]).toBe(6);
+    expect(String(row.detail["kelo_source"])).toContain("deleted_at is null");
+    expect(callsMatching(pool.calls, "deleted_at is null")).toHaveLength(1);
+    expect(callsMatching(pool.calls, "deleted_at is not null")).toHaveLength(1);
   });
 });
 

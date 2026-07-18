@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { openAlert, withTransaction } from "../pipeline.js";
-import { extractStyleARows, styleAHasNextPage, withQuery } from "../envelopes.js";
+import {
+  extractStyleARows,
+  extractStyleBRows,
+  styleAHasNextPage,
+  withQuery,
+} from "../envelopes.js";
 import type { PooledQueryable, SyncGlofoxClient, SyncRunContext } from "../types.js";
 
 /**
@@ -10,12 +15,11 @@ import type { PooledQueryable, SyncGlofoxClient, SyncRunContext } from "../types
  * deletion_candidates (+ a 'deletion_candidates' alert) for REVIEW.
  *
  * THE RULES THAT KEEP THIS SAFE:
- *   - A candidate is NEVER an automatic delete (README §6: members can be
- *     soft-deleted active:false and REACTIVATED — the members sync mirrors that
- *     flag onto people.active; this machinery watches for refs GONE from
- *     Glofox entirely). Nothing here ever deletes or deactivates a person row;
- *     resolution is a human status flip (or automatic when a ref reappears in
- *     a later snapshot — reactivation is real, the candidate resolves itself).
+ *   - A candidate NEVER purges a row. People/members remain review-only
+ *     (README §6: members can be soft-deleted active:false and REACTIVATED).
+ *     Nothing here ever deletes, updates, or deactivates a person row.
+ *     Bookings are facts rather than evidence-class rows: after TWO misses a
+ *     booking is marked deleted-in-source with deleted_at, but the row stays.
  *   - The snapshot fetches active='any' so soft-deleted members (still listed
  *     by the API) are NOT false positives — only true disappearance counts.
  *   - A snapshot page with ANY row lacking a readable string _id ABORTS the
@@ -34,13 +38,14 @@ import type { PooledQueryable, SyncGlofoxClient, SyncRunContext } from "../types
  * no webhook secret yet (BLOCKERS P0-7) — this snapshot method is the plan's
  * documented fallback and stays as the safety net even once webhooks land.
  *
- * Only 'members' supports a full branch list today (bookings/transactions are
- * windowed, credits are per-user) — the spec map is the extension point.
+ * Members and bookings support full branch lists. The bookings endpoint's
+ * meta.totalCount is live-proven unreliable, so its snapshot paginates until
+ * a short page rather than trusting the metadata.
  */
 
 const PAGE_LIMIT = 100;
 
-export const DELETION_ENTITIES = ["members"] as const;
+export const DELETION_ENTITIES = ["members", "bookings"] as const;
 
 /** Per-entity contract: how to snapshot Glofox and read the Kelo slice refs. */
 interface DeletionEntitySpec {
@@ -49,6 +54,13 @@ interface DeletionEntitySpec {
   readonly fetchAllRefs: (client: SyncGlofoxClient, ctx: SyncRunContext) => Promise<string[]>;
   /** The Kelo slice table's known refs (the population deletion applies to). */
   readonly keloRefs: (pool: PooledQueryable, tenantId: string) => Promise<string[]>;
+  /** Entity-specific fact handling; people intentionally define no hook. */
+  readonly markConfirmed?: (
+    tx: PooledQueryable,
+    tenantId: string,
+    refs: readonly string[],
+  ) => Promise<void>;
+  readonly alertExplanation: string;
 }
 
 /** Identity-only row read — see the module header for the abort rule. */
@@ -56,6 +68,8 @@ const memberRefRowSchema = z.object({ _id: z.string() });
 
 const membersDeletionSpec: DeletionEntitySpec = {
   entity: "members",
+  alertExplanation:
+    "REVIEW ONLY — people are never auto-deleted, updated, or deactivated by snapshot detection.",
 
   fetchAllRefs: async (client) => {
     const refs = new Set<string>();
@@ -93,8 +107,71 @@ const membersDeletionSpec: DeletionEntitySpec = {
   },
 };
 
+const bookingRefRowSchema = z.object({ _id: z.string() });
+
+const bookingsDeletionSpec: DeletionEntitySpec = {
+  entity: "bookings",
+  alertExplanation:
+    "Confirmed booking misses are marked deleted-in-source with deleted_at. This is NOT a purge: the retained fact remains reviewable and is excluded only from active counts.",
+
+  fetchAllRefs: async (client, ctx) => {
+    if (ctx.branchId === undefined) {
+      throw new Error("bookings deletion detection requires ctx.branchId");
+    }
+    const refs = new Set<string>();
+    let page = 1;
+    for (;;) {
+      const payload = await client.fetch(
+        withQuery(`/2.2/branches/${encodeURIComponent(ctx.branchId)}/bookings`, {
+          page,
+          limit: PAGE_LIMIT,
+        }),
+      );
+      const rows = extractStyleBRows(payload);
+      for (const row of rows) {
+        const parsed = bookingRefRowSchema.safeParse(row);
+        if (!parsed.success) {
+          throw new Error(
+            `bookings page ${page}: a row has no readable string _id — aborting the ` +
+              "snapshot (a dirty snapshot is not absence evidence)",
+          );
+        }
+        refs.add(parsed.data._id);
+      }
+      if (rows.length < PAGE_LIMIT) return [...refs];
+      if (page >= 500) {
+        throw new Error(
+          "bookings snapshot exceeded 500 pages — refusing a possibly partial snapshot",
+        );
+      }
+      page += 1;
+    }
+  },
+
+  keloRefs: async (pool, tenantId) => {
+    const result = await pool.query(
+      `select external_ref from public.glofox_bookings where tenant_id = $1`,
+      [tenantId],
+    );
+    return result.rows
+      .map((row) => (row as { external_ref?: unknown }).external_ref)
+      .filter((ref): ref is string => typeof ref === "string");
+  },
+
+  markConfirmed: async (tx, tenantId, refs) => {
+    if (refs.length === 0) return;
+    await tx.query(
+      `update public.glofox_bookings
+       set deleted_at = now()
+       where tenant_id = $1 and external_ref = any($2::text[]) and deleted_at is null`,
+      [tenantId, refs],
+    );
+  },
+};
+
 const DELETION_SPECS: Record<(typeof DELETION_ENTITIES)[number], DeletionEntitySpec> = {
   members: membersDeletionSpec,
+  bookings: bookingsDeletionSpec,
 };
 
 /** How one entity's detection run ended — returned for tests + logging. */
@@ -132,7 +209,9 @@ async function readPreviousSnapshot(
   return {
     refs: new Set(row.external_refs.filter((r): r is string => typeof r === "string")),
     snapshotAt:
-      row.snapshot_at instanceof Date ? row.snapshot_at.toISOString() : String(row.snapshot_at ?? ""),
+      row.snapshot_at instanceof Date
+        ? row.snapshot_at.toISOString()
+        : String(row.snapshot_at ?? ""),
   };
 }
 
@@ -187,7 +266,6 @@ async function detectEntityDeletions(
         JSON.stringify({ resolution_source: "snapshot_reappeared", resolved_snapshot_at: nowIso }),
       ],
     );
-
     // Upsert the misses. The partial unique (tenant_id, entity, external_ref)
     // where status in ('candidate','confirmed') keys the conflict; status is
     // the freshly computed truth (candidate→confirmed is monotonic), the first
@@ -233,6 +311,7 @@ async function detectEntityDeletions(
         ],
       );
     }
+    await spec.markConfirmed?.(tx, ctx.tenantId, confirmed);
     return resolvedRows.rows.length;
   });
 
@@ -244,9 +323,8 @@ async function detectEntityDeletions(
       body:
         `Full snapshot saw ${refs.length} ${spec.entity} refs; ${candidates.length} Kelo ref(s) ` +
         `missing from the latest snapshot (first miss) and ${confirmed.length} missing from TWO ` +
-        `consecutive snapshots. REVIEW ONLY — candidates are never auto-deleted (soft-delete and ` +
-        `reactivation are real, README §6). Webhook-based detection is deferred (no webhook ` +
-        `secret yet, BLOCKERS P0-7); this snapshot method is the plan's fallback.`,
+        `consecutive snapshots. ${spec.alertExplanation} Webhook-based member detection is ` +
+        `deferred (no webhook secret yet, BLOCKERS P0-7); snapshots remain the plan's safety net.`,
     });
   }
 
