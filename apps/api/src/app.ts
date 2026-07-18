@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { ZodError } from "zod";
+import type { KeloSupabaseClient } from "@kelo/db";
 import { ApiError, errorBody, type ErrorStatus } from "./errors.js";
 import { resolveDeps } from "./middleware/auth.js";
 import {
@@ -16,10 +17,16 @@ import { registerHealthRoutes } from "./routes/health.js";
 import { registerImportRoutes } from "./routes/import.js";
 import { registerReportRoutes } from "./routes/reports.js";
 import { registerScheduleRoutes } from "./routes/schedule.js";
+import { registerStaffRoutes } from "./routes/staff.js";
 import { registerMarketingRoutes } from "./routes/marketing.js";
 import { registerTenantRoutes } from "./routes/tenant.js";
 import { registerWebhookRoutes, type WebhookDeps } from "./routes/webhooks.js";
 import type { AppDeps, AppEnv } from "./types.js";
+
+export interface StaffDeps {
+  /** Server-only credential reader; tests inject a no-network fake. */
+  createStepUpClient?: () => KeloSupabaseClient;
+}
 
 /**
  * The ONE Hono API app (plan-final §1/§3), base path /api/v1.
@@ -28,7 +35,7 @@ import type { AppDeps, AppEnv } from "./types.js";
  * requireAuth → resolveTenant (SOLE source of tenant id) → requireRole →
  * requireIdempotencyKey on mutations.
  */
-export function createApp(deps: AppDeps & WebhookDeps = {}): Hono<AppEnv> {
+export function createApp(deps: AppDeps & WebhookDeps & StaffDeps = {}): Hono<AppEnv> {
   const resolved = resolveDeps(deps);
   const app = new Hono<AppEnv>().basePath("/api/v1");
 
@@ -95,6 +102,7 @@ export function createApp(deps: AppDeps & WebhookDeps = {}): Hono<AppEnv> {
   registerAskRoutes(app, resolved, { fetchImpl: deps.anthropicFetch, env: deps.env });
   registerScheduleRoutes(app, resolved);
   registerMarketingRoutes(app, resolved);
+  registerStaffRoutes(app, resolved, deps.env, deps.createStepUpClient);
 
   return app;
 }

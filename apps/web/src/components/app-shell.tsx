@@ -1,7 +1,9 @@
 import type { ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../auth/auth-context.jsx";
 import { inspectEnvelope } from "../lib/envelope.js";
+import { fetchEnvelope } from "../lib/api.js";
 import { aggregateFreshness, useHealthQuery, type HealthReport } from "../lib/health.js";
 import type { FreshnessBucket } from "../lib/freshness.js";
 import { Button } from "./button.jsx";
@@ -88,6 +90,29 @@ function MarketingNavIcon() {
   );
 }
 
+function StaffNavLink() {
+  const auth = useAuth();
+  const access = useQuery({
+    queryKey: ["auth", "me"],
+    enabled: auth.accessToken !== null,
+    queryFn: () => fetchEnvelope("/auth/me", auth.accessToken as string),
+    retry: false,
+  });
+  if (access.status !== "success") return null;
+  const tenants = (access.data as { data?: { tenants?: { role?: string }[] } }).data?.tenants ?? [];
+  if (!tenants.some((tenant) => tenant.role === "owner" || tenant.role === "manager")) return null;
+  return (
+    <li>
+      <Link to="/staff" className={NAV_LINK_BASE} activeProps={{ className: NAV_LINK_ACTIVE }}>
+        <span aria-hidden="true" className="font-mono text-icon-inactive">
+          ◎
+        </span>
+        Staff
+      </Link>
+    </li>
+  );
+}
+
 /**
  * Open-exception count badge (design guide §8 count badges), read from the
  * /health envelope's quarantine summary — no extra fetch. Quiet when the
@@ -145,13 +170,15 @@ export function AppShell({ children }: { children: ReactNode }) {
       ? "Ask"
       : pathname.startsWith("/marketing")
         ? "Marketing"
-      : pathname.startsWith("/schedule")
-        ? "Schedule"
-        : pathname.startsWith("/briefing/archive")
-          ? "Briefing archive"
-    : pathname.startsWith("/health")
-      ? "Health"
-      : "Today";
+        : pathname.startsWith("/schedule")
+          ? "Schedule"
+          : pathname.startsWith("/briefing/archive")
+            ? "Briefing archive"
+            : pathname.startsWith("/staff")
+              ? "Staff"
+              : pathname.startsWith("/health")
+                ? "Health"
+                : "Today";
   return (
     <div className="flex min-h-screen bg-surface-app">
       <aside className="flex w-rail shrink-0 flex-col border-r border-hairline bg-surface-card">
@@ -211,6 +238,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 Health
               </Link>
             </li>
+            <StaffNavLink />
           </ul>
         </nav>
       </aside>
