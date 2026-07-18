@@ -29,7 +29,11 @@ const artifactSchema = z.object({
   id: z.string().uuid(),
   tenant_id: z.string().uuid(),
   kind: z.literal("briefing"),
-  generated_for: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  // node-pg returns `date` columns as JS Date objects over a live wire (the
+  // test fakes return strings) — accept both, normalize to YYYY-MM-DD.
+  generated_for: z
+    .union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/), z.date()])
+    .transform((v) => (v instanceof Date ? v.toISOString().slice(0, 10) : v)),
   status: z.enum(["generated", "fallback", "refused"]),
   prompt_version: z.number().int().nullable(),
   model: z.string().nullable(),
@@ -103,13 +107,21 @@ async function fetchHealth(
   driftThreshold: number,
 ): Promise<z.infer<typeof healthSchema>> {
   const result = await pool.query(
-    `with red_drifts as (
-       select r.id, abs(coalesce(r.drift_count, 0)) as drift_count
+    `with latest_per_entity as (
+       -- Health = the CURRENT reconciliation state: the LATEST row per entity,
+       -- not 24h of history (stale rows from a superseded engine run must not
+       -- pin the briefing red — live finding, first production generation).
+       select distinct on (r.entity) r.id, r.entity, r.status,
+         abs(coalesce(r.drift_count, 0)) as drift_count
        from public.reconciliations r
        where r.tenant_id = $1::uuid
-         and r.status = 'drift'
-         and r.checked_at >= now() - interval '24 hours'
-         and abs(coalesce(r.drift_count, 0)) > $2::int
+         and r.checked_at >= now() - interval '48 hours'
+       order by r.entity, r.checked_at desc
+     ), red_drifts as (
+       select l.id, l.drift_count
+       from latest_per_entity l
+       where l.status = 'drift'
+         and l.drift_count > $2::int
      ), bad_sync as (
        select ss.entity
        from public.sync_state ss
