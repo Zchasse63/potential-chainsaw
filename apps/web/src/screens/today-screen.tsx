@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { Link } from "@tanstack/react-router";
 import type { EnvelopeMeta } from "@kelo/contracts";
+import { Link } from "@tanstack/react-router";
+import { BriefingArtifactView, BriefingStatusChip } from "../components/briefing-artifact.jsx";
 import { Button } from "../components/button.jsx";
 import { DataBoundary, type BoundaryQuery } from "../components/data-boundary.jsx";
 import { EmptyState } from "../components/empty-state.jsx";
@@ -15,7 +16,6 @@ import type {
   BriefingArtifact,
   BriefingResponse,
   DefinitionsResponse,
-  FeedbackInput,
   FeedbackMutationHandle,
   FocusDismissInput,
   FocusMutationHandle,
@@ -40,6 +40,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function titleCaseKey(key: string): string {
   return key.replaceAll("_", " ");
+}
+
+function formatFact(key: string, value: number): string {
+  const normalized = key.toLowerCase();
+  if (
+    normalized.includes("mrr") ||
+    normalized.includes("sum") ||
+    normalized.includes("net") ||
+    normalized.includes("liability")
+  ) {
+    return MONEY.format(value);
+  }
+  if (normalized.includes("percent") || normalized.includes("rate")) {
+    return `${NUMBER.format(value)}%`;
+  }
+  return NUMBER.format(value);
 }
 
 function formatBusinessDate(date: string): string {
@@ -110,53 +126,6 @@ function overallFreshness(
   return { bucket: "unknown", minutesStale: null };
 }
 
-function BriefingStatusChip({
-  status,
-  yesterday,
-}: {
-  status: BriefingArtifact["status"] | "absent";
-  yesterday: boolean;
-}) {
-  const config = yesterday
-    ? {
-        marker: "▲",
-        label: "Yesterday",
-        classes: "border-warning-border bg-warning-tint text-warning-on-tint",
-      }
-    : status === "generated"
-      ? {
-          marker: "✓",
-          label: "Generated",
-          classes: "border-success-border bg-success-tint text-success-on-tint",
-        }
-      : status === "fallback"
-        ? {
-            marker: "○",
-            label: "Without AI",
-            classes: "border-info-border bg-info-tint text-info-on-tint",
-          }
-        : status === "refused"
-          ? {
-              marker: "■",
-              label: "Paused",
-              classes: "border-danger-border bg-danger-tint text-danger-on-tint",
-            }
-          : {
-              marker: "○",
-              label: "Not generated",
-              classes: "border-hairline bg-surface-card text-ink-muted",
-            };
-  return (
-    <span
-      data-testid="briefing-status"
-      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-micro uppercase tracking-wide ${config.classes}`}
-    >
-      <span aria-hidden="true">{config.marker}</span>
-      {config.label}
-    </span>
-  );
-}
-
 function TodayHeader({
   briefingQuery,
   yesterdayQuery,
@@ -198,331 +167,6 @@ function TodayHeader({
         <FreshnessChip bucket={freshness.bucket} minutesStale={freshness.minutesStale} />
       </div>
     </header>
-  );
-}
-
-interface Candidate {
-  id: string;
-  category?: string;
-  headline_facts?: Record<string, unknown>;
-  evidence?: Record<string, unknown>;
-}
-
-interface GeneratedInsight {
-  id: string;
-  headline?: string;
-  why?: string;
-  action?: string;
-  category?: string;
-  headline_facts?: Record<string, unknown>;
-  evidence?: Record<string, unknown>;
-}
-
-function candidatesFrom(artifact: BriefingArtifact): Candidate[] {
-  if (!isRecord(artifact.input)) return [];
-  const raw = Array.isArray(artifact.input["selected"])
-    ? artifact.input["selected"]
-    : Array.isArray(artifact.input["candidates"])
-      ? artifact.input["candidates"]
-      : [];
-  return raw
-    .filter(isRecord)
-    .flatMap((candidate) =>
-      typeof candidate["id"] === "string" ? [candidate as unknown as Candidate] : [],
-    );
-}
-
-function insightsFrom(artifact: BriefingArtifact): GeneratedInsight[] {
-  if (!isRecord(artifact.output) || !Array.isArray(artifact.output["insights"])) return [];
-  return artifact.output["insights"]
-    .filter(isRecord)
-    .flatMap((insight) =>
-      typeof insight["id"] === "string" ? [insight as unknown as GeneratedInsight] : [],
-    );
-}
-
-function formatFact(key: string, value: number): string {
-  const normalized = key.toLowerCase();
-  if (
-    normalized.includes("mrr") ||
-    normalized.includes("sum") ||
-    normalized.includes("net") ||
-    normalized.includes("liability")
-  ) {
-    return MONEY.format(value);
-  }
-  if (normalized.includes("percent") || normalized.includes("rate")) {
-    return `${NUMBER.format(value)}%`;
-  }
-  return NUMBER.format(value);
-}
-
-function evidenceFacts(candidate: Candidate | GeneratedInsight): Array<{
-  key: string;
-  value: string;
-}> {
-  const headline = isRecord(candidate.headline_facts) ? candidate.headline_facts : {};
-  const facts = Object.entries(headline).flatMap(([key, value]) =>
-    typeof value === "number" && Number.isFinite(value)
-      ? [{ key: titleCaseKey(key), value: formatFact(key, value) }]
-      : [],
-  );
-  const evidence = isRecord(candidate.evidence) ? candidate.evidence : {};
-  const segments = evidence["segment_keys"];
-  if (Array.isArray(segments)) {
-    const safeSegments = segments.filter((value): value is string => typeof value === "string");
-    if (safeSegments.length > 0) {
-      facts.push({ key: "segments", value: safeSegments.map(titleCaseKey).join(", ") });
-    }
-  }
-  return facts;
-}
-
-function EvidenceChips({
-  facts,
-  ai,
-}: {
-  facts: Array<{ key: string; value: string }>;
-  ai: boolean;
-}) {
-  if (facts.length === 0) {
-    return <p className="text-chrome text-ink-muted">No candidate facts were returned.</p>;
-  }
-  return (
-    <ul aria-label="Evidence" className="flex flex-wrap gap-2">
-      {facts.map((fact) => (
-        <li
-          key={`${fact.key}:${fact.value}`}
-          className={`rounded-full border px-2 py-1 font-mono text-micro uppercase tracking-wide text-ink-secondary ${ai ? "border-ai-border-tint bg-ai-tint" : "border-hairline bg-surface-app"}`}
-        >
-          {fact.key} · {fact.value}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function FeedbackControls({
-  artifactId,
-  itemRef,
-  feedback,
-}: {
-  artifactId: string;
-  itemRef: string;
-  feedback: FeedbackMutationHandle;
-}) {
-  const [pending, setPending] = useState<FeedbackInput["verdict"] | null>(null);
-  const [sent, setSent] = useState<FeedbackInput["verdict"] | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  const vote = (verdict: FeedbackInput["verdict"]) => {
-    setPending(verdict);
-    setFailed(false);
-    feedback.mutate(
-      { artifact_id: artifactId, item_ref: itemRef, verdict },
-      {
-        onSuccess: () => {
-          setPending(null);
-          setSent(verdict);
-        },
-        onError: () => {
-          setPending(null);
-          setFailed(true);
-        },
-      },
-    );
-  };
-
-  if (sent !== null) {
-    return (
-      <p role="status" className="text-chrome text-ai-on-tint">
-        ✓ Feedback sent: {sent === "up" ? "Helpful" : "Not helpful"}
-      </p>
-    );
-  }
-  return (
-    <div>
-      <div className="flex items-center gap-2">
-        <span className="text-chrome text-ink-muted">Was this useful?</span>
-        <Button
-          variant="ghost"
-          className="h-11 px-3"
-          aria-label={`Helpful: ${itemRef}`}
-          disabled={pending !== null}
-          onClick={() => vote("up")}
-        >
-          👍
-        </Button>
-        <Button
-          variant="ghost"
-          className="h-11 px-3"
-          aria-label={`Not helpful: ${itemRef}`}
-          disabled={pending !== null}
-          onClick={() => vote("down")}
-        >
-          👎
-        </Button>
-        {pending !== null && <span className="text-chrome text-ink-muted">Sending…</span>}
-      </div>
-      {failed && (
-        <p role="alert" className="text-chrome text-danger-on-tint">
-          Feedback wasn&apos;t sent. The briefing is still available to read.
-        </p>
-      )}
-    </div>
-  );
-}
-
-function AiInsightCard({
-  insight,
-  candidate,
-  artifactId,
-  feedback,
-}: {
-  insight: GeneratedInsight;
-  candidate: Candidate | undefined;
-  artifactId: string;
-  feedback: FeedbackMutationHandle;
-}) {
-  return (
-    <article className="rounded-3 border border-dotted border-ai-accent bg-ai-surface p-4">
-      <p className="font-mono text-micro uppercase tracking-wide text-ai-on-tint">
-        Kelo Intelligence
-      </p>
-      <h3 className="mt-2 font-display text-title font-bold tracking-tight">
-        {insight.headline ?? "Review this evidence"}
-      </h3>
-      <p className="mt-2 text-body text-ink-secondary">
-        {insight.why ?? "The generated artifact did not include an explanation."}
-      </p>
-      <p className="mt-2 text-body font-medium text-ink">
-        Action · {insight.action ?? "Review the cited facts."}
-      </p>
-      <div className="mt-3">
-        <EvidenceChips facts={evidenceFacts(candidate ?? insight)} ai />
-      </div>
-      <div className="mt-3 border-t border-ai-border-tint pt-3">
-        <FeedbackControls artifactId={artifactId} itemRef={insight.id} feedback={feedback} />
-      </div>
-    </article>
-  );
-}
-
-const FALLBACK_TITLES: Record<string, string> = {
-  revenue: "Review the revenue change",
-  payments: "Review outstanding payments",
-  retention: "Review retention signals",
-  conversion: "Review conversion opportunities",
-  data_health: "Review data health",
-};
-
-function FallbackFactCard({ insight }: { insight: GeneratedInsight }) {
-  return (
-    <article className="rounded-3 border border-hairline bg-surface-card p-4">
-      <p className="font-mono text-micro uppercase tracking-wide text-ink-muted">
-        Generated without AI synthesis
-      </p>
-      <h3 className="mt-2 text-body font-medium text-ink">
-        {FALLBACK_TITLES[insight.category ?? ""] ?? "Review today’s facts"}
-      </h3>
-      <div className="mt-3">
-        <EvidenceChips facts={evidenceFacts(insight)} ai={false} />
-      </div>
-    </article>
-  );
-}
-
-function RefusedBriefing({ artifact }: { artifact: BriefingArtifact }) {
-  const output = isRecord(artifact.output) ? artifact.output : {};
-  const health = isRecord(output["health"])
-    ? output["health"]
-    : isRecord(artifact.input) && isRecord(artifact.input["health"])
-      ? artifact.input["health"]
-      : {};
-  const ids = Array.isArray(health["reconciliation_ids"])
-    ? health["reconciliation_ids"].filter((id): id is string => typeof id === "string")
-    : [];
-  const syncEntities = Array.isArray(health["sync_entities"])
-    ? health["sync_entities"].filter((entity): entity is string => typeof entity === "string")
-    : [];
-  const message =
-    typeof output["message"] === "string"
-      ? output["message"]
-      : (artifact.error ?? "source data health is red");
-
-  return (
-    <div className="space-y-3">
-      <div className="rounded-3 border border-danger-border bg-danger-tint p-4">
-        <p className="text-body font-medium text-danger-on-tint">Briefing paused: {message}</p>
-        {ids.length > 0 && (
-          <p className="mt-2 font-mono text-chrome text-danger-on-tint">
-            Failed reconciliation {ids.length === 1 ? "check" : "checks"}: {ids.join(", ")}
-          </p>
-        )}
-        {syncEntities.length > 0 && (
-          <p className="mt-2 text-body text-danger-on-tint">
-            Red sync {syncEntities.length === 1 ? "source" : "sources"}: {syncEntities.join(", ")}
-          </p>
-        )}
-        <Link to="/health" className="mt-3 inline-block font-medium text-link underline">
-          Open Health
-        </Link>
-      </div>
-      <p className="text-body text-ink-secondary">
-        Metrics-only mode — briefing narration is paused; the independently sourced KPIs below
-        remain available.
-      </p>
-    </div>
-  );
-}
-
-function BriefingArtifactView({
-  artifact,
-  yesterday,
-  feedback,
-}: {
-  artifact: BriefingArtifact;
-  yesterday: boolean;
-  feedback: FeedbackMutationHandle;
-}) {
-  if (artifact.status === "refused") return <RefusedBriefing artifact={artifact} />;
-  const insights = insightsFrom(artifact);
-  if (insights.length === 0) {
-    return (
-      <EmptyState
-        title="No urgent actions today."
-        body="The briefing completed and found no candidate facts above the action threshold."
-      />
-    );
-  }
-  const candidates = candidatesFrom(artifact);
-  return (
-    <div className="space-y-3">
-      {yesterday && (
-        <div
-          role="status"
-          className="rounded-2 border border-warning-border bg-warning-tint px-4 py-3"
-        >
-          <p className="font-mono text-body font-bold uppercase tracking-wide text-warning-emphasis">
-            Yesterday&apos;s briefing
-          </p>
-          <p className="mt-1 text-body text-warning-on-tint">
-            Today&apos;s briefing is not ready, so these are yesterday&apos;s facts.
-          </p>
-        </div>
-      )}
-      {artifact.status === "generated"
-        ? insights.map((insight) => (
-            <AiInsightCard
-              key={insight.id}
-              insight={insight}
-              candidate={candidates.find((candidate) => candidate.id === insight.id)}
-              artifactId={artifact.id}
-              feedback={feedback}
-            />
-          ))
-        : insights.map((insight) => <FallbackFactCard key={insight.id} insight={insight} />)}
-    </div>
   );
 }
 
@@ -1053,15 +697,14 @@ function FocusSkeleton() {
   );
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+function Section({ title, children, action }: { title: string; children: ReactNode; action?: ReactNode }) {
+  const id = `today-${title.toLowerCase().replaceAll(" ", "-")}`;
   return (
-    <section aria-labelledby={`today-${title.toLowerCase().replaceAll(" ", "-")}`}>
-      <h2
-        id={`today-${title.toLowerCase().replaceAll(" ", "-")}`}
-        className="mb-3 font-display text-title font-bold tracking-tight"
-      >
-        {title}
-      </h2>
+    <section aria-labelledby={id}>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h2 id={id} className="font-display text-title font-bold tracking-tight">{title}</h2>
+        {action}
+      </div>
       {children}
     </section>
   );
@@ -1101,7 +744,7 @@ export function TodayScreen({
         healthQuery={healthQuery}
         kpiQuery={kpiQuery}
       />
-      <Section title="Morning briefing">
+      <Section title="Morning briefing" action={<Link to="/briefing/archive" className="text-body font-medium text-link underline hover:text-link-hover">View archive</Link>}>
         <BriefingRegion
           briefingQuery={briefingQuery}
           yesterdayQuery={yesterdayQuery}

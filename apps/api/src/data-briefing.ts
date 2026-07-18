@@ -131,6 +131,31 @@ export async function fetchBriefingArtifact(
   return rows[0] ?? null;
 }
 
+const briefingArchiveRowSchema = briefingArtifactSchema.pick({
+  id: true,
+  generated_for: true,
+  status: true,
+  output: true,
+});
+export type BriefingArchiveRow = z.infer<typeof briefingArchiveRowSchema>;
+
+export async function fetchBriefingArchive(
+  client: KeloSupabaseClient,
+  tenantId: string,
+  limit: number,
+): Promise<BriefingArchiveRow[]> {
+  const data = await run(
+    from(client, "ai_artifacts")
+      .select("id, generated_for, status, output")
+      .eq("tenant_id", tenantId)
+      .eq("kind", "briefing")
+      .order("generated_for", { ascending: false })
+      .limit(limit),
+    "fetchBriefingArchive",
+  );
+  return parseInternal(z.array(briefingArchiveRowSchema), data ?? [], "fetchBriefingArchive");
+}
+
 const feedbackRowSchema = z.object({
   id: z.string().uuid(),
   artifact_id: z.string().uuid(),

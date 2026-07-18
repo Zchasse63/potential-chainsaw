@@ -93,6 +93,12 @@ export default {
         },
         "icon-inactive": "var(--kelo-icon-inactive)",
         "ghost-hover": "var(--kelo-action-ghost-hover)",
+        fill: {
+          1: "var(--kelo-chart-demand-1)",
+          2: "var(--kelo-chart-demand-2)",
+          3: "var(--kelo-chart-demand-3)",
+          4: "var(--kelo-chart-demand-4)",
+        },
       },
       fontFamily: {
         display: "var(--kelo-font-display)",

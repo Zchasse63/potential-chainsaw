@@ -10,10 +10,12 @@ import {
 import { envelopeMiddleware } from "./middleware/envelope.js";
 import { captureError, sentry } from "./middleware/sentry.js";
 import { registerAuthRoutes } from "./routes/auth.js";
+import { registerAskRoutes } from "./routes/ask.js";
 import { registerBriefingRoutes } from "./routes/briefing.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerImportRoutes } from "./routes/import.js";
 import { registerReportRoutes } from "./routes/reports.js";
+import { registerScheduleRoutes } from "./routes/schedule.js";
 import { registerTenantRoutes } from "./routes/tenant.js";
 import type { AppDeps, AppEnv } from "./types.js";
 
@@ -85,6 +87,8 @@ export function createApp(deps: AppDeps = {}): Hono<AppEnv> {
   registerImportRoutes(app, resolved);
   registerReportRoutes(app, resolved);
   registerBriefingRoutes(app, resolved);
+  registerAskRoutes(app, resolved, { fetchImpl: deps.anthropicFetch, env: deps.env });
+  registerScheduleRoutes(app, resolved);
 
   return app;
 }

@@ -11,7 +11,7 @@ import { Skeleton } from "./skeleton.jsx";
 /**
  * AppShell — owner-desktop frame (design guide §8): 232px left rail + top
  * chrome. UX ruling 9: a nav item appears ONLY when its feature ships, so
- * the rail shows exactly what exists — Today, Import review (with an open-
+ * the rail shows exactly what exists — Today, Ask, Import review (with an open-
  * exception count badge), and Health (with its quiet status dot). The top
  * chrome carries the freshness indicator
  * (worst-of-sources) plus the signed-in actor.
@@ -70,6 +70,15 @@ function TodayNavIcon() {
   );
 }
 
+function AskNavIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-4 w-4 text-icon-inactive">
+      <path d="M3 3.5h10v7H8l-3 2v-2H3v-7Z" />
+      <path d="M6.4 6.2a1.7 1.7 0 1 1 2.5 1.5c-.6.3-.9.6-.9 1" />
+    </svg>
+  );
+}
+
 /**
  * Open-exception count badge (design guide §8 count badges), read from the
  * /health envelope's quarantine summary — no extra fetch. Quiet when the
@@ -123,6 +132,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const screenLabel = pathname.startsWith("/import")
     ? "Import review"
+    : pathname.startsWith("/ask")
+      ? "Ask"
+      : pathname.startsWith("/schedule")
+        ? "Schedule"
+        : pathname.startsWith("/briefing/archive")
+          ? "Briefing archive"
     : pathname.startsWith("/health")
       ? "Health"
       : "Today";
@@ -146,6 +161,12 @@ export function AppShell({ children }: { children: ReactNode }) {
               >
                 <TodayNavIcon />
                 Today
+              </Link>
+            </li>
+            <li>
+              <Link to="/ask" className={NAV_LINK_BASE} activeProps={{ className: NAV_LINK_ACTIVE }}>
+                <AskNavIcon />
+                Ask
               </Link>
             </li>
             <li>
