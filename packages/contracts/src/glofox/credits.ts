@@ -15,7 +15,7 @@ export const glofoxCreditSchema = z.object({
   namespace: z.string(),
   branch_id: z.string(),
   user_id: z.string(),
-  membership_id: z.string(),
+  membership_id: z.string().nullish(),
   membership_name: z.string().optional(),
   /** Usage scope: "programs" = classes; "appointments"/"users" = trainer appts; "facilities". */
   model: z.string(),
@@ -26,7 +26,7 @@ export const glofoxCreditSchema = z.object({
   active: z.boolean(),
   /** Booking ids consuming this pack. */
   bookings: z.array(z.string()),
-  start_date: glofoxUnixTimestamp,
+  start_date: glofoxUnixTimestamp.nullish(),
   /**
    * Per-pack expiry. ABSENT (or null) means NO EXPIRY — callers must treat a
    * missing `end_date` as `no_expiry`, never as expired (README §5 must-answer

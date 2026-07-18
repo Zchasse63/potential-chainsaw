@@ -11,6 +11,7 @@
  * where a row is still usable it is emitted VISIBLY flagged alongside the
  * quarantine entry.
  */
+import type { ClassifiedGlofoxEvent } from "@kelo/contracts";
 
 /** Bump on any mapping-logic change; the sync layer records it per run. */
 export const MAPPER_VERSION = 1;
@@ -106,8 +107,8 @@ export interface GlofoxTransactionRow {
   readonly amount_refunded: number | null;
   /** The RAW metadata.glofox_event value, kept verbatim. */
   readonly glofox_event: string | null;
-  readonly glofox_event_class:
-    "subscription_payment" | "invoice_payment" | "book_class" | "unknown";
+  /** Mirrors the contracts classifier vocabulary (single source of truth). */
+  readonly glofox_event_class: ClassifiedGlofoxEvent;
   readonly person_external_ref: string | null;
   readonly plan_code: string | null;
   readonly stripe_subscription_id: string | null;

@@ -44,8 +44,8 @@ const transactionMetadataSchema = z.object({
   stripe_subscription_id: z.string().optional(),
   membership_id: z.string().optional(),
   /** Joins to the memberships catalog plan `code`. */
-  plan_code: z.string().optional(),
-  resource_id: z.string().optional(),
+  plan_code: z.union([z.string(), z.number()]).transform((v) => (v == null ? v : String(v))).nullish(),
+  resource_id: z.union([z.string(), z.number()]).transform((v) => (v == null ? v : String(v))).nullish(),
   user_tax_id: z.string().optional(),
   is_payment_link: z.boolean().optional(),
   /** invoice_payment rows: */
@@ -77,7 +77,7 @@ export const glofoxStripeChargeSchema = z.object({
   created: z.string(),
   modified: z.string(),
   description: z.string(),
-  transaction_group_id: z.string(),
+  transaction_group_id: z.string().nullish(),
   status: z.string(),
   taxes: z.number().nullable(),
   amount_refunded: z.number().optional(),

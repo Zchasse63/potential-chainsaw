@@ -20,7 +20,7 @@ const planCreditSchema = z.object({
   model: z.string(),
   category_id: z.string().nullable(),
   num_sessions: z.number().int(),
-  model_ids: z.array(z.string()),
+  model_ids: z.array(z.string()).nullish(),
   expiry: z.object({ interval: z.string(), interval_count: z.number().int() }).nullable(),
   end_date: z.number().int().nullable(),
 });
@@ -33,7 +33,7 @@ export const glofoxPlanSchema = z.object({
   /** Present on time-boxed plans (`time_classes`, `time`) only. */
   duration_time_unit: z.string().optional(),
   duration_time_unit_count: z.number().int().optional(),
-  upfront_fee: z.number(),
+  upfront_fee: z.number().nullish(),
   credits: z.array(planCreditSchema),
   starts_on: z.string(),
   is_group_membership: z.boolean(),

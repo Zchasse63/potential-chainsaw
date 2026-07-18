@@ -19,7 +19,14 @@ export type GlofoxUnixTimestamp = z.infer<typeof glofoxUnixTimestamp>;
  * report (docs/glofox/README.md §5). `book_class` was undocumented by the
  * vendor; treat this enum as the complete known set, not a suggestion.
  */
-export const glofoxEvent = z.enum(["subscription_payment", "invoice_payment", "book_class"]);
+export const glofoxEvent = z.enum([
+  "subscription_payment",
+  "invoice_payment",
+  "book_class",
+  // LIVE-discovered 2026-07-18 (full backfill): failed recurring charges — the
+  // pre-cutover dunning signal alongside transaction_status ERROR.
+  "subscription_payment_failed",
+]);
 export type GlofoxEvent = z.infer<typeof glofoxEvent>;
 
 /**
