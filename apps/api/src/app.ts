@@ -11,6 +11,7 @@ import { envelopeMiddleware } from "./middleware/envelope.js";
 import { captureError, sentry } from "./middleware/sentry.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerHealthRoutes } from "./routes/health.js";
+import { registerImportRoutes } from "./routes/import.js";
 import { registerTenantRoutes } from "./routes/tenant.js";
 import type { AppDeps, AppEnv } from "./types.js";
 
@@ -79,6 +80,7 @@ export function createApp(deps: AppDeps = {}): Hono<AppEnv> {
   registerHealthRoutes(app, resolved);
   registerAuthRoutes(app, resolved);
   registerTenantRoutes(app, resolved);
+  registerImportRoutes(app, resolved);
 
   return app;
 }

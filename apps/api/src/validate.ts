@@ -25,3 +25,8 @@ export async function parseBody<S extends z.ZodTypeAny>(
 export function parseParams<S extends z.ZodTypeAny>(c: Context<AppEnv>, schema: S): z.output<S> {
   return schema.parse(c.req.param());
 }
+
+/** Parse + validate query params (e.g. `?status=open&limit=25`) → 422 on mismatch. */
+export function parseQuery<S extends z.ZodTypeAny>(c: Context<AppEnv>, schema: S): z.output<S> {
+  return schema.parse(c.req.query());
+}

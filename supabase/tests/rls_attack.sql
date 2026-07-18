@@ -94,23 +94,27 @@ end
 $$;
 
 -- ---------------------------------------------------------------------------
--- (2) MATVIEW GUARD: matviews support neither RLS nor security_invoker, so any
---     public matview MUST be unreadable by client roles (threat model §1).
---     Phase 0 has none → no-op, but the guard must exist.
+-- (2) MATVIEW GUARD: matviews support neither RLS nor security_invoker, so
+--     every matview in public OR app MUST be unreadable by client roles
+--     (threat model §1); app matviews are read only through tenancy-verifying
+--     definer functions (e.g. app.person_credit_balance over
+--     app.credit_balances, migration 0008).
 -- ---------------------------------------------------------------------------
 do $$
 declare
   r record;
 begin
   for r in
-    select matviewname from pg_catalog.pg_matviews where schemaname = 'public'
+    select schemaname, matviewname
+    from pg_catalog.pg_matviews
+    where schemaname in ('public', 'app')
   loop
     perform app_test.assert(
-      not has_table_privilege('anon', format('public.%I', r.matviewname), 'select'),
-      format('(2) matview public.%s is readable by anon', r.matviewname));
+      not has_table_privilege('anon', format('%I.%I', r.schemaname, r.matviewname), 'select'),
+      format('(2) matview %s.%s is readable by anon', r.schemaname, r.matviewname));
     perform app_test.assert(
-      not has_table_privilege('authenticated', format('public.%I', r.matviewname), 'select'),
-      format('(2) matview public.%s is readable by authenticated', r.matviewname));
+      not has_table_privilege('authenticated', format('%I.%I', r.schemaname, r.matviewname), 'select'),
+      format('(2) matview %s.%s is readable by authenticated', r.schemaname, r.matviewname));
   end loop;
 end
 $$;
@@ -571,6 +575,401 @@ begin
   get diagnostics n = row_count;
   perform app_test.assert(n = 1,
     '(17) uB could not insert a null-actor (system) audit event');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (18) glofox_raw is service-only + APPEND-ONLY: seed one row for tenant B
+--      (as superuser); as uB a SELECT must return 0 rows OR raise (deny-all
+--      policy + revoked grants — probing a seeded row, not an empty table).
+--      The append-only invariant is verified at the PRIVILEGE level (a
+--      superuser bypasses RLS, so statement probes as superuser prove
+--      nothing): no app role holds UPDATE/DELETE on the raw zone.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_b uuid; v_ub uuid; n int := 0; raised boolean := false;
+begin
+  reset role;
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+
+  insert into public.glofox_raw (tenant_id, endpoint, payload, payload_hash)
+    values (v_b, 'members.list', '{"seed": true}', 'seed-hash');
+
+  perform app_test.become(v_ub);
+  begin
+    select count(*) into n from public.glofox_raw;
+  exception
+    when others then raised := true;
+  end;
+  perform app_test.assert(raised or n = 0, '(18) uB can read public.glofox_raw');
+
+  reset role;
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'public.glofox_raw', 'select'),
+    '(18) authenticated holds SELECT on glofox_raw — raw zone is service-only');
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'public.glofox_raw', 'update'),
+    '(18) service_role holds UPDATE on glofox_raw — raw zone must be immutable');
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'public.glofox_raw', 'delete'),
+    '(18) service_role holds DELETE on glofox_raw — raw zone must be immutable');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (19) import_quarantine: member-SELECT isolation + owner/manager resolution.
+--      Seed one row per tenant (as superuser); uB (owner of B) sees ONLY her
+--      own tenant's row, CAN resolve it (POSITIVE control, 1 row — the review
+--      UI path), and CANNOT insert (must raise — the service role writes).
+--      The column-list grant is asserted directly: resolution columns only.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; n int; raised boolean := false;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+
+  insert into public.import_quarantine (tenant_id, entity, external_ref, payload, reason)
+    values (v_a, 'members', 'glofox-a-1', '{}', 'unknown glofox_event');
+  insert into public.import_quarantine (tenant_id, entity, external_ref, payload, reason)
+    values (v_b, 'members', 'glofox-b-1', '{}', 'unknown glofox_event');
+
+  perform app_test.become(v_ub);
+  select count(*) into n from public.import_quarantine where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(19) uB can SELECT tenant A import_quarantine');
+  select count(*) into n from public.import_quarantine where tenant_id = v_b;
+  perform app_test.assert(n = 1, '(19) uB cannot read her OWN import_quarantine');
+
+  -- Positive control: an owner resolves her own tenant's row (review UI).
+  update public.import_quarantine
+    set status = 'resolved', resolved_at = now(), resolution_note = 'fixed mapping'
+    where tenant_id = v_b;
+  get diagnostics n = row_count;
+  perform app_test.assert(n = 1,
+    '(19) owner uB could not resolve her own quarantine row');
+
+  -- No client INSERT, even for her own tenant (the service role writes).
+  begin
+    insert into public.import_quarantine (tenant_id, entity, payload, reason)
+      values (v_b, 'members', '{}', 'forged');
+  exception
+    when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(19) uB could INSERT into import_quarantine');
+
+  reset role;
+  perform app_test.assert(
+    not has_column_privilege('authenticated', 'public.import_quarantine', 'payload', 'update'),
+    '(19) authenticated holds column UPDATE on import_quarantine.payload — evidence must be immutable');
+  perform app_test.assert(
+    has_column_privilege('authenticated', 'public.import_quarantine', 'status', 'update'),
+    '(19) authenticated lacks column UPDATE on import_quarantine.status — review UI cannot resolve');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (20) People + plan_catalog slice (migration 0008): member-read isolation,
+--      no client writes on people, and the A8 kelo_type column-grant scoping
+--      on plan_catalog — asserted in both directions with a positive control.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; n int; raised boolean := false;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+
+  insert into public.people (tenant_id, first_name, external_ref)
+    values (v_a, 'Alice', 'gf-a-1');
+  insert into public.people (tenant_id, first_name, external_ref)
+    values (v_b, 'Bob', 'gf-b-1');
+  insert into public.plan_catalog (tenant_id, external_ref, name, plan_code, glofox_type)
+    values (v_a, 'mem-a', 'Plan A', '100', 'time');
+  insert into public.plan_catalog (tenant_id, external_ref, name, plan_code, glofox_type)
+    values (v_b, 'mem-b', 'Plan B', '200', 'num_classes');
+
+  perform app_test.become(v_ub);
+  select count(*) into n from public.people where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(20) uB can SELECT tenant A people');
+  select count(*) into n from public.people where tenant_id = v_b;
+  perform app_test.assert(n = 1, '(20) uB cannot read her OWN people');
+
+  begin
+    insert into public.people (tenant_id, first_name) values (v_b, 'Forged');
+  exception
+    when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(20) uB could INSERT into people');
+
+  -- A8 mapping: owner updates kelo_type on her OWN tenant's row (positive
+  -- control, 1 row) but a cross-tenant update matches 0 rows.
+  update public.plan_catalog set kelo_type = 'unlimited' where tenant_id = v_b;
+  get diagnostics n = row_count;
+  perform app_test.assert(n = 1, '(20) owner uB could not set kelo_type on her own catalog');
+  update public.plan_catalog set kelo_type = 'pack' where tenant_id = v_a;
+  get diagnostics n = row_count;
+  perform app_test.assert(n = 0, '(20) uB cross-tenant kelo_type update matched rows');
+
+  reset role;
+  perform app_test.assert(
+    has_column_privilege('authenticated', 'public.plan_catalog', 'kelo_type', 'update'),
+    '(20) authenticated lacks the kelo_type column grant — A8 mapping UI cannot work');
+  perform app_test.assert(
+    not has_column_privilege('authenticated', 'public.plan_catalog', 'name', 'update'),
+    '(20) authenticated can UPDATE plan_catalog.name — imported catalog must be client-immutable');
+  perform app_test.assert(
+    not has_column_privilege('authenticated', 'public.plan_catalog', 'price', 'update'),
+    '(20) authenticated can UPDATE plan_catalog.price — imported catalog must be client-immutable');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (21) credit_ledger (invariant #6): member-read isolation; NO client INSERT;
+--      append-only at the PRIVILEGE level — even service_role cannot
+--      UPDATE/DELETE ledger rows.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; v_pa uuid; v_pb uuid; n int; raised boolean := false;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+  select id into v_pa from public.people where tenant_id = v_a limit 1;
+  select id into v_pb from public.people where tenant_id = v_b limit 1;
+
+  insert into public.credit_ledger (tenant_id, person_id, entry_type, delta, external_ref)
+    values (v_a, v_pa, 'grant', 10, 'credit-a-1');
+  insert into public.credit_ledger (tenant_id, person_id, entry_type, delta, external_ref)
+    values (v_b, v_pb, 'grant', 5, 'credit-b-1');
+
+  perform app_test.become(v_ub);
+  select count(*) into n from public.credit_ledger where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(21) uB can SELECT tenant A credit_ledger');
+  select count(*) into n from public.credit_ledger where tenant_id = v_b;
+  perform app_test.assert(n = 1, '(21) uB cannot read her OWN credit_ledger');
+
+  begin
+    insert into public.credit_ledger (tenant_id, person_id, entry_type, delta)
+      values (v_b, v_pb, 'grant', 99);
+  exception
+    when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(21) uB could INSERT into credit_ledger');
+
+  reset role;
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'public.credit_ledger', 'update'),
+    '(21) service_role holds UPDATE on credit_ledger — the ledger must be append-only');
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'public.credit_ledger', 'delete'),
+    '(21) service_role holds DELETE on credit_ledger — the ledger must be append-only');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (22) Facts slice (migration 0009) + the balance read path: transactions
+--      member-isolation; app.credit_balances unreadable by every app role;
+--      app.person_credit_balance returns own-tenant data (positive control)
+--      and ZERO rows cross-tenant.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; v_pa uuid; v_pb uuid; n int; v_balance int;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+  select id into v_pa from public.people where tenant_id = v_a limit 1;
+  select id into v_pb from public.people where tenant_id = v_b limit 1;
+
+  insert into public.glofox_transactions
+    (tenant_id, external_ref, transaction_status, amount, currency, glofox_event_class)
+    values (v_a, 'txn-a-1', 'PAID', 42.00, 'USD', 'book_class');
+  insert into public.glofox_transactions
+    (tenant_id, external_ref, transaction_status, amount, currency, glofox_event_class)
+    values (v_b, 'txn-b-1', 'ERROR', 30.00, 'USD', 'subscription_payment');
+
+  -- Refresh the matview so the definer reader has rows (non-concurrent inside
+  -- this transaction: the seeded ledger rows above are not yet visible to a
+  -- concurrent refresh, and plain refresh is fine for the probe).
+  refresh materialized view app.credit_balances;
+
+  perform app_test.become(v_ub);
+  select count(*) into n from public.glofox_transactions where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(22) uB can SELECT tenant A glofox_transactions');
+  select count(*) into n from public.glofox_transactions where tenant_id = v_b;
+  perform app_test.assert(n = 1, '(22) uB cannot read her OWN glofox_transactions');
+
+  -- The balance read path: own tenant returns the seeded balance (positive
+  -- control)…
+  select balance into v_balance from app.person_credit_balance(v_b, v_pb);
+  perform app_test.assert(v_balance = 5,
+    '(22) person_credit_balance did not return uB''s own-tenant balance');
+  -- …and a cross-tenant call returns ZERO ROWS (indistinguishable from empty).
+  select count(*) into n from app.person_credit_balance(v_a, v_pa);
+  perform app_test.assert(n = 0,
+    '(22) person_credit_balance leaked a cross-tenant balance to uB');
+
+  reset role;
+  perform app_test.assert(
+    not has_table_privilege('anon', 'app.credit_balances', 'select'),
+    '(22) anon can read app.credit_balances');
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'app.credit_balances', 'select'),
+    '(22) authenticated can read app.credit_balances');
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'app.credit_balances', 'select'),
+    '(22) service_role can read app.credit_balances directly — the definer fn is the only path');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (23) Trust-engine tables (migration 0011): reconciliations + import_snapshots
+--      are member-read, service-write. Seed one row per tenant; uB sees only
+--      her own and cannot insert (the service role writes).
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; n int; raised boolean := false;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+
+  insert into public.reconciliations (tenant_id, entity, status) values (v_a, 'members', 'match');
+  insert into public.reconciliations (tenant_id, entity, status) values (v_b, 'members', 'drift');
+  insert into public.import_snapshots (tenant_id, entity, external_refs, ref_count)
+    values (v_a, 'members', array['a1'], 1);
+  insert into public.import_snapshots (tenant_id, entity, external_refs, ref_count)
+    values (v_b, 'members', array['b1'], 1);
+
+  perform app_test.become(v_ub);
+  select count(*) into n from public.reconciliations where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(23) uB can SELECT tenant A reconciliations');
+  select count(*) into n from public.reconciliations where tenant_id = v_b;
+  perform app_test.assert(n = 1, '(23) uB cannot read her OWN reconciliations');
+  select count(*) into n from public.import_snapshots where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(23) uB can SELECT tenant A import_snapshots');
+
+  begin
+    insert into public.reconciliations (tenant_id, entity, status) values (v_b, 'forged', 'match');
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(23) uB could INSERT into reconciliations');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (24) deletion_candidates: member-read isolation; owner/manager may resolve
+--      via the `status` COLUMN grant ONLY (positive control); no client INSERT;
+--      the evidence column external_ref is NOT client-updatable.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; n int; raised boolean := false;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+
+  insert into public.deletion_candidates (tenant_id, entity, external_ref, first_missing_at)
+    values (v_a, 'members', 'gone-a', now());
+  insert into public.deletion_candidates (tenant_id, entity, external_ref, first_missing_at)
+    values (v_b, 'members', 'gone-b', now());
+
+  perform app_test.become(v_ub);
+  select count(*) into n from public.deletion_candidates where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(24) uB can SELECT tenant A deletion_candidates');
+  select count(*) into n from public.deletion_candidates where tenant_id = v_b;
+  perform app_test.assert(n = 1, '(24) uB cannot read her OWN deletion_candidates');
+
+  -- Positive control: owner resolves her own tenant's candidate via `status`.
+  update public.deletion_candidates set status = 'dismissed' where tenant_id = v_b;
+  get diagnostics n = row_count;
+  perform app_test.assert(n = 1, '(24) owner uB could not dismiss her own deletion candidate');
+
+  begin
+    insert into public.deletion_candidates (tenant_id, entity, external_ref, first_missing_at)
+      values (v_b, 'members', 'forged', now());
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(24) uB could INSERT into deletion_candidates');
+
+  reset role;
+  perform app_test.assert(
+    has_column_privilege('authenticated', 'public.deletion_candidates', 'status', 'update'),
+    '(24) authenticated lacks the status column grant — the review UI cannot resolve');
+  perform app_test.assert(
+    not has_column_privilege('authenticated', 'public.deletion_candidates', 'external_ref', 'update'),
+    '(24) authenticated can UPDATE deletion_candidates.external_ref — evidence must be immutable');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (25) Relationship typing (migration 0012): person_relationships +
+--      person_relationship_log are member-read, service-write; the log is
+--      append-only even for service_role. Seed one row per tenant; uB sees
+--      only her own and cannot insert.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; v_pa uuid; v_pb uuid; n int; raised boolean := false;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+  select id into v_pa from public.people where tenant_id = v_a limit 1;
+  select id into v_pb from public.people where tenant_id = v_b limit 1;
+
+  insert into public.person_relationships (tenant_id, person_id, relationship_type, rule_version)
+    values (v_a, v_pa, 'recurring_member', 1);
+  insert into public.person_relationships (tenant_id, person_id, relationship_type, rule_version)
+    values (v_b, v_pb, 'pack_holder', 1);
+  insert into public.person_relationship_log (tenant_id, person_id, to_primary, rule_version)
+    values (v_a, v_pa, 'recurring_member', 1);
+  insert into public.person_relationship_log (tenant_id, person_id, to_primary, rule_version)
+    values (v_b, v_pb, 'pack_holder', 1);
+
+  perform app_test.become(v_ub);
+  select count(*) into n from public.person_relationships where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(25) uB can SELECT tenant A person_relationships');
+  select count(*) into n from public.person_relationships where tenant_id = v_b;
+  perform app_test.assert(n = 1, '(25) uB cannot read her OWN person_relationships');
+  select count(*) into n from public.person_relationship_log where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(25) uB can SELECT tenant A person_relationship_log');
+
+  begin
+    insert into public.person_relationships (tenant_id, person_id, relationship_type, rule_version)
+      values (v_b, v_pb, 'guest', 1);
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(25) uB could INSERT into person_relationships');
+
+  -- The transition log is append-only even for the OWNING tenant's owner.
+  raised := false;
+  begin
+    update public.person_relationship_log set to_primary = 'x' where tenant_id = v_b;
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(25) uB could UPDATE person_relationship_log — append-only violated');
+
+  reset role;
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'public.person_relationship_log', 'update'),
+    '(25) service_role holds UPDATE on person_relationship_log — the transition log must be append-only');
 end
 $$;
 

@@ -1,6 +1,12 @@
 import type { Hono } from "hono";
 import { AUTHORITY_MATRIX } from "../authority.js";
-import { fetchOpenAlerts, fetchRecentSyncRuns, fetchSyncStates } from "../data.js";
+import {
+  fetchOpenAlerts,
+  fetchQuarantineCauses,
+  fetchRecentSyncRuns,
+  fetchReconciliations,
+  fetchSyncStates,
+} from "../data.js";
 import { freshnessBucket, minutesSince } from "../freshness.js";
 import { requireAuth } from "../middleware/auth.js";
 import { resolveTenant } from "../middleware/tenant.js";
@@ -20,10 +26,12 @@ export function registerHealthRoutes(app: Hono<AppEnv>, deps: ResolvedDeps): voi
     const { userClient } = authOf(c);
     const { tenantId } = tenantOf(c);
 
-    const [states, runs, alerts] = await Promise.all([
+    const [states, runs, alerts, causes, reconciliation] = await Promise.all([
       fetchSyncStates(userClient, tenantId),
       fetchRecentSyncRuns(userClient, tenantId, 20),
       fetchOpenAlerts(userClient, tenantId),
+      fetchQuarantineCauses(userClient, tenantId),
+      fetchReconciliations(userClient, tenantId, { limit: 10 }),
     ]);
 
     const now = Date.now();
@@ -45,6 +53,18 @@ export function registerHealthRoutes(app: Hono<AppEnv>, deps: ResolvedDeps): voi
           sync_runs: runs,
           alerts,
           authority: AUTHORITY_MATRIX,
+          // Compact quarantine summary (migration 0007) — the full review
+          // queue lives at /import/quarantine.
+          quarantine: {
+            open_count: causes.reduce((total, cause) => total + cause.open_count, 0),
+            by_cause: causes,
+          },
+          // Recent Kelo-vs-Glofox reconciliation (unit 1.5's table; pending
+          // is the honest 42P01 bridge until it lands).
+          reconciliation: {
+            pending: reconciliation.pending,
+            recent: reconciliation.rows,
+          },
         },
         // The envelope must not claim freshness the data doesn't have: any
         // critically-stale entity marks the whole report stale.

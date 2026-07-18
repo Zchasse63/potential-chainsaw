@@ -21,7 +21,13 @@ _Last updated: 2026-07-17 (Phase 0 in progress)._
 | P0-7 | **Glofox webhook signing secret** (A3b) | Email `glofox.apisupport@abcfitness.com` for the studio's webhook secret | 🟧 (phase 1) | Webhook-inbox pattern designed; secret needed to verify HMAC-SHA256 signatures. |
 | P0-8 | **PITR + restore drill #1** | Enable Supabase PITR (paid tier feature) on project `ysnijttvprwymwheyyfm`; run a rehearsed restore | 🟧 | Restore-drill runbook to be written; PITR toggle + drill require the owner + a paid plan. |
 | P0-9 | **Domains** (owner-questions C1) | Buy `getkelo.com` + `kelo.studio` | 🟧 | Not code-blocking; needed before the public skeleton privacy page + member surface. |
-| P0-10 | **Supabase branching / preview DBs disabled** | Enable branching on the Supabase GitHub integration (dashboard → Branches) so PRs get preview DBs (plan-final §1) | 🟧 | On PR #1 the "Supabase Preview" check reports **skipping** — branching is off. Migrations are verified another way (CI `db` job on Postgres 17 + non-destructive real-Supabase rollback probes via MCP). Also unverified: whether merge-to-main auto-applies migrations; if not, the director applies via MCP `apply_migration`. Enabling branching restores the intended preview-DB-per-PR flow. |
+| P0-10 | **Supabase branching / preview DBs disabled** | Enable branching on the Supabase GitHub integration (dashboard → Branches) so PRs get preview DBs (plan-final §1) | 🟧 | **Half-resolved 2026-07-17:** merge-to-main **does** auto-apply migrations (all 6 Phase-0 migrations landed on production minutes after the PR #1 merge, verified via MCP `list_migrations`), and the full attack suite was then run against the production DB non-destructively: **RLS ATTACK SUITE PASSED (PRODUCTION) — 53 assertions**, rollback verified clean. Only the preview-DB-per-PR flow remains off; CI's Postgres-17 `db` job covers PR-time verification meanwhile. |
+
+## Phase 1
+
+| # | Item | Owner/external action needed | Status | What's built & waiting |
+|---|---|---|---|---|
+| P1-3 | **Moonshot / Kimi K3 account suspended** — `429 insufficient balance` (hit mid-1.6, 2026-07-17) | Recharge the Moonshot account, OR authorize routing coding to Sol/Codex (OpenAI) or Grok instead | 🟥 (blocks further delegated coding) | Kimi is the implementer; it's down. Units 1.4/1.5/1.6 completed just before/at the suspension (verified green). Remaining pure-code units need an implementer; 1.7 is director-run (no Kimi). Director can finish small remainders or route to Sol/Codex per the pipeline's documented fallback. |
 
 ## Phase 2+ (recorded early so we don't forget)
 

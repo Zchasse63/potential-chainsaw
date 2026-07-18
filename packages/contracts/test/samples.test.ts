@@ -6,6 +6,7 @@ import {
   glofoxEventsResponseSchema,
   glofoxMembersResponseSchema,
   glofoxMembershipsResponseSchema,
+  glofoxTransactionRowSchema,
   glofoxTransactionsReportSchema,
 } from "../src/index.js";
 import { loadSample } from "./helpers.js";
@@ -59,13 +60,17 @@ describe("pinned Glofox sample contracts", () => {
     expect(pack?.available).toBe(1);
   });
 
-  it("analytics: 56 rows, all three live glofox_event values present", () => {
+  it("analytics: 56 rows, every row passes the STRICT row contract, all three glofox_event values present", () => {
+    // The envelope leaves rows unknown (per-row salvage); drift detection
+    // moves HERE: every pinned row must still pass the strict row schema.
     const parsed = glofoxTransactionsReportSchema.parse(loadSample("analytics.report.30d.json"));
-    const rows = parsed.TransactionsList.details;
-    expect(rows).toHaveLength(56);
-    const events = new Set(rows.map((row) => row.StripeCharge.metadata.glofox_event));
+    expect(parsed.TransactionsList.details).toHaveLength(56);
+    const rows = parsed.TransactionsList.details.map(
+      (row) => glofoxTransactionRowSchema.parse(row).StripeCharge,
+    );
+    const events = new Set(rows.map((row) => row.metadata.glofox_event));
     expect(events).toEqual(new Set(["subscription_payment", "invoice_payment", "book_class"]));
-    const statuses = new Set(rows.map((row) => row.StripeCharge.transaction_status));
+    const statuses = new Set(rows.map((row) => row.transaction_status));
     expect(statuses).toEqual(new Set(["PAID", "ERROR", "REFUNDED"]));
   });
 

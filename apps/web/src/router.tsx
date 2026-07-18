@@ -10,11 +10,12 @@ import { SignInScreen } from "./auth/sign-in-screen.jsx";
 import { AppShell } from "./components/app-shell.jsx";
 import { Skeleton } from "./components/skeleton.jsx";
 import { HealthRoute } from "./routes/health.jsx";
+import { ImportRoute } from "./routes/import.jsx";
 
 /**
- * Route tree (TanStack Router, code-based). Phase 0 has exactly one screen:
- * / is a redirect into /health, and every other feature's route lands with
- * its build phase (UX ruling 9 applies to routes as much as nav items).
+ * Route tree (TanStack Router, code-based). A screen's route lands with its
+ * build phase (UX ruling 9 applies to routes as much as nav items): / is a
+ * redirect into /health; /import ships with the import-review unit.
  */
 
 function RootComponent() {
@@ -56,7 +57,13 @@ const healthRoute = createRoute({
   component: HealthRoute,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, healthRoute]);
+const importRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/import",
+  component: ImportRoute,
+});
+
+const routeTree = rootRoute.addChildren([indexRoute, healthRoute, importRoute]);
 
 export const router = createRouter({ routeTree });
 

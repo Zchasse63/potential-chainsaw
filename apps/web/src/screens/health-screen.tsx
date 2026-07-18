@@ -1,14 +1,18 @@
 import type { ReactNode } from "react";
+import { Link } from "@tanstack/react-router";
 import type { EnvelopeMeta } from "@kelo/contracts";
 import { DataBoundary, type BoundaryQuery } from "../components/data-boundary.jsx";
 import { EmptyState } from "../components/empty-state.jsx";
 import { FreshnessChip } from "../components/freshness-chip.jsx";
+import { ReconciliationRegion } from "../components/reconciliation.jsx";
 import { Skeleton } from "../components/skeleton.jsx";
 import { SourceLabel } from "../components/source-label.jsx";
 import type {
   AlertSeverity,
   AuthorityRow,
   EntityFreshness,
+  HealthQuarantineSummary,
+  HealthReconciliation,
   HealthReport,
   OpenAlert,
   SyncRun,
@@ -273,9 +277,69 @@ function HealthSkeleton() {
       <Skeleton className="h-64 w-full rounded-3" />
       <Skeleton className="h-44 w-full rounded-3" />
       <Skeleton className="h-28 w-full rounded-3" />
+      <Skeleton className="h-40 w-full rounded-3" />
+      <Skeleton className="h-32 w-full rounded-3" />
       <Skeleton className="h-48 w-full rounded-3" />
     </div>
   );
+}
+
+/**
+ * Quarantine summary (UX plan §3F): open count + top causes, with the full
+ * review one tap away at /import. Zero open exceptions is the clean state,
+ * not a missing one.
+ */
+function QuarantineSummary({ summary }: { summary: HealthQuarantineSummary }) {
+  if (summary.open_count === 0) {
+    return (
+      <EmptyState
+        title="No open exceptions — the import is clean"
+        body="Nothing is waiting for review. When an imported row fails validation it is held here with its reason, never silently dropped."
+        action={
+          <Link to="/import" className="font-medium text-link underline">
+            Open import review
+          </Link>
+        }
+      />
+    );
+  }
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-baseline gap-x-3">
+        <span className="font-display text-title font-bold tracking-tight">
+          {summary.open_count}
+        </span>
+        <span className="text-body text-ink-secondary">
+          open {summary.open_count === 1 ? "exception" : "exceptions"} awaiting a decision — the
+          import pauses nothing, but these rows are held out of the data until reviewed.
+        </span>
+      </div>
+      <ul className="divide-y divide-hairline">
+        {summary.by_cause.slice(0, 3).map((cause) => (
+          <li
+            key={`${cause.entity} ${cause.reason}`}
+            className="flex flex-wrap items-center gap-x-3 py-2"
+          >
+            <span className="font-mono text-micro uppercase tracking-wide text-ink-muted">
+              {cause.entity}
+            </span>
+            <span className="text-body text-ink">{cause.reason}</span>
+            <span className="ml-auto font-mono text-chrome text-ink-secondary">
+              {cause.open_count} open
+            </span>
+          </li>
+        ))}
+      </ul>
+      <Link to="/import" className="inline-block font-medium text-link underline">
+        Review {summary.open_count} open {summary.open_count === 1 ? "exception" : "exceptions"}
+      </Link>
+    </div>
+  );
+}
+
+/** Reconciliation history (§3F) — the recent Kelo-vs-Glofox checks. */
+function ReconciliationSection({ reconciliation }: { reconciliation: HealthReconciliation }) {
+  return <ReconciliationRegion pending={reconciliation.pending} rows={reconciliation.recent} />;
 }
 
 /**
@@ -299,6 +363,12 @@ export function HealthScreen({ query }: { query: BoundaryQuery }) {
           </Card>
           <Card title="Recent import runs">
             <RunsTable runs={report.sync_runs} />
+          </Card>
+          <Card title="Quarantine">
+            <QuarantineSummary summary={report.quarantine} />
+          </Card>
+          <Card title="Reconciliation">
+            <ReconciliationSection reconciliation={report.reconciliation} />
           </Card>
           <Card title="Open alerts">
             <AlertsList alerts={report.alerts} />

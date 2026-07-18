@@ -11,7 +11,13 @@ import { glofoxEnvelopeC } from "./envelopes.js";
  * Glofox-gated).
  */
 
-/** `transaction_status` vocabulary, verified live in the 30-day window. */
+/**
+ * The KNOWN `transaction_status` vocabulary, verified live in the 30-day
+ * window. A CLASSIFIER, not the boundary type (widen-then-classify, invariant
+ * #8): the charge schema keeps the field a raw string so a novel status can't
+ * fail a page parse; mappers safeParse against this set and QUARANTINE
+ * unknowns — never silently into revenue.
+ */
 export const glofoxTransactionStatusSchema = z.enum(["PAID", "ERROR", "REFUNDED"]);
 export type GlofoxTransactionStatus = z.infer<typeof glofoxTransactionStatusSchema>;
 
@@ -59,7 +65,8 @@ const payoutSchema = z.object({
 export const glofoxStripeChargeSchema = z.object({
   _id: z.string(),
   id: z.string(),
-  transaction_status: glofoxTransactionStatusSchema,
+  /** RAW string at the boundary (see glofoxTransactionStatusSchema note). */
+  transaction_status: z.string(),
   transaction_provider_id: z.string(),
   metadata: transactionMetadataSchema,
   amount: z.number(),
@@ -85,16 +92,28 @@ export const glofoxStripeChargeSchema = z.object({
 });
 export type GlofoxStripeCharge = z.infer<typeof glofoxStripeChargeSchema>;
 
-/** Only `StripeCharge` observed live — unknown wrapper keys must alert (README §5). */
+/**
+ * The STRICT per-row schema — the shape a well-formed StripeCharge-wrapped row
+ * must have. Only `StripeCharge` observed live; unknown wrapper keys must
+ * alert (README §5). Used by the transactions MAPPER (per-row safeParse →
+ * quarantine on failure) and by the pinned-sample drift test, NOT by the
+ * report envelope below.
+ */
 export const glofoxTransactionRowSchema = z.object({
   StripeCharge: glofoxStripeChargeSchema,
 });
 export type GlofoxTransactionRow = z.infer<typeof glofoxTransactionRowSchema>;
 
+/**
+ * PER-ROW SALVAGE (invariant #8): the report ENVELOPE validates structure only
+ * — each detail row stays an unknown record so one malformed/novel row can
+ * never fail the whole page parse. The transform layer safeParses each row
+ * with glofoxTransactionRowSchema and routes failures to import_quarantine.
+ */
 export const glofoxTransactionsReportSchema = glofoxEnvelopeC({
   TransactionsList: z.object({
     header: z.string(),
-    details: z.array(glofoxTransactionRowSchema),
+    details: z.array(z.record(z.string(), z.unknown())),
   }),
 });
 export type GlofoxTransactionsReport = z.infer<typeof glofoxTransactionsReportSchema>;

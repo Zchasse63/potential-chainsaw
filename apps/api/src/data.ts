@@ -31,6 +31,8 @@ interface TableBuilder extends PromiseLike<QueryResult> {
   insert(values: unknown): TableBuilder;
   update(values: unknown): TableBuilder;
   eq(column: string, value: unknown): TableBuilder;
+  lt(column: string, value: unknown): TableBuilder;
+  in(column: string, values: readonly unknown[]): TableBuilder;
   order(column: string, options?: { ascending?: boolean }): TableBuilder;
   limit(count: number): TableBuilder;
 }
@@ -421,4 +423,254 @@ export async function fetchOpenAlerts(
     "fetchOpenAlerts",
   );
   return parseInternal(z.array(alertRowSchema), data ?? [], "fetchOpenAlerts");
+}
+
+// -- import review (migration 0007) -------------------------------------------
+
+export const quarantineStatusSchema = z.enum(["open", "resolved", "dismissed"]);
+export type QuarantineStatus = z.infer<typeof quarantineStatusSchema>;
+
+/**
+ * One import_quarantine row as the LIST sees it. `payload` is deliberately
+ * excluded — it is the raw evidence document and can be large; only the
+ * detail fetch (fetchQuarantineItem) reads it.
+ */
+export const quarantineRowSchema = z.object({
+  id: z.string().uuid(),
+  entity: z.string(),
+  external_ref: z.string().nullable(),
+  reason: z.string(),
+  status: quarantineStatusSchema,
+  sync_run_id: z.string().uuid().nullable(),
+  created_at: z.string(),
+  resolved_at: z.string().nullable(),
+  resolution_note: z.string().nullable(),
+});
+export type QuarantineRow = z.infer<typeof quarantineRowSchema>;
+
+const QUARANTINE_LIST_COLUMNS =
+  "id, entity, external_ref, reason, status, sync_run_id, created_at, resolved_at, resolution_note";
+
+/** The detail row adds `payload` (the before/after "what came in" preview). */
+export const quarantineDetailSchema = quarantineRowSchema.extend({
+  payload: z.unknown(),
+});
+export type QuarantineDetail = z.infer<typeof quarantineDetailSchema>;
+
+const QUARANTINE_DETAIL_COLUMNS = `${QUARANTINE_LIST_COLUMNS}, payload`;
+
+export interface QuarantineListOptions {
+  status?: QuarantineStatus;
+  entity?: string;
+  limit?: number;
+  /** Keyset cursor: the created_at of the previous page's last row. */
+  cursor?: string;
+}
+
+export const QUARANTINE_LIST_DEFAULT_LIMIT = 50;
+
+/** One page of the review queue, keyset-paginated by created_at desc. */
+export async function fetchQuarantine(
+  client: KeloSupabaseClient,
+  tenantId: string,
+  opts: QuarantineListOptions = {},
+): Promise<QuarantineRow[]> {
+  let builder = from(client, "import_quarantine")
+    .select(QUARANTINE_LIST_COLUMNS)
+    .eq("tenant_id", tenantId)
+    .order("created_at", { ascending: false });
+  if (opts.status !== undefined) builder = builder.eq("status", opts.status);
+  if (opts.entity !== undefined) builder = builder.eq("entity", opts.entity);
+  if (opts.cursor !== undefined) builder = builder.lt("created_at", opts.cursor);
+  const data = await run(
+    builder.limit(opts.limit ?? QUARANTINE_LIST_DEFAULT_LIMIT),
+    "fetchQuarantine",
+  );
+  return parseInternal(z.array(quarantineRowSchema), data ?? [], "fetchQuarantine");
+}
+
+/** One quarantine row WITH payload, scoped to the resolved tenant. */
+export async function fetchQuarantineItem(
+  client: KeloSupabaseClient,
+  tenantId: string,
+  id: string,
+): Promise<QuarantineDetail | null> {
+  const data = await run(
+    from(client, "import_quarantine")
+      .select(QUARANTINE_DETAIL_COLUMNS)
+      .eq("id", id)
+      .eq("tenant_id", tenantId),
+    "fetchQuarantineItem",
+  );
+  const rows = parseInternal(z.array(quarantineDetailSchema), data ?? [], "fetchQuarantineItem");
+  return rows[0] ?? null;
+}
+
+export interface QuarantineCause {
+  entity: string;
+  reason: string;
+  open_count: number;
+}
+
+// PostgREST cannot GROUP BY without an RPC, and migrations are out of this
+// unit's scope — the grouping happens here over the open rows' two small
+// columns. Bounded scan: if a failed import ever quarantines more rows than
+// this, open_count is a LOWER BOUND (the queue itself stays correct).
+const QUARANTINE_CAUSE_SCAN_LIMIT = 5000;
+
+const quarantineCauseRowSchema = z.object({
+  entity: z.string(),
+  reason: z.string(),
+});
+
+/**
+ * "Exceptions grouped by cause" (UX plan §3G): open rows grouped by
+ * (entity, reason), most common first — the batch-decision unit for the
+ * review UI.
+ */
+export async function fetchQuarantineCauses(
+  client: KeloSupabaseClient,
+  tenantId: string,
+): Promise<QuarantineCause[]> {
+  const data = await run(
+    from(client, "import_quarantine")
+      .select("entity, reason")
+      .eq("tenant_id", tenantId)
+      .eq("status", "open")
+      .limit(QUARANTINE_CAUSE_SCAN_LIMIT),
+    "fetchQuarantineCauses",
+  );
+  const rows = parseInternal(
+    z.array(quarantineCauseRowSchema),
+    data ?? [],
+    "fetchQuarantineCauses",
+  );
+  const groups = new Map<string, QuarantineCause>();
+  for (const row of rows) {
+    const key = `${row.entity} ${row.reason}`;
+    const existing = groups.get(key);
+    if (existing !== undefined) {
+      existing.open_count += 1;
+    } else {
+      groups.set(key, { entity: row.entity, reason: row.reason, open_count: 1 });
+    }
+  }
+  return [...groups.values()].sort((a, b) => b.open_count - a.open_count);
+}
+
+/** Hard bound on one batch decision (route schema mirrors this → 422). */
+export const QUARANTINE_RESOLVE_MAX_IDS = 200;
+
+export interface QuarantineResolution {
+  status: "resolved" | "dismissed";
+  note?: string;
+}
+
+/**
+ * Commit a batch decision. Writes ONLY the four resolution columns — the
+ * migration-0007 column-list grant (status, resolved_by, resolved_at,
+ * resolution_note) makes payload/reason/identity client-immutable, and this
+ * function is the one write path behind it. FORWARD-ONLY in v1: the
+ * status='open' filter means an already-resolved/dismissed row is never
+ * re-opened or re-decided; ids that are foreign, missing, or no longer open
+ * simply don't match (RLS + filter) and are absent from the returned rows —
+ * the response is exactly what durably changed, nothing more.
+ */
+export async function resolveQuarantine(
+  client: KeloSupabaseClient,
+  tenantId: string,
+  ids: string[],
+  resolution: QuarantineResolution,
+  actorUserId: string,
+): Promise<QuarantineRow[]> {
+  if (ids.length > QUARANTINE_RESOLVE_MAX_IDS) {
+    throw new ApiError(
+      422,
+      "batch_too_large",
+      `a batch decision is bounded to ${QUARANTINE_RESOLVE_MAX_IDS} ids`,
+    );
+  }
+  const data = await run(
+    from(client, "import_quarantine")
+      .update({
+        status: resolution.status,
+        resolved_by: actorUserId,
+        resolved_at: new Date().toISOString(),
+        resolution_note: resolution.note ?? null,
+      })
+      .eq("tenant_id", tenantId)
+      .eq("status", "open")
+      .in("id", [...new Set(ids)])
+      .select(QUARANTINE_LIST_COLUMNS),
+    "resolveQuarantine",
+  );
+  return parseInternal(z.array(quarantineRowSchema), data ?? [], "resolveQuarantine");
+}
+
+// -- reconciliation (unit 1.5, built in PARALLEL — see the bridge note) -------
+
+/**
+ * The pinned read-shape of public.reconciliations (unit 1.5 owns the table;
+ * this unit reads it so both converge — the director reconciles at merge).
+ * Member-SELECT RLS like sync_runs; sums are Postgres numerics (JSON numbers).
+ */
+export const reconciliationRowSchema = z.object({
+  id: z.string().uuid(),
+  tenant_id: z.string().uuid(),
+  entity: z.string(),
+  window_start: z.string().nullable(),
+  window_end: z.string().nullable(),
+  glofox_count: z.number().int().nullable(),
+  kelo_count: z.number().int().nullable(),
+  glofox_sum: z.number().nullable(),
+  kelo_sum: z.number().nullable(),
+  drift_count: z.number().int().nullable(),
+  drift_sum: z.number().nullable(),
+  status: z.enum(["match", "drift", "error"]),
+  detail: z.unknown(),
+  checked_at: z.string(),
+  created_at: z.string(),
+});
+export type ReconciliationRow = z.infer<typeof reconciliationRowSchema>;
+
+const RECONCILIATION_COLUMNS =
+  "id, tenant_id, entity, window_start, window_end, glofox_count, kelo_count, glofox_sum, kelo_sum, drift_count, drift_sum, status, detail, checked_at, created_at";
+
+export interface ReconciliationsResult {
+  rows: ReconciliationRow[];
+  /**
+   * true when the reconciliations table does not exist YET. BRIDGE (the
+   * director removes this when unit 1.5 merges): 1.5 builds the table in
+   * parallel, so until it lands every read hits Postgres 42P01 "relation
+   * does not exist". That is a PENDING pipeline, not a server defect — the
+   * API answers 200 with an empty list and this flag (surfaced as
+   * meta.reconciliation_pending / data.reconciliation_pending) instead of
+   * 500ing, and the UI renders the honest pending banner. Any OTHER error
+   * still throws (→ 500 + Sentry).
+   */
+  pending: boolean;
+}
+
+export async function fetchReconciliations(
+  client: KeloSupabaseClient,
+  tenantId: string,
+  opts: { entity?: string; limit?: number } = {},
+): Promise<ReconciliationsResult> {
+  let builder = from(client, "reconciliations")
+    .select(RECONCILIATION_COLUMNS)
+    .eq("tenant_id", tenantId)
+    .order("checked_at", { ascending: false })
+    .limit(opts.limit ?? 10);
+  if (opts.entity !== undefined) builder = builder.eq("entity", opts.entity);
+  const { data, error } = await builder;
+  if (error !== null) {
+    if (error.code === "42P01") {
+      return { rows: [], pending: true };
+    }
+    throw new Error(`fetchReconciliations query failed: ${error.message}`);
+  }
+  return {
+    rows: parseInternal(z.array(reconciliationRowSchema), data ?? [], "fetchReconciliations"),
+    pending: false,
+  };
 }

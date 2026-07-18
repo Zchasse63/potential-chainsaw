@@ -1,0 +1,26 @@
+{
+  "name": "@kelo/glofox",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "The ONE shared Glofox HTTP client — envelope styles, vendor traps, rate budget (docs/glofox/README.md). DB-free.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@kelo/contracts": "workspace:*",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "vitest": "4.1.10"
+  }
+}

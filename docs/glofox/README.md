@@ -104,6 +104,27 @@ sources. Full details per operation: [openapi.json](openapi.json).
   feeds the D2 owner decision (counsel may accept these as opt-in provenance).
 - Plan *name* resolves by joining `membership.user_membership_id` / transaction `plan_code` to
   the catalog (§5 confirmed).
+- **`membership.type` + `membership.status` IS THE MEMBER SIGNAL (verified live 2026-07-17, full
+  1,366-population scan):** `time`/`time_classes` + status `ACTIVE` = the recurring-member cohort;
+  `num_classes` = credit packs (pack-holders); `payg` = drop-in/guest. Distribution:
+  **payg/ACTIVE 652 · num_classes/none 693 · time_classes/ACTIVE 13 · time/ACTIVE 6 ·
+  time_classes/PAUSED 1 · num_classes/LOCKED 1**. So **recurring members ≈ 19 ACTIVE (+1 PAUSED)** —
+  matches the owner's ~22-23 far better than a payment-recency window (which gave only 16, missing
+  members who bill on longer cycles / paid differently but hold an ACTIVE recurring membership).
+  **DERIVATION FIX REQUIRED:** import `membership.{type,status,user_membership_id,start_date}` onto
+  `people` (mapMember + a people migration) and derive `recurring_member` from membership.status
+  ACTIVE (+ recurring type), with `subscription_payment` as CORROBORATION, not a hard requirement.
+  The remaining ~2-3 gap to ~23 is gold-label territory (comped/edge members the owner adjudicates).
+- **GROUND TRUTH PINNED (owner dashboard export "Current Members", 2026-07-17): exactly 22 members
+  = 21 ACTIVE + 1 PAUSED.** Breakdown: 6 unlimited (`Monthly Unlimited`/`New Monthly Unlimited`) +
+  ~14 class-based (`4/6/8/10-Class`, `Monthly Recurring`) + 2 NOEQL comps ($1 CASH / 100% discount).
+  Definition (canonical): a member = an **ACTIVE-or-PAUSED membership on a RECURRING plan** (unlimited
+  / N-class / recurring / comp) — NOT drop-in `payg`, NOT a bare `num_classes` credit pack.
+  membership.status + the plan's recurring-ness is the signal; subscription_payment recency is
+  corroboration only. The API `membership.type` scan gets 19-20; the 2 NOEQL comps read as `payg`
+  (100%-comp structure) and are recovered by the owner's A8 catalog mapping marking NOEQL recurring.
+  **The member-count canary target is 22 (not 23); the owner's member list is the gold-label positive
+  set.** (Member PII stays OUT of the repo — public — used only at validation via service creds.)
 
 ### Plan catalog — `GET /2.0/memberships` [LIVE] ([samples/memberships.get.json](samples/memberships.get.json))
 
@@ -158,7 +179,10 @@ provider dimension and alert on unknown wrappers).
 ```
 StripeCharge: { _id, id, transaction_status (PAID|ERROR|REFUNDED [LIVE]), transaction_provider_id,
   amount (float), currency, customer, paid, invoice_id, event_id, description,
-  transaction_group_id, amount_refunded, status, taxes, created, modified (string unix),
+  transaction_group_id, amount_refunded, status, taxes,
+  created, modified (branch-LOCAL wall-time strings "YYYY-MM-DD HH:MM:SS", NO zone — convert via
+  the branch timezone; corrected 2026-07-17 against the pinned sample, which shows
+  "2026-07-17 04:32:52", not string unix),
   metadata: { namespace, branch_id, glofox_event, stripe_subscription_id, user_id, user_name,
               membership_id, plan_code, payment_method, resource_id, environment,
               is_payment_link, balance, user_tax_id } }
@@ -172,6 +196,20 @@ StripeCharge: { _id, id, transaction_status (PAID|ERROR|REFUNDED [LIVE]), transa
 - Stripe underneath is confirmed (`StripeCharge`, `stripe_subscription_id`) — but **account
   access is Glofox-gated per the owner**, so the build plan's negative branch applies: no direct
   Stripe API ingest pre-cutover; this report is the payments source until phase 5.
+- **Transaction history DEPTH — verified live 2026-07-17 (corrects the plan's "13 months"
+  assumption):** the report returns data from **~December 2023 to now ≈ 31 months**, not 13.
+  Row counts per 30-day window: now 55 · −6mo 41 · −13mo 67 · −24mo 75 · **−30mo 167 (peak)** ·
+  −31mo 51 · **−32mo 0 · −36mo 0** (edge is ~Nov/Dec 2023). The studio was BUSIEST ~2.5 years ago.
+  **The full backfill (`glofox.sync.transactions` job payload `backfillStart`) MUST start at
+  `2023-11-01`** (a margin before the first observed data), NOT 13 months — a 13-month window drops
+  ~18 months incl. the peak. Estimated total ≈ 2,000–2,500 transactions (plan's "775/13mo" was the
+  probe window, not the depth).
+- **`/2.0/members` `total_count` = 1,366 is PEOPLE, not members** (owner-confirmed 2026-07-17).
+  That endpoint returns every contact who ever signed up — guests, single-class drop-ins, expired
+  members, leads, dormant credit-holders, plus the real members. **Actual recurring/paying members
+  ≈ 22-23** (`primary_relationship = recurring_member`, derived — phase 2). The 1,366 maps to the
+  `people` table; the ~23 is the member-count canary + the KPI that matters. NEVER surface the
+  `/2.0/members` count as "members" — that is the founding-trauma conflation in one number.
 
 ### Branch — `GET /2.0/branches/{id}` [LIVE] ([samples/branch.get.json](samples/branch.get.json))
 

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Link } from "@tanstack/react-router";
+import { Link, useRouterState } from "@tanstack/react-router";
 import { useAuth } from "../auth/auth-context.jsx";
 import { inspectEnvelope } from "../lib/envelope.js";
 import { aggregateFreshness, useHealthQuery, type HealthReport } from "../lib/health.js";
@@ -11,9 +11,10 @@ import { Skeleton } from "./skeleton.jsx";
 /**
  * AppShell — owner-desktop frame (design guide §8): 232px left rail + top
  * chrome. UX ruling 9: a nav item appears ONLY when its feature ships, so
- * phase 0 shows exactly one item — Health, with a quiet status dot. The top
- * chrome carries the freshness indicator (worst-of-sources for the current
- * screen — and /health IS the only screen) plus the signed-in actor.
+ * the rail shows exactly what exists — Health (with its quiet status dot)
+ * and, since the import-review unit, Import review (with an open-exception
+ * count badge). The top chrome carries the freshness indicator
+ * (worst-of-sources) plus the signed-in actor.
  */
 
 const DOT_CLASS: Record<FreshnessBucket, string> = {
@@ -35,6 +36,49 @@ function HealthNavDot() {
   return <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${DOT_CLASS[bucket]}`} />;
 }
 
+/** Inbox-tray glyph for the Import review rail item (currentColor, no raw hex). */
+function ImportNavIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      className="h-4 w-4 text-icon-inactive"
+    >
+      <path d="M2 9.5V12a1.5 1.5 0 0 0 1.5 1.5h9A1.5 1.5 0 0 0 14 12V9.5" />
+      <path d="M2 9.5h3.2l1.3 2h3l1.3-2H14L11.6 3.6a1.5 1.5 0 0 0-1.4-1.1H5.8a1.5 1.5 0 0 0-1.4 1.1L2 9.5Z" />
+    </svg>
+  );
+}
+
+/**
+ * Open-exception count badge (design guide §8 count badges), read from the
+ * /health envelope's quarantine summary — no extra fetch. Quiet when the
+ * count is zero or unknown: zero open exceptions is not a thing to wave.
+ */
+function ImportNavBadge() {
+  const auth = useAuth();
+  const query = useHealthQuery(auth.accessToken ?? undefined);
+  if (query.status !== "success") {
+    return null;
+  }
+  const inspection = inspectEnvelope<HealthReport>(query.data);
+  if (!inspection.ok) {
+    return null;
+  }
+  const count = inspection.data.quarantine.open_count;
+  if (count === 0) {
+    return null;
+  }
+  return (
+    <span className="ml-auto rounded-full border border-warning-border bg-warning-tint px-2 py-0.5 font-mono text-micro text-warning-on-tint">
+      {count}
+    </span>
+  );
+}
+
 function ChromeFreshness() {
   const auth = useAuth();
   const query = useHealthQuery(auth.accessToken ?? undefined);
@@ -54,8 +98,13 @@ function ChromeFreshness() {
   return <FreshnessChip bucket={aggregate.bucket} minutesStale={aggregate.minutesStale} />;
 }
 
+const NAV_LINK_BASE = "flex items-center gap-2 rounded-2 px-3 py-2 text-body text-ink-secondary";
+const NAV_LINK_ACTIVE = "bg-selected-bg font-medium text-ink";
+
 export function AppShell({ children }: { children: ReactNode }) {
   const auth = useAuth();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const screenLabel = pathname.startsWith("/import") ? "Import review" : "Health";
   return (
     <div className="flex min-h-screen bg-surface-app">
       <aside className="flex w-rail shrink-0 flex-col border-r border-hairline bg-surface-card">
@@ -66,14 +115,26 @@ export function AppShell({ children }: { children: ReactNode }) {
           </span>
         </div>
         <nav aria-label="Primary" className="flex-1 px-3 py-4">
-          <ul>
+          <ul className="space-y-1">
             <li>
               <Link
                 to="/health"
-                className="flex items-center gap-2 rounded-2 bg-selected-bg px-3 py-2 text-body font-medium text-ink"
+                className={NAV_LINK_BASE}
+                activeProps={{ className: NAV_LINK_ACTIVE }}
               >
                 <HealthNavDot />
                 Health
+              </Link>
+            </li>
+            <li>
+              <Link
+                to="/import"
+                className={NAV_LINK_BASE}
+                activeProps={{ className: NAV_LINK_ACTIVE }}
+              >
+                <ImportNavIcon />
+                Import review
+                <ImportNavBadge />
               </Link>
             </li>
           </ul>
@@ -81,7 +142,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-hairline bg-surface-card px-6">
-          <span className="text-chrome text-ink-muted">Health</span>
+          <span className="text-chrome text-ink-muted">{screenLabel}</span>
           <div className="flex items-center gap-4">
             <ChromeFreshness />
             {auth.userEmail !== null && (

@@ -4,6 +4,7 @@
  * runTick(), which is the ONLY claim path onto the queue — never pg_cron,
  * never a second cron.
  */
+import { createGlofoxProcessors } from "./glofox/processors.js";
 
 /**
  * Minimal structural subset of pg.Pool used by the tick. Keeping this an
@@ -58,4 +59,11 @@ export const processors: Record<string, JobProcessor> = {
       await fetch(ctx.heartbeatUrl);
     }
   },
+
+  /**
+   * Glofox sync (phase 1 · unit 4): the six entity jobs + the hourly fan-out.
+   * Built from env config at module load (glofoxConfigFromEnv reads NAMES
+   * only); each run still re-reads nothing — credentials rotate by redeploy.
+   */
+  ...createGlofoxProcessors(),
 };
