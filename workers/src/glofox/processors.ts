@@ -11,6 +11,7 @@ import { membershipsSpec } from "./entities/memberships.js";
 import { transactionsSpec } from "./entities/transactions.js";
 import { runReconciliation } from "./reconcile/reconcile.js";
 import { runDeletionDetection } from "./deletion/deletion.js";
+import { recomputeAllRelationships } from "./relationships/recompute.js";
 
 /**
  * Phase 1 · unit 4 — the Glofox sync job processors. Each 'glofox.sync.*'
@@ -42,6 +43,9 @@ export const GLOFOX_SYNC_ALL_KIND = "glofox.sync.all";
 /** Phase 1 · unit 5 — the trust engine + deletion detection (plan-final §4). */
 export const GLOFOX_RECONCILE_KIND = "glofox.reconcile";
 export const GLOFOX_DETECT_DELETIONS_KIND = "glofox.detect_deletions";
+
+/** Phase 1 · unit 8 — SQL-owned relationship derivation. */
+export const DERIVE_RELATIONSHIPS_KIND = "derive.relationships";
 
 /** Test seam: inject a fake client/config/clock; production uses env. */
 export interface GlofoxProcessorDeps {
@@ -132,6 +136,13 @@ export function createGlofoxProcessors(
         now,
         payload: job.payload,
       });
+    },
+
+    /** No Glofox client/config is needed: the deterministic SQL function owns
+     * all evidence reads, effective dating, precedence, and transition logs. */
+    [DERIVE_RELATIONSHIPS_KIND]: async (job, ctx) => {
+      const tenantId = requireTenant(job);
+      await recomputeAllRelationships(ctx.pool, tenantId);
     },
 
     /** Fan-out: enqueue the entity jobs + the trust-engine jobs, idempotency
