@@ -175,6 +175,14 @@ StripeCharge: { _id, id, transaction_status (PAID|ERROR|REFUNDED [LIVE]), transa
 - Stripe underneath is confirmed (`StripeCharge`, `stripe_subscription_id`) — but **account
   access is Glofox-gated per the owner**, so the build plan's negative branch applies: no direct
   Stripe API ingest pre-cutover; this report is the payments source until phase 5.
+- **Transaction history DEPTH — verified live 2026-07-17 (corrects the plan's "13 months"
+  assumption):** the report returns data from **~December 2023 to now ≈ 31 months**, not 13.
+  Row counts per 30-day window: now 55 · −6mo 41 · −13mo 67 · −24mo 75 · **−30mo 167 (peak)** ·
+  −31mo 51 · **−32mo 0 · −36mo 0** (edge is ~Nov/Dec 2023). The studio was BUSIEST ~2.5 years ago.
+  **The full backfill (`glofox.sync.transactions` job payload `backfillStart`) MUST start at
+  `2023-11-01`** (a margin before the first observed data), NOT 13 months — a 13-month window drops
+  ~18 months incl. the peak. Estimated total ≈ 2,000–2,500 transactions (plan's "775/13mo" was the
+  probe window, not the depth). Member `total_count` = **1,366** (plan said ~1,500).
 
 ### Branch — `GET /2.0/branches/{id}` [LIVE] ([samples/branch.get.json](samples/branch.get.json))
 
