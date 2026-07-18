@@ -190,7 +190,7 @@ function generationPool(options: { red?: boolean } = {}): {
           return { rows: [{ business_date: "2026-07-18" }] };
         }
         if (text.includes("from public.ai_artifacts")) return { rows: [] };
-        if (text.includes("with red_drifts")) {
+        if (text.includes("with latest_per_entity")) {
           return {
             rows: [
               options.red
@@ -268,7 +268,7 @@ describe("daily generation orchestration", () => {
     };
     await expect(runBriefing(pool, TENANT, { env: {} })).resolves.toEqual(existing);
     expect(sql).toHaveLength(2);
-    expect(sql.some((text) => text.includes("with red_drifts"))).toBe(false);
+    expect(sql.some((text) => text.includes("with latest_per_entity"))).toBe(false);
   });
 
   it("stores fallback without calling Anthropic when the API key is absent", async () => {
