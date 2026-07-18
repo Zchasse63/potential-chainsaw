@@ -8,15 +8,15 @@ import { blankToNull, hasExternalId } from "./types.js";
  * "Tenancy & identity"). PURE — no DB, no network, no clock.
  *
  * Deliberately NOT mapped here:
- * - membership/relationship anything — phase 2 (plan-final §2 "Relationship
- *   typing": both layers are DERIVED from behavior, never imported).
+ * - relationship meaning — membership source fields are carried verbatim for
+ *   the single downstream derivation; the mapper never classifies them.
  * - Glofox's lead_status / leads flag — "everyone is a lead" (README §8) and
  *   the §5-facts table rules the flag is never imported as meaning;
  *   people.lead_status is the NATIVE pipeline surface, owner-managed.
  * - source/origin channel hints — the full-history distinct-value scan is a
  *   phase-1 study; the raw zone keeps the payload verbatim.
  */
-export const MAPPER_VERSION = 1;
+export const MAPPER_VERSION = 2;
 
 /**
  * mapMember emits the people row AND its 'glofox' person_external_refs row in
@@ -68,6 +68,12 @@ export function mapMember(member: GlofoxMember, ctx: MapperContext): PersonMappe
     consent_email: member.consent?.email.active ?? null,
     consent_sms: member.consent?.sms.active ?? null,
     consent_push: member.consent?.push.active ?? null,
+    // Authoritative membership-record evidence only. Meaning is derived by
+    // app.recompute_person_relationship(), never classified in this mapper.
+    membership_type: blankToNull(member.membership?.type),
+    membership_status: blankToNull(member.membership?.status),
+    user_membership_id: blankToNull(member.membership?.user_membership_id),
+    membership_started_at: member.membership?.start_date ?? null,
   };
 
   const externalRef: PersonExternalRefRow = {

@@ -8,7 +8,8 @@ import type { GlofoxPlanType } from "@kelo/contracts";
  * deterministic. Each mapper file exports its own MAPPER_VERSION (the sync
  * layer records it in sync_runs).
  *
- * Row types mirror the migration-0008 columns (snake_case). Server-generated
+ * Row types mirror the migration-0008 columns plus later import-owned additions
+ * (snake_case). Server-generated
  * columns (id, created_at, updated_at) are omitted; FK columns the sync layer
  * resolves only AFTER insert (person_id, grant_id) are optional and documented
  * at the field. Timestamptz fields are `Date` — timestamps were parsed once at
@@ -80,6 +81,10 @@ export interface PersonRow {
   readonly consent_email: boolean | null;
   readonly consent_sms: boolean | null;
   readonly consent_push: boolean | null;
+  readonly membership_type: string | null;
+  readonly membership_status: string | null;
+  readonly user_membership_id: string | null;
+  readonly membership_started_at: Date | null;
 }
 
 export type ExternalRefSystem = "glofox" | "stripe" | "aggregator";
