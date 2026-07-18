@@ -52,7 +52,12 @@ async function rpc(
   params: Record<string, unknown>,
 ): Promise<unknown> {
   const { data, error } = await (client as unknown as RpcClient).rpc(name, params);
-  if (error !== null) throw new Error(`${name} RPC failed: ${error.message}`);
+  if (error !== null) {
+    if (error.code === "42501") {
+      throw new ApiError(403, "rpc_forbidden", "database authorization denied the operation");
+    }
+    throw new Error(`${name} RPC failed: ${error.message}`);
+  }
   return data;
 }
 
@@ -210,6 +215,207 @@ export async function fetchTenantUser(
   );
   const rows = parseInternal(z.array(tenantUserRowSchema), data ?? [], "fetchTenantUser");
   return rows[0] ?? null;
+}
+
+/** One member row by auth.users id, scoped to the resolved tenant. */
+export async function fetchTenantUserByUserId(
+  client: KeloSupabaseClient,
+  tenantId: string,
+  userId: string,
+): Promise<TenantUserRow | null> {
+  const data = await run(
+    from(client, "tenant_users")
+      .select(TENANT_USER_COLUMNS)
+      .eq("user_id", userId)
+      .eq("tenant_id", tenantId),
+    "fetchTenantUserByUserId",
+  );
+  const rows = parseInternal(z.array(tenantUserRowSchema), data ?? [], "fetchTenantUserByUserId");
+  return rows[0] ?? null;
+}
+
+// -- staff step-up auth (migration 0026) -------------------------------------
+
+const staffMemberDbSchema = z.object({
+  id: z.string().uuid(),
+  user_id: z.string().uuid(),
+  role: tenantRoleSchema,
+  status: memberStatusSchema,
+  step_up_pin_set_at: z.string().nullable(),
+  step_up_locked_until: z.string().nullable(),
+  step_up_fail_count: z.number().int().nonnegative(),
+  created_at: z.string(),
+});
+
+const stepUpEventRowSchema = z.object({
+  tenant_user_id: z.string().uuid(),
+  kind: z.enum(["set", "rotate", "verify_success", "verify_fail", "lockout"]),
+  created_at: z.string(),
+});
+
+export interface StaffRosterRow {
+  id: string;
+  user_id: string;
+  role: TenantRole;
+  status: MemberStatus;
+  pin_set: boolean;
+  locked_until: string | null;
+  fail_count: number;
+  last_step_up_at: string | null;
+  last_step_up_kind: z.infer<typeof stepUpEventRowSchema>["kind"] | null;
+  created_at: string;
+}
+
+/**
+ * Manager roster. Only explicit safe columns are selected: the credential
+ * hash is intentionally absent and therefore cannot enter the response.
+ */
+export async function fetchStaffRoster(
+  client: KeloSupabaseClient,
+  tenantId: string,
+): Promise<StaffRosterRow[]> {
+  const [memberData, eventData] = await Promise.all([
+    run(
+      from(client, "tenant_users")
+        .select(
+          "id, user_id, role, status, step_up_pin_set_at, step_up_locked_until, step_up_fail_count, created_at",
+        )
+        .eq("tenant_id", tenantId)
+        .order("created_at", { ascending: true }),
+      "fetchStaffRoster.members",
+    ),
+    run(
+      from(client, "step_up_events")
+        .select("tenant_user_id, kind, created_at")
+        .eq("tenant_id", tenantId)
+        .order("created_at", { ascending: false }),
+      "fetchStaffRoster.events",
+    ),
+  ]);
+  const members = parseInternal(z.array(staffMemberDbSchema), memberData ?? [], "fetchStaffRoster");
+  const events = parseInternal(
+    z.array(stepUpEventRowSchema),
+    eventData ?? [],
+    "fetchStaffRoster.events",
+  );
+  const latest = new Map<string, z.infer<typeof stepUpEventRowSchema>>();
+  for (const event of events) {
+    const current = latest.get(event.tenant_user_id);
+    if (
+      current === undefined ||
+      event.created_at > current.created_at ||
+      (event.created_at === current.created_at && event.kind === "lockout")
+    ) {
+      latest.set(event.tenant_user_id, event);
+    }
+  }
+  const now = Date.now();
+  return members.map((member) => {
+    const event = latest.get(member.id);
+    const lockedUntil =
+      member.step_up_locked_until !== null && Date.parse(member.step_up_locked_until) > now
+        ? member.step_up_locked_until
+        : null;
+    return {
+      id: member.id,
+      user_id: member.user_id,
+      role: member.role,
+      status: member.status,
+      pin_set: member.step_up_pin_set_at !== null,
+      locked_until: lockedUntil,
+      fail_count:
+        lockedUntil === null && member.step_up_locked_until !== null
+          ? 0
+          : member.step_up_fail_count,
+      last_step_up_at: event?.created_at ?? null,
+      last_step_up_kind: event?.kind ?? null,
+      created_at: member.created_at,
+    };
+  });
+}
+
+const stepUpStatusSchema = z.object({
+  pin_set: z.boolean(),
+  locked_until: z.string().nullable(),
+  fail_count: z.number().int().nonnegative(),
+});
+export type StepUpStatus = z.infer<typeof stepUpStatusSchema>;
+
+export async function fetchStepUpStatus(
+  client: KeloSupabaseClient,
+  tenantId: string,
+  userId: string,
+): Promise<StepUpStatus | null> {
+  const data = await rpc(client, "step_up_status", { p_tenant: tenantId, p_user: userId });
+  const rows = parseInternal(z.array(stepUpStatusSchema), data ?? [], "step_up_status");
+  return rows[0] ?? null;
+}
+
+const stepUpCredentialSchema = z.object({ step_up_pin_hash: z.string().nullable() });
+
+/** Server-only credential read used solely by POST /staff/step-up/verify. */
+export async function fetchStepUpCredential(
+  client: KeloSupabaseClient,
+  tenantId: string,
+  userId: string,
+): Promise<string | null> {
+  const data = await run(
+    from(client, "tenant_users")
+      .select("step_up_pin_hash")
+      .eq("tenant_id", tenantId)
+      .eq("user_id", userId)
+      .eq("status", "active"),
+    "fetchStepUpCredential",
+  );
+  const rows = parseInternal(z.array(stepUpCredentialSchema), data ?? [], "fetchStepUpCredential");
+  return rows[0]?.step_up_pin_hash ?? null;
+}
+
+export async function setStepUpPin(
+  client: KeloSupabaseClient,
+  input: { tenantId: string; userId: string; pinHash: string; actorId: string },
+): Promise<void> {
+  await rpc(client, "set_step_up_pin", {
+    p_tenant: input.tenantId,
+    p_user: input.userId,
+    p_pin_hash: input.pinHash,
+    p_actor: input.actorId,
+  });
+}
+
+const stepUpAttemptStateSchema = z.object({
+  locked_until: z.string().nullable(),
+  fail_count: z.number().int().nonnegative(),
+  remaining_attempts: z.number().int().nonnegative(),
+  attempt_recorded: z.boolean(),
+});
+export type StepUpAttemptState = z.infer<typeof stepUpAttemptStateSchema>;
+
+export async function recordStepUpAttempt(
+  client: KeloSupabaseClient,
+  input: {
+    tenantId: string;
+    userId: string;
+    success: boolean;
+    context: string;
+    ipHash: string | null;
+  },
+): Promise<StepUpAttemptState> {
+  const data = await rpc(client, "record_step_up_attempt", {
+    p_tenant: input.tenantId,
+    p_user: input.userId,
+    p_success: input.success,
+    p_context: input.context,
+    p_ip_hash: input.ipHash,
+  });
+  const rows = parseInternal(
+    z.array(stepUpAttemptStateSchema),
+    data ?? [],
+    "record_step_up_attempt",
+  );
+  const state = rows[0];
+  if (state === undefined) throw new Error("record_step_up_attempt returned no lock state");
+  return state;
 }
 
 export interface MemberPatch {
