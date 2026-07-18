@@ -25,6 +25,11 @@ import {
   CAMPAIGNS_ATTRIBUTE_KIND,
   createAttributionProcessor,
 } from "../campaigns/attribution.js";
+import { RETENTION_SWEEP_KIND, runRetentionSweep } from "../retention/sweep.js";
+import { PERSON_DELETE_KIND, processPersonDelete } from "../people/delete.js";
+import { PERSON_EXPORT_KIND, processPersonExport } from "../people/export.js";
+
+export { RETENTION_SWEEP_KIND, PERSON_DELETE_KIND, PERSON_EXPORT_KIND };
 
 /**
  * Phase 1 · unit 4 — the Glofox sync job processors. Each 'glofox.sync.*'
@@ -77,6 +82,7 @@ export const GLOFOX_SYNC_ALL_KINDS = [
   CAMPAIGNS_LIFECYCLE_KIND,
   CAMPAIGNS_ATTRIBUTE_KIND,
   DERIVE_BRIEFING_KIND,
+  RETENTION_SWEEP_KIND,
 ] as const;
 
 /** Test seam: inject a fake client/config/clock; production uses env. */
@@ -153,6 +159,11 @@ export function createGlofoxProcessors(
       draft: { fetchImpl: deps.campaignDraftFetchImpl, env: deps.campaignDraftEnv },
     }),
     [CAMPAIGNS_ATTRIBUTE_KIND]: createAttributionProcessor(),
+    [RETENTION_SWEEP_KIND]: async (job, ctx) => {
+      await runRetentionSweep(ctx.pool, requireTenant(job));
+    },
+    [PERSON_DELETE_KIND]: processPersonDelete,
+    [PERSON_EXPORT_KIND]: processPersonExport,
     [GLOFOX_SYNC_KINDS[0]]: syncProcessor(() => erase(membersSpec)),
     [GLOFOX_SYNC_KINDS[1]]: syncProcessor(() => erase(membershipsSpec)),
     [GLOFOX_SYNC_KINDS[2]]: syncProcessor(() => erase(eventsSpec)),
@@ -244,7 +255,8 @@ export function createGlofoxProcessors(
         ]);
       }
 
-      // One ordered statement preserves the established eight-query fan-out.
+      // One ordered statement preserves the established query-count while the
+      // day-keyed retention sweep trails all derivations.
       // Segment execution itself later enqueues the day-deduped lifecycle
       // proposal, so proposal creation cannot race segment recomputation.
       await ctx.pool.query(
@@ -262,8 +274,11 @@ export function createGlofoxProcessors(
          ), briefing_job as (
            select app.enqueue_job($17, $18, $19, now(), 100, 5, $20) as id
            from attribution_job
+         ), retention_job as (
+           select app.enqueue_job($21, $22, $23, now(), 100, 5, $24) as id
+           from briefing_job
          )
-         select id from briefing_job`,
+         select id from retention_job`,
         [
           GLOFOX_DETECT_DELETIONS_KIND,
           JSON.stringify({}),
@@ -285,6 +300,10 @@ export function createGlofoxProcessors(
           JSON.stringify({}),
           tenantId,
           `${DERIVE_BRIEFING_KIND}:${tenantId}:${hourBucket}`,
+          RETENTION_SWEEP_KIND,
+          JSON.stringify({}),
+          tenantId,
+          `${RETENTION_SWEEP_KIND}:${tenantId}:${dayBucket}`,
         ],
       );
     },

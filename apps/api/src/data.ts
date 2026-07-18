@@ -1039,3 +1039,151 @@ export async function cancelCampaign(
   );
   return parseInternal(z.array(campaignRowSchema), data ?? [], "cancelCampaign")[0] ?? null;
 }
+
+// -- data rights (migration 0025) --------------------------------------------
+
+export const retentionPolicySchema = z.object({
+  id: z.string().uuid(),
+  tenant_id: z.string().uuid().nullable(),
+  data_class: z.enum([
+    "comms_content",
+    "ai_artifacts",
+    "raw_payloads",
+    "import_quarantine",
+    "webhook_events",
+    "reconciliations",
+  ]),
+  retention_days: z.number().int().nonnegative(),
+  action: z.enum(["delete", "scrub_body", "pseudonymize"]),
+  legal_basis: z.string(),
+  preserves: z.string(),
+  version: z.number().int().positive(),
+  created_at: z.string(),
+});
+export type RetentionPolicyRow = z.infer<typeof retentionPolicySchema>;
+
+const RETENTION_POLICY_COLUMNS =
+  "id, tenant_id, data_class, retention_days, action, legal_basis, preserves, version, created_at";
+
+/** Latest tenant policy wins over the latest global policy for each class. */
+export async function fetchEffectiveRetentionPolicies(
+  client: KeloSupabaseClient,
+  tenantId: string,
+): Promise<RetentionPolicyRow[]> {
+  const data = await run(
+    from(client, "retention_policies")
+      .select(RETENTION_POLICY_COLUMNS)
+      .or(`tenant_id.is.null,tenant_id.eq.${tenantId}`)
+      .order("version", { ascending: false }),
+    "fetchEffectiveRetentionPolicies",
+  );
+  const rows = parseInternal(
+    z.array(retentionPolicySchema),
+    data ?? [],
+    "fetchEffectiveRetentionPolicies",
+  );
+  const effective = new Map<RetentionPolicyRow["data_class"], RetentionPolicyRow>();
+  // Rows arrive version-descending. Process globals first, then tenant rows so
+  // the newest tenant-specific definition always replaces the default.
+  for (const row of rows.filter((candidate) => candidate.tenant_id === null)) {
+    if (!effective.has(row.data_class)) effective.set(row.data_class, row);
+  }
+  for (const row of rows.filter((candidate) => candidate.tenant_id === tenantId)) {
+    // The legacy provider inbox has no tenant_id. Until that schema is
+    // tenant-attributed, only its global policy can be safely effective.
+    if (row.data_class === "webhook_events") continue;
+    const current = effective.get(row.data_class);
+    if (current?.tenant_id !== tenantId) effective.set(row.data_class, row);
+  }
+  return [...effective.values()].sort((a, b) => a.data_class.localeCompare(b.data_class));
+}
+
+export const personDeletionSchema = z.object({
+  id: z.string().uuid(),
+  tenant_id: z.string().uuid(),
+  person_id: z.string().uuid(),
+  requested_by: z.string().uuid().nullable(),
+  reason: z.string().nullable(),
+  mode: z.enum(["pseudonymize", "hard"]),
+  scrubbed_fields: z.array(z.string()).nullable(),
+  preserved_note: z.string().nullable(),
+  executed_at: z.string().nullable(),
+  created_at: z.string(),
+});
+export type PersonDeletionRow = z.infer<typeof personDeletionSchema>;
+
+export async function pseudonymizePerson(
+  client: KeloSupabaseClient,
+  input: { tenantId: string; personId: string; actorId: string; reason: string | null },
+): Promise<PersonDeletionRow> {
+  const data = await rpc(client, "pseudonymize_person", {
+    p_tenant: input.tenantId,
+    p_person: input.personId,
+    p_actor: input.actorId,
+    p_reason: input.reason,
+  });
+  const result = z.union([personDeletionSchema, z.array(personDeletionSchema)]).safeParse(data);
+  if (!result.success) {
+    throw new Error(`pseudonymizePerson: unexpected RPC row shape (${result.error.message})`);
+  }
+  const row = Array.isArray(result.data) ? result.data[0] : result.data;
+  if (row === undefined) throw new Error("pseudonymizePerson returned no erasure audit");
+  return row;
+}
+
+export async function requestPersonExport(
+  client: KeloSupabaseClient,
+  input: {
+    tenantId: string;
+    personId: string;
+    actorId: string;
+    idempotencyKey: string;
+  },
+): Promise<string> {
+  return z.string().uuid().parse(
+    await rpc(client, "request_person_export", {
+      p_tenant: input.tenantId,
+      p_person: input.personId,
+      p_actor: input.actorId,
+      p_idempotency_key: input.idempotencyKey,
+    }),
+  );
+}
+
+export const dataExportSchema = z.object({
+  id: z.string().uuid(),
+  subject_person_id: z.string().uuid().nullable(),
+  requested_by: z.string().uuid().nullable(),
+  status: z.enum(["queued", "running", "ready", "error", "expired"]),
+  artifact: z.unknown().nullable(),
+  row_counts: z.record(z.unknown()).nullable(),
+  error: z.string().nullable(),
+  expires_at: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+export type DataExportRow = z.infer<typeof dataExportSchema>;
+
+const DATA_EXPORT_COLUMNS =
+  "id, subject_person_id, requested_by, status, artifact, row_counts, error, expires_at, created_at, updated_at";
+
+export async function fetchDataExport(
+  client: KeloSupabaseClient,
+  tenantId: string,
+  exportId: string,
+): Promise<DataExportRow | null> {
+  const data = await run(
+    from(client, "data_exports")
+      .select(DATA_EXPORT_COLUMNS)
+      .eq("tenant_id", tenantId)
+      .eq("id", exportId),
+    "fetchDataExport",
+  );
+  const row = parseInternal(z.array(dataExportSchema), data ?? [], "fetchDataExport")[0];
+  if (row === undefined) return null;
+  // The bundle is visible only during its ready window. Status normalization
+  // is response-only; a later cleanup worker may durably mark it expired.
+  const isExpired =
+    row.status === "ready" && row.expires_at !== null && Date.parse(row.expires_at) <= Date.now();
+  return isExpired ? { ...row, status: "expired", artifact: null } : row;
+}
