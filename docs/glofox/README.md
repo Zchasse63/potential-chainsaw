@@ -182,7 +182,13 @@ StripeCharge: { _id, id, transaction_status (PAID|ERROR|REFUNDED [LIVE]), transa
   **The full backfill (`glofox.sync.transactions` job payload `backfillStart`) MUST start at
   `2023-11-01`** (a margin before the first observed data), NOT 13 months — a 13-month window drops
   ~18 months incl. the peak. Estimated total ≈ 2,000–2,500 transactions (plan's "775/13mo" was the
-  probe window, not the depth). Member `total_count` = **1,366** (plan said ~1,500).
+  probe window, not the depth).
+- **`/2.0/members` `total_count` = 1,366 is PEOPLE, not members** (owner-confirmed 2026-07-17).
+  That endpoint returns every contact who ever signed up — guests, single-class drop-ins, expired
+  members, leads, dormant credit-holders, plus the real members. **Actual recurring/paying members
+  ≈ 22-23** (`primary_relationship = recurring_member`, derived — phase 2). The 1,366 maps to the
+  `people` table; the ~23 is the member-count canary + the KPI that matters. NEVER surface the
+  `/2.0/members` count as "members" — that is the founding-trauma conflation in one number.
 
 ### Branch — `GET /2.0/branches/{id}` [LIVE] ([samples/branch.get.json](samples/branch.get.json))
 

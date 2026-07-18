@@ -172,7 +172,9 @@ here's what I can," plus a logged miss (the miss log grows the catalog).
 
 Scale reality check from verified data: ~2,000–2,500 transactions over **~31 months** (Dec 2023→now;
 the earlier "775/13 months" was a probe window, not the history depth — corrected by the 2026-07-17
-live depth probe, see docs/glofox/README.md §5) and **1,366 members** —
+live depth probe, see docs/glofox/README.md §5) and **1,366 people** (the `/2.0/members`
+`total_count` — everyone who ever signed up: guests, drop-ins, expired, leads, dormant
+credit-holders; **actual recurring members ≈ 22-23**, the derived canary, NOT 1,366) —
 **Kelo's performance risk is cold starts and render cost, not data volume** (2,500 rows is still
 tiny). The full backfill starts at `2023-11-01`, not 13 months back. Pinned
 assumptions (**[OWNER]** confirm the starred ones): ~1,500 people; ★ ~30–60 bookable slots/day;
