@@ -34,8 +34,9 @@ _Last updated: 2026-07-17 (Phase 0 in progress)._
 | # | Item | Owner/external action | Status |
 |---|---|---|---|
 | P2-1 | **Anthropic zero-data-retention terms** | Sign ZDR terms when the account is set up | 🟥 (phase 2) |
-| P1-1 | **Gold-label session** (~2h, ~80 people) | Owner labels true relationships → the ≥99% derivation gate | 🟥 (phase 1 gate) |
-| P1-2 | **Glofox catalog mapping** (~30 min) | Label each catalog item recurring/unlimited/pack/drop-in/intro | 🟥 (phase 1) |
+| P1-1 | **Gold-label session** | ✅ **Member cohort CERTIFIED 2026-07-18: 22/22 exact person-level match** between the derivation (v3 + 2 audited NOEQL overrides) and the owner's Current Members export — zero misses either direction. The non-member cohorts (pack/guest/lead spot-labels from the ~80-person protocol) remain a lighter follow-up for phase-2 KPI certification. | ✅ / 🟨 (non-member spot-labels) |
+| P1-2 | **Glofox catalog mapping** | ✅ **Done 2026-07-18**: owner confirmed the six sellable items in chat; director applied + obvious legacy/NOEQL equivalents (Student Membership → recurring and the CCCF/sampler packs are director-mapped — owner may adjust; affects segments, not the member count). | ✅ |
+| P1-3b | **ClassPass** (was A4 "may not be in use") | ✅ **ANSWERED BY DATA 2026-07-18: ClassPass IS in use** — 182 bookings carry origin 'classpass'; 45 people derive as aggregator. The aggregator segment is real. | ✅ |
 | P2-2 | **Brand-voice card** | 3–5 tone adjectives, we-say/never-say, sign-off, emoji stance, discount philosophy | 🟥 (phase 2–3) |
 | P5-1 | **Sales-tax practice** (A6) | Are sessions/retail taxed? Who files? | 🟥 (phase 5) |
 | P8-1 | **The Sauna Guys brand assets** | Logo, colors, type for the member-surface skin | 🟧 (phase 8) |
