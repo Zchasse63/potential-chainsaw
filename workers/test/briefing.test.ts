@@ -38,6 +38,53 @@ function fakePool(rows: unknown[]): { pool: Queryable; sql: string[] } {
   };
 }
 
+interface FakeReconciliationRow {
+  entity: string;
+  status: "match" | "drift";
+  drift_count: number;
+  checked_at: string;
+}
+
+function candidatePoolForReconciliations(rows: FakeReconciliationRow[]): {
+  pool: Queryable;
+  sql: string[];
+} {
+  const latest = new Map<string, FakeReconciliationRow>();
+  for (const row of [...rows].sort((a, b) => b.checked_at.localeCompare(a.checked_at))) {
+    if (!latest.has(row.entity)) latest.set(row.entity, row);
+  }
+  const drifts = [...latest.values()].filter((row) => row.status === "drift");
+  const candidates =
+    drifts.length === 0
+      ? []
+      : [
+          {
+            id: "data_health:reconciliation_drift",
+            category: "data_health",
+            headline_facts: {
+              drift_rows: drifts.length,
+              drift_count: drifts.reduce((sum, row) => sum + Math.abs(row.drift_count), 0),
+            },
+            impact_score:
+              Math.max(
+                drifts.length,
+                drifts.reduce((sum, row) => sum + Math.abs(row.drift_count), 0),
+              ) * 1000,
+            evidence: {
+              metric_refs: [],
+              segment_keys: [],
+              person_ids: [],
+              entities: drifts.map((row) => row.entity).sort(),
+              latest_checked_at: drifts
+                .map((row) => row.checked_at)
+                .sort()
+                .at(-1),
+            },
+          },
+        ];
+  return fakePool(candidates);
+}
+
 describe("briefing candidate generation", () => {
   it("registers derive.briefing without dropping the shared processor kinds", () => {
     expect(processors["derive.briefing"]).toBeTypeOf("function");
@@ -75,6 +122,58 @@ describe("briefing candidate generation", () => {
     await expect(buildCandidates(fake.pool, TENANT)).resolves.toEqual([]);
     expect(fake.sql[0]).toContain("threshold_percent', 20");
   });
+
+  it("omits data health when every latest entity row matches despite stale drift history", async () => {
+    const fake = candidatePoolForReconciliations([
+      { entity: "members", status: "drift", drift_count: 8, checked_at: "2026-07-18T08:00:00Z" },
+      { entity: "members", status: "match", drift_count: 0, checked_at: "2026-07-18T09:00:00Z" },
+      {
+        entity: "transactions",
+        status: "drift",
+        drift_count: 3,
+        checked_at: "2026-07-18T08:30:00Z",
+      },
+      {
+        entity: "transactions",
+        status: "match",
+        drift_count: 0,
+        checked_at: "2026-07-18T09:30:00Z",
+      },
+    ]);
+
+    await expect(buildCandidates(fake.pool, TENANT)).resolves.toEqual([]);
+    expect(fake.sql[0]).toContain("select distinct on (r.entity)");
+    expect(fake.sql[0]).toContain("now() - interval '48 hours'");
+    expect(fake.sql[0]).toContain("from latest_per_entity l");
+    expect(fake.sql[0]).toContain("where l.status = 'drift'");
+  });
+
+  it("emits data health from latest-per-entity rows when a latest row is drift", async () => {
+    const fake = candidatePoolForReconciliations([
+      { entity: "members", status: "drift", drift_count: 8, checked_at: "2026-07-18T08:00:00Z" },
+      { entity: "members", status: "match", drift_count: 0, checked_at: "2026-07-18T09:00:00Z" },
+      {
+        entity: "transactions",
+        status: "match",
+        drift_count: 0,
+        checked_at: "2026-07-18T08:30:00Z",
+      },
+      {
+        entity: "transactions",
+        status: "drift",
+        drift_count: 2,
+        checked_at: "2026-07-18T09:30:00Z",
+      },
+    ]);
+
+    await expect(buildCandidates(fake.pool, TENANT)).resolves.toEqual([
+      expect.objectContaining({
+        id: "data_health:reconciliation_drift",
+        headline_facts: { drift_rows: 1, drift_count: 2 },
+        evidence: expect.objectContaining({ entities: ["transactions"] }),
+      }),
+    ]);
+  });
 });
 
 describe("candidate selection", () => {
@@ -86,11 +185,7 @@ describe("candidate selection", () => {
       candidate("payments:a", "payments", 700),
       candidate("data_health:a", "data_health", 2),
     ]);
-    expect(selected.map((item) => item.id)).toEqual([
-      "revenue:a",
-      "payments:a",
-      "data_health:a",
-    ]);
+    expect(selected.map((item) => item.id)).toEqual(["revenue:a", "payments:a", "data_health:a"]);
   });
 
   it("returns the honest empty state when nothing clears the floor", () => {

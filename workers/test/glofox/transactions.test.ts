@@ -13,7 +13,7 @@ import {
 
 /**
  * Transactions windowing (README §7.1: no cursor — 7-day windows marching
- * forward, resumable from the committed watermark, bounded per run).
+ * forward, with a trailing overlap for late rows, bounded per run).
  */
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -26,7 +26,7 @@ function reportBodies(
 }
 
 describe("transactions window marching", () => {
-  it("marches 7-day windows from the committed watermark to now", async () => {
+  it("starts 35 days back when the committed watermark is newer, then advances to now", async () => {
     const committed = new Date(NOW.getTime() - 20 * DAY);
     const pool = createFakePool({
       syncState: { committed_watermark: committed.toISOString(), plausible_zero: true },
@@ -37,13 +37,14 @@ describe("transactions window marching", () => {
 
     expect(outcome.status).toBe("success");
     const bodies = reportBodies(client);
-    expect(bodies).toHaveLength(3); // 20d → 3 windows (7+7+6)
+    const rescanStart = new Date(NOW.getTime() - 35 * DAY);
+    expect(bodies).toHaveLength(5);
     expect(bodies[0]).toMatchObject({
-      start: unix(committed),
-      end: unix(new Date(committed.getTime() + 7 * DAY)),
+      start: unix(rescanStart),
+      end: unix(new Date(rescanStart.getTime() + 7 * DAY)),
     });
     expect(bodies[1]?.start).toBe(bodies[0]?.end);
-    expect(bodies[2]?.end).toBe(unix(NOW));
+    expect(bodies.at(-1)?.end).toBe(unix(NOW));
     // Trap 2 guard: every body carries branch_id + namespace.
     for (const call of client.calls) {
       const body = call.init?.body as Record<string, unknown>;
@@ -56,7 +57,7 @@ describe("transactions window marching", () => {
     expect(advance[0]?.values?.[2]).toBe(NOW.toISOString());
   });
 
-  it("processes at most 8 windows per run — resumable from the last candidate", async () => {
+  it("starts at an older committed watermark so backfill remains resumable and bounded", async () => {
     const committed = new Date(NOW.getTime() - 60 * DAY);
     const pool = createFakePool({
       syncState: { committed_watermark: committed.toISOString(), plausible_zero: true },
@@ -66,6 +67,7 @@ describe("transactions window marching", () => {
     await runEntitySync(pool, client, makeCtx(), transactionsSpec);
 
     expect(client.calls).toHaveLength(8); // the bounded loop, not 9
+    expect(reportBodies(client)[0]?.start).toBe(unix(committed));
     const expectedCandidate = new Date(committed.getTime() + 8 * 7 * DAY);
     const advance = callsMatching(pool.calls, "set committed_watermark");
     // NOT caught up: committed advanced only to window 8's end (committed+56d = now−4d).
