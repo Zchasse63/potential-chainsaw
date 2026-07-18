@@ -13,8 +13,7 @@ export async function buildCandidates(pool: Queryable, tenantId: string): Promis
   const result = await pool.query(
     `with tenant_clock as (
        select
-         (now() at time zone l.timezone)::date as today,
-         now() - interval '24 hours' as health_since
+         (now() at time zone l.timezone)::date as today
        from public.locations l
        where l.tenant_id = $1::uuid
        order by l.created_at, l.id
@@ -70,17 +69,23 @@ export async function buildCandidates(pool: Queryable, tenantId: string): Promis
          ), '{}'::uuid[]) as person_ids,
          (select count(*)::int from ranked_runs rr where rr.run_rank <= 2) as compared_runs
        from (values ('at_risk'), ('credits_expiring'), ('hooked')) keys(segment_key)
+     ), latest_per_entity as (
+       -- Keep candidate health aligned with the refusal fence: only the
+       -- current reconciliation state matters, not superseded drift history.
+       select distinct on (r.entity) r.entity, r.status,
+         abs(coalesce(r.drift_count, 0)) as drift_count, r.checked_at
+       from public.reconciliations r
+       where r.tenant_id = $1::uuid
+         and r.checked_at >= now() - interval '48 hours'
+       order by r.entity, r.checked_at desc
      ), health as (
        select
          count(*)::int as drift_rows,
-         coalesce(sum(abs(coalesce(r.drift_count, 0))), 0)::int as drift_count,
-         coalesce(array_agg(distinct r.entity order by r.entity), '{}'::text[]) as entities,
-         max(r.checked_at) as latest_checked_at
-       from tenant_clock tc
-       join public.reconciliations r
-         on r.tenant_id = $1::uuid
-        and r.status = 'drift'
-        and r.checked_at >= tc.health_since
+         coalesce(sum(l.drift_count), 0)::int as drift_count,
+         coalesce(array_agg(l.entity order by l.entity), '{}'::text[]) as entities,
+         max(l.checked_at) as latest_checked_at
+       from latest_per_entity l
+       where l.status = 'drift'
      )
      select * from (
        select

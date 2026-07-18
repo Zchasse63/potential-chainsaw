@@ -7,10 +7,12 @@ import { iso } from "./shared.js";
 /**
  * Transactions sync — WINDOWED, no cursor (README §7.1: the Analytics report
  * returns the full window, keep windows small). The run marches 7-day windows
- * forward from the committed watermark: [committed, min(committed+7d, now)],
- * then [end, min(end+7d, now)], … up to MAX_WINDOWS_PER_RUN per run — the
- * serverless budget is respected and the NEXT scheduled run continues from the
- * watermark (the candidate committed per window makes every window resumable).
+ * forward from min(committed, now-35d): every caught-up run overlaps the last
+ * 35 days, then continues through the committed watermark to now, up to
+ * MAX_WINDOWS_PER_RUN per run. Live sync proved that Glofox can expose a row
+ * late with a `created` timestamp before our watermark; the overlap catches
+ * those rows idempotently via upserts. candidateFor remains window.end, so the
+ * committed watermark still advances to now rather than being held back.
  *
  * First run (no committed watermark): starts at payload.backfillStart (ISO
  * date) when the job carries one, else a single trailing 7-day window.
@@ -27,6 +29,8 @@ import { iso } from "./shared.js";
  */
 
 const WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days (spec)
+const RESCAN_DAYS = 35; // late-appearing rows can carry pre-watermark `created` timestamps
+const RESCAN_MS = RESCAN_DAYS * 24 * 60 * 60 * 1000;
 const MAX_WINDOWS_PER_RUN = 8; // bounded loop for the serverless budget (spec)
 const ENTITY = "transactions";
 
@@ -51,10 +55,11 @@ export const transactionsSpec: EntitySpec<GlofoxTransactionFactRow> = {
 
   windows: (state, ctx) => {
     const now = ctx.now();
+    const rescanStart = new Date(now.getTime() - RESCAN_MS);
     let cursor =
       state.committed_watermark === null
         ? backfillStart(ctx, now)
-        : new Date(state.committed_watermark);
+        : new Date(Math.min(new Date(state.committed_watermark).getTime(), rescanStart.getTime()));
     const windows: SyncWindow[] = [];
     while (cursor < now && windows.length < MAX_WINDOWS_PER_RUN) {
       const end = new Date(Math.min(cursor.getTime() + WINDOW_MS, now.getTime()));
