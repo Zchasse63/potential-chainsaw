@@ -918,6 +918,62 @@ end
 $$;
 
 -- ---------------------------------------------------------------------------
+-- (25) Relationship typing (migration 0012): person_relationships +
+--      person_relationship_log are member-read, service-write; the log is
+--      append-only even for service_role. Seed one row per tenant; uB sees
+--      only her own and cannot insert.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; v_pa uuid; v_pb uuid; n int; raised boolean := false;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+  select id into v_pa from public.people where tenant_id = v_a limit 1;
+  select id into v_pb from public.people where tenant_id = v_b limit 1;
+
+  insert into public.person_relationships (tenant_id, person_id, relationship_type, rule_version)
+    values (v_a, v_pa, 'recurring_member', 1);
+  insert into public.person_relationships (tenant_id, person_id, relationship_type, rule_version)
+    values (v_b, v_pb, 'pack_holder', 1);
+  insert into public.person_relationship_log (tenant_id, person_id, to_primary, rule_version)
+    values (v_a, v_pa, 'recurring_member', 1);
+  insert into public.person_relationship_log (tenant_id, person_id, to_primary, rule_version)
+    values (v_b, v_pb, 'pack_holder', 1);
+
+  perform app_test.become(v_ub);
+  select count(*) into n from public.person_relationships where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(25) uB can SELECT tenant A person_relationships');
+  select count(*) into n from public.person_relationships where tenant_id = v_b;
+  perform app_test.assert(n = 1, '(25) uB cannot read her OWN person_relationships');
+  select count(*) into n from public.person_relationship_log where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(25) uB can SELECT tenant A person_relationship_log');
+
+  begin
+    insert into public.person_relationships (tenant_id, person_id, relationship_type, rule_version)
+      values (v_b, v_pb, 'guest', 1);
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(25) uB could INSERT into person_relationships');
+
+  -- The transition log is append-only even for the OWNING tenant's owner.
+  raised := false;
+  begin
+    update public.person_relationship_log set to_primary = 'x' where tenant_id = v_b;
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(25) uB could UPDATE person_relationship_log — append-only violated');
+
+  reset role;
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'public.person_relationship_log', 'update'),
+    '(25) service_role holds UPDATE on person_relationship_log — the transition log must be append-only');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
 -- Verdict
 -- ---------------------------------------------------------------------------
 do $$
