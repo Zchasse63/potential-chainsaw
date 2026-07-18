@@ -7,7 +7,9 @@ import { strictRow } from "./shared.js";
 /**
  * Memberships (the plan catalog) sync — FULL LIST every run (6 catalog items;
  * no watermark semantics: candidate/committed are set to the run start, i.e.
- * "catalog known-current as of"). Style A pagination.
+ * "catalog known-current as of"). Style A pagination runs once for the public
+ * catalog and once for private=true; rows are deduped by catalog _id across
+ * both passes before mapping.
  *
  * kelo_type is OWNER-OWNED (the A8 mapping, edited through the column-list
  * grant): the upsert's DO UPDATE SET excludes it — re-import NEVER overwrites
@@ -17,6 +19,27 @@ import { strictRow } from "./shared.js";
 
 const PAGE_LIMIT = 100;
 const ENTITY = "memberships";
+
+// Keep raw payloads byte-for-byte faithful for glofox_raw while supplying the
+// pipeline a deduped logical row stream. `pages` stages each payload's rows in
+// this identity-keyed map; `extractRows` still validates the original envelope.
+const dedupedRowsByPayload = new WeakMap<object, unknown[]>();
+
+function stageDedupedRows(payload: unknown, seenIds: Set<string>): void {
+  if (typeof payload !== "object" || payload === null) return;
+  const data = (payload as { data?: unknown }).data;
+  if (!Array.isArray(data)) return;
+
+  const rows = data.filter((row) => {
+    if (typeof row !== "object" || row === null) return true;
+    const id = (row as { _id?: unknown })._id;
+    if (typeof id !== "string") return true;
+    if (seenIds.has(id)) return false;
+    seenIds.add(id);
+    return true;
+  });
+  dedupedRowsByPayload.set(payload, rows);
+}
 
 export const membershipsSpec: EntitySpec<PlanCatalogRow> = {
   entity: ENTITY,
@@ -28,21 +51,32 @@ export const membershipsSpec: EntitySpec<PlanCatalogRow> = {
   windows: (_state, ctx) => [{ start: null, end: ctx.now() }],
 
   pages: async function* (_pool, client) {
-    let page = 1;
-    for (;;) {
-      const query = { page, limit: PAGE_LIMIT };
-      const payload = await client.fetch(withQuery("/2.0/memberships", query));
-      yield {
-        endpoint: "/2.0/memberships",
-        requestMeta: { method: "GET", path: "/2.0/memberships", query, page },
-        payload,
-      };
-      if (!styleAHasNextPage(payload)) return;
-      page += 1;
+    const seenIds = new Set<string>();
+    for (const privateCatalog of [undefined, true] as const) {
+      let page = 1;
+      for (;;) {
+        const query: Record<string, string | number | boolean> =
+          privateCatalog === true
+            ? { private: true, page, limit: PAGE_LIMIT }
+            : { page, limit: PAGE_LIMIT };
+        const payload = await client.fetch(withQuery("/2.0/memberships", query));
+        stageDedupedRows(payload, seenIds);
+        yield {
+          endpoint: "/2.0/memberships",
+          requestMeta: { method: "GET", path: "/2.0/memberships", query, page },
+          payload,
+        };
+        if (!styleAHasNextPage(payload)) break;
+        page += 1;
+      }
     }
   },
 
-  extractRows: extractStyleARows,
+  extractRows: (payload) => {
+    const parsedRows = extractStyleARows(payload);
+    if (typeof payload !== "object" || payload === null) return parsedRows;
+    return dedupedRowsByPayload.get(payload) ?? parsedRows;
+  },
 
   mapRow: (rawRow, mapCtx) => {
     const { parsed, quarantine } = strictRow(glofoxMembershipSchema, ENTITY, rawRow);
