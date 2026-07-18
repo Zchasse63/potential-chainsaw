@@ -10,6 +10,7 @@ import {
 import { envelopeMiddleware } from "./middleware/envelope.js";
 import { captureError, sentry } from "./middleware/sentry.js";
 import { registerAuthRoutes } from "./routes/auth.js";
+import { registerBriefingRoutes } from "./routes/briefing.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerImportRoutes } from "./routes/import.js";
 import { registerReportRoutes } from "./routes/reports.js";
@@ -83,6 +84,7 @@ export function createApp(deps: AppDeps = {}): Hono<AppEnv> {
   registerTenantRoutes(app, resolved);
   registerImportRoutes(app, resolved);
   registerReportRoutes(app, resolved);
+  registerBriefingRoutes(app, resolved);
 
   return app;
 }

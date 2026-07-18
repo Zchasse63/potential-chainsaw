@@ -13,6 +13,8 @@ import { runReconciliation } from "./reconcile/reconcile.js";
 import { runDeletionDetection } from "./deletion/deletion.js";
 import { recomputeAllRelationships } from "./relationships/recompute.js";
 import { recomputeSegments } from "./segments/derive.js";
+import { runBriefing } from "../briefing/generate.js";
+import type { FetchImpl } from "../briefing/synthesize.js";
 
 /**
  * Phase 1 · unit 4 — the Glofox sync job processors. Each 'glofox.sync.*'
@@ -51,7 +53,10 @@ export const DERIVE_RELATIONSHIPS_KIND = "derive.relationships";
 /** Phase 2 · unit 2 — SQL-owned deterministic behavioral segments. */
 export const DERIVE_SEGMENTS_KIND = "derive.segments";
 
-/** Logical sync-all order. The last three are enqueued in one ordered SQL
+/** Phase 2 · unit 3 — deterministic facts followed by optional AI narration. */
+export const DERIVE_BRIEFING_KIND = "derive.briefing";
+
+/** Logical sync-all order. The last four are enqueued in one ordered SQL
  * statement so relationship precedence is explicit without adding round trips. */
 export const GLOFOX_SYNC_ALL_KINDS = [
   ...GLOFOX_SYNC_KINDS,
@@ -59,6 +64,7 @@ export const GLOFOX_SYNC_ALL_KINDS = [
   GLOFOX_DETECT_DELETIONS_KIND,
   DERIVE_RELATIONSHIPS_KIND,
   DERIVE_SEGMENTS_KIND,
+  DERIVE_BRIEFING_KIND,
 ] as const;
 
 /** Test seam: inject a fake client/config/clock; production uses env. */
@@ -66,6 +72,8 @@ export interface GlofoxProcessorDeps {
   readonly client?: GlofoxClient;
   readonly config?: GlofoxConfig;
   readonly now?: () => Date;
+  readonly briefingFetchImpl?: FetchImpl;
+  readonly briefingEnv?: NodeJS.ProcessEnv;
 }
 
 function requireTenant(job: JobRow): string {
@@ -166,6 +174,16 @@ export function createGlofoxProcessors(
       await recomputeSegments(ctx.pool, tenantId);
     },
 
+    /** Briefing facts consume the latest segment snapshots, so this processor
+     * remains after derive.segments in the ordered sync-all fan-out. */
+    [DERIVE_BRIEFING_KIND]: async (job, ctx) => {
+      const tenantId = requireTenant(job);
+      await runBriefing(ctx.pool, tenantId, {
+        fetchImpl: deps.briefingFetchImpl,
+        env: deps.briefingEnv,
+      });
+    },
+
     /** Fan-out: enqueue the entity jobs + the trust-engine jobs, idempotency
      * keys scoped to the hour. Unit 1.5: reconcile + detect_deletions trail
      * the entity syncs here; their DAILY cadence (plan-final §4: daily
@@ -185,9 +203,9 @@ export function createGlofoxProcessors(
       }
 
       // One ordered statement preserves the established eight-query fan-out
-      // while creating all ten logical jobs. The CTE dependencies put segment
-      // enqueueing after relationship enqueueing; jobs retain distinct kinds
-      // and idempotency keys.
+      // while creating all eleven logical jobs. The CTE dependencies put
+      // segments after relationships and briefing after segments; jobs retain
+      // distinct kinds and idempotency keys.
       await ctx.pool.query(
         `with deletion_job as (
            select app.enqueue_job($1, $2, $3, now(), 100, 5, $4) as id
@@ -197,8 +215,11 @@ export function createGlofoxProcessors(
          ), segment_job as (
            select app.enqueue_job($9, $10, $11, now(), 100, 5, $12) as id
            from relationship_job
+         ), briefing_job as (
+           select app.enqueue_job($13, $14, $15, now(), 100, 5, $16) as id
+           from segment_job
          )
-         select id from segment_job`,
+         select id from briefing_job`,
         [
           GLOFOX_DETECT_DELETIONS_KIND,
           JSON.stringify({}),
@@ -212,6 +233,10 @@ export function createGlofoxProcessors(
           JSON.stringify({}),
           tenantId,
           `${DERIVE_SEGMENTS_KIND}:${tenantId}:${hourBucket}`,
+          DERIVE_BRIEFING_KIND,
+          JSON.stringify({}),
+          tenantId,
+          `${DERIVE_BRIEFING_KIND}:${tenantId}:${hourBucket}`,
         ],
       );
     },
