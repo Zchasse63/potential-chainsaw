@@ -23,6 +23,13 @@ _Last updated: 2026-07-17 (Phase 0 in progress)._
 | P0-9 | **Domains** (owner-questions C1) | Buy `getkelo.com` + `kelo.studio` | 🟧 | Not code-blocking; needed before the public skeleton privacy page + member surface. |
 | P0-10 | **Supabase branching / preview DBs disabled** | Enable branching on the Supabase GitHub integration (dashboard → Branches) so PRs get preview DBs (plan-final §1) | 🟧 | **Half-resolved 2026-07-17:** merge-to-main **does** auto-apply migrations (all 6 Phase-0 migrations landed on production minutes after the PR #1 merge, verified via MCP `list_migrations`), and the full attack suite was then run against the production DB non-destructively: **RLS ATTACK SUITE PASSED (PRODUCTION) — 53 assertions**, rollback verified clean. Only the preview-DB-per-PR flow remains off; CI's Postgres-17 `db` job covers PR-time verification meanwhile. |
 
+## Phase 3
+
+| # | Item | Owner/external action needed | Status | What's built & waiting |
+|---|---|---|---|---|
+| P3-1 | **CRITICAL pre-SMS-live: canonical E.164 phone (unit 3.1b)** | None (director/Sol fix) — but SMS **must not** go live until this lands | 🟥 (blocks SMS-live only; unreachable today) | The comms foundation (3.1, merged) matches STOP opt-outs and outbound SMS suppression by **exact phone-string equality**, but phones import from Glofox unnormalized. A real STOP could fail to match → opt-out silently dropped (a TCPA/carrier-compliance failure). Reviewer-caught. NOT reachable today (no Twilio account; whole SMS path is dry-run). Fix = canonical E.164 at import + enqueue + STOP lookup + suppression match, plus fail-open STOP. **Gate: no live SMS until 3.1b is merged.** |
+| P3-2 | **Resend + Twilio accounts + 10DLC** | Create Resend account (domain verify) + Twilio account; file 10DLC (P0-4). Provide keys. | 🟥 (phase-3 live-send gate) | Adapters run DRY-RUN without keys — the entire comms pipeline (policy, suppression, webhooks, send-processor) is built and test-proven now; live send needs the accounts. 10DLC has weeks of lead time — file early. |
+
 ## Phase 1
 
 | # | Item | Owner/external action needed | Status | What's built & waiting |
