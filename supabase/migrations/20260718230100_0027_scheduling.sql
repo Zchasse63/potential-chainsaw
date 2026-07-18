@@ -64,7 +64,10 @@ create table public.schedule_rules (
     references public.offering_templates (tenant_id, id) on delete cascade,
   foreign key (tenant_id, resource_id)
     references public.resources (tenant_id, id) on delete cascade,
-  check (end_date is null or end_date >= start_date)
+  check (end_date is null or end_date >= start_date),
+  -- Composite unique so scheduled_sessions can carry a tenant-consistent FK
+  -- (tenant_id, schedule_rule_id) → schedule_rules (tenant_id, id).
+  unique (tenant_id, id)
 );
 
 comment on column public.schedule_rules.rrule is
