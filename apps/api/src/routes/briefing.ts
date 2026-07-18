@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { Hono } from "hono";
 import {
   fetchBriefingArtifact,
+  fetchBriefingArchive,
   fetchFocusQueue,
   fetchStudioTimezone,
   insertBriefingFeedback,
@@ -17,6 +18,7 @@ import { authOf, tenantOf, type AppEnv, type ResolvedDeps } from "../types.js";
 import { parseBody, parseQuery } from "../validate.js";
 
 const briefingQuerySchema = z.object({ fallback: z.literal("yesterday").optional() });
+const archiveQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(100).default(20) });
 
 const feedbackSchema = z.object({
   artifact_id: z.string().uuid(),
@@ -50,6 +52,17 @@ const dismissalSchema = z
   });
 
 export function registerBriefingRoutes(app: Hono<AppEnv>, deps: ResolvedDeps): void {
+  app.get("/briefing/archive", requireAuth(deps), resolveTenant, async (c) => {
+    const { limit } = parseQuery(c, archiveQuerySchema);
+    const { userClient } = authOf(c);
+    const { tenantId } = tenantOf(c);
+    const artifacts = await fetchBriefingArchive(userClient, tenantId, limit);
+    return c.json(
+      c.var.ok({ artifacts }, { source: "mixed", definitionVersion: "1" }),
+      200,
+    );
+  });
+
   app.get("/briefing", requireAuth(deps), resolveTenant, async (c) => {
     const query = parseQuery(c, briefingQuerySchema);
     const { userClient } = authOf(c);

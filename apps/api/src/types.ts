@@ -74,6 +74,9 @@ export interface AppDeps {
   verifyAccessToken?: (accessToken: string) => Promise<{ userId: string } | null>;
   /** Build the user-scoped (RLS-enforced) Supabase client for a verified token. */
   createUserClient?: (accessToken: string) => KeloSupabaseClient;
+  /** Server-only Anthropic seam. Tests inject fetch and env; browsers never receive the key. */
+  anthropicFetch?: typeof fetch;
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface ResolvedDeps {

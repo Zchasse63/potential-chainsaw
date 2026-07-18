@@ -4,8 +4,11 @@ import { SignInScreen } from "./auth/sign-in-screen.jsx";
 import { AppShell } from "./components/app-shell.jsx";
 import { Skeleton } from "./components/skeleton.jsx";
 import { HealthRoute } from "./routes/health.jsx";
+import { AskRoute } from "./routes/ask.jsx";
+import { BriefingArchiveRoute } from "./routes/briefing-archive.jsx";
 import { ImportRoute } from "./routes/import.jsx";
 import { TodayRoute } from "./routes/today.jsx";
+import { ScheduleRoute } from "./routes/schedule.jsx";
 
 /**
  * Route tree (TanStack Router, code-based). A screen's route lands with its
@@ -56,7 +59,32 @@ const importRoute = createRoute({
   component: ImportRoute,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, healthRoute, importRoute]);
+const askRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/ask",
+  component: AskRoute,
+});
+
+const scheduleRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/schedule",
+  component: ScheduleRoute,
+});
+
+const briefingArchiveRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/briefing/archive",
+  component: BriefingArchiveRoute,
+});
+
+const routeTree = rootRoute.addChildren([
+  indexRoute,
+  askRoute,
+  scheduleRoute,
+  briefingArchiveRoute,
+  healthRoute,
+  importRoute,
+]);
 
 export const router = createRouter({ routeTree });
 
