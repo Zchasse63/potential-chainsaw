@@ -4,6 +4,7 @@ import {
   mapTwilioEvent,
   verifyResendSignature,
   verifyTwilioSignature,
+  toE164US,
   type ProviderAction,
   type SuppressionReason,
   type TwilioParams,
@@ -208,67 +209,104 @@ async function processStatus(
 async function processStop(
   client: KeloSupabaseClient,
   action: Extract<ProviderAction, { kind: "stop" }>,
-): Promise<void> {
-  const data = await run(
-    from(client, "people").select("id, tenant_id").eq("phone", action.from).limit(2),
-    "STOP person lookup",
-  );
-  const people = rows<PersonReference>(data);
-  if (people.length !== 1) {
-    throw new Error(
-      people.length === 0
-        ? `cannot resolve STOP tenant for ${action.from}`
-        : `ambiguous STOP tenant for ${action.from}`,
+): Promise<string | null> {
+  const canonicalFrom = toE164US(action.from);
+  const people =
+    canonicalFrom === null
+      ? []
+      : rows<PersonReference>(
+          await run(
+            from(client, "people").select("id, tenant_id").eq("phone_e164", canonicalFrom),
+            "STOP person lookup",
+          ),
+        );
+
+  if (people.length === 0) {
+    // One global Twilio number cannot identify a tenant when no person matches.
+    // Per-tenant numbers are the long-term fix. Never silently lose an opt-out:
+    // surface the unresolved event for review; whenever tenancy is knowable,
+    // fail OPEN (over-suppress) rather than closed.
+    console.warn(
+      "[kelo] unresolved Twilio STOP: no person matched the canonical sender; per-tenant numbers are required for tenant attribution",
     );
+    return "stop_unresolved_no_person";
   }
-  const person = people[0]!;
+
+  const peopleByTenant = new Map<string, PersonReference[]>();
+  for (const person of people) {
+    const tenantPeople = peopleByTenant.get(person.tenant_id) ?? [];
+    tenantPeople.push(person);
+    peopleByTenant.set(person.tenant_id, tenantPeople);
+  }
+
+  const tenantMatches = [...peopleByTenant.entries()].map(([tenantId, tenantPeople]) => ({
+    tenantId,
+    people: tenantPeople,
+    personId: tenantPeople.length === 1 ? tenantPeople[0]!.id : null,
+  }));
 
   await run(
     from(client, "comms_suppressions").upsert(
-      {
-        tenant_id: person.tenant_id,
-        person_id: person.id,
+      tenantMatches.map((match) => ({
+        tenant_id: match.tenantId,
+        person_id: match.personId,
         channel: "sms",
-        address: action.from,
+        address: canonicalFrom,
         reason: "stop_reply",
-      },
+      })),
       { onConflict: "tenant_id,channel,address", ignoreDuplicates: true },
     ),
     "STOP suppression insert",
   );
+
+  // Consent evidence is person-scoped and person_id is NOT NULL, so an
+  // ambiguous tenant gets one revocation per matching person while its
+  // address suppression and inbound log deliberately remain unattributed.
   await run(
-    from(client, "communication_consents").insert({
-      tenant_id: person.tenant_id,
-      person_id: person.id,
-      channel: "sms",
-      status: "revoked",
-      evidence: {
-        source: "stop_reply",
-        details: { provider: "twilio", provider_message_id: action.providerMessageId },
-      },
-    }),
+    from(client, "communication_consents").insert(
+      tenantMatches.flatMap((match) =>
+        match.people.map((person) => ({
+          tenant_id: match.tenantId,
+          person_id: person.id,
+          channel: "sms",
+          status: "revoked",
+          evidence: {
+            source: "stop_reply",
+            details: { provider: "twilio", provider_message_id: action.providerMessageId },
+          },
+        })),
+      ),
+    ),
     "STOP consent evidence insert",
   );
   await run(
-    from(client, "comms_log").insert({
-      tenant_id: person.tenant_id,
-      person_id: person.id,
-      channel: "sms",
-      direction: "inbound",
-      body_preview: action.body.slice(0, 200),
-      to_address: action.from,
-      provider: "twilio",
-      provider_message_id: action.providerMessageId,
-      status: "delivered",
-      status_detail: "inbound STOP",
-    }),
+    from(client, "comms_log").insert(
+      tenantMatches.map((match) => ({
+        tenant_id: match.tenantId,
+        person_id: match.personId,
+        channel: "sms",
+        direction: "inbound",
+        body_preview: action.body.slice(0, 200),
+        to_address: canonicalFrom,
+        provider: "twilio",
+        provider_message_id: action.providerMessageId,
+        status: "delivered",
+        status_detail: "inbound STOP",
+      })),
+    ),
     "STOP inbound comms log insert",
   );
+
+  return null;
 }
 
-async function processAction(client: KeloSupabaseClient, action: ProviderAction): Promise<void> {
+async function processAction(
+  client: KeloSupabaseClient,
+  action: ProviderAction,
+): Promise<string | null> {
   if (action.kind === "status") await processStatus(client, action);
-  if (action.kind === "stop") await processStop(client, action);
+  if (action.kind === "stop") return processStop(client, action);
+  return null;
 }
 
 async function processPersisted(
@@ -279,8 +317,8 @@ async function processPersisted(
   now: Date,
 ): Promise<void> {
   try {
-    await processAction(client, action);
-    await finishInbox(client, provider, eventId, "processed", now, null);
+    const detail = await processAction(client, action);
+    await finishInbox(client, provider, eventId, "processed", now, detail);
   } catch (error) {
     const detail = (error instanceof Error ? error.message : "unknown webhook error").slice(
       0,

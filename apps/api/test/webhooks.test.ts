@@ -38,6 +38,38 @@ async function resendHeaders(rawBody: string, secretText: string, id = "evt_1") 
   };
 }
 
+async function twilioRequest(
+  params: Record<string, string>,
+  token: string,
+): Promise<{ url: string; body: string; headers: Record<string, string> }> {
+  const url = "http://localhost/api/v1/webhooks/twilio";
+  let signedContent = url;
+  for (const name of Object.keys(params).sort()) signedContent += `${name}${params[name]}`;
+  const tokenBytes = new TextEncoder().encode(token);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    tokenBytes,
+    { name: "HMAC", hash: "SHA-1" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signedContent));
+  return {
+    url,
+    body: new URLSearchParams(params).toString(),
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      "x-twilio-signature": toBase64(signature),
+    },
+  };
+}
+
+function inboxHandler(calls: RecordedCall[]) {
+  return calls.some((call) => call.method === "upsert")
+    ? { data: [{ id: "inbox-stop" }] }
+    : { data: null };
+}
+
 describe("public provider webhooks", () => {
   it("401s an invalid Resend signature before creating or touching a DB client", async () => {
     const createWebhookClient = vi.fn();
@@ -142,5 +174,178 @@ describe("public provider webhooks", () => {
       address: "person@example.com",
       reason: "hard_bounce",
     });
+  });
+
+  it("matches an E.164 STOP through phone_e164 when the imported phone was raw", async () => {
+    const tenantId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const personId = "11111111-1111-4111-8111-111111111111";
+    const fake = fakeUserClient({
+      webhook_events: inboxHandler,
+      people: (calls) => ({
+        data: calls.some(
+          (call) =>
+            call.method === "eq" &&
+            call.args[0] === "phone_e164" &&
+            call.args[1] === "+18135551234",
+        )
+          ? [{ id: personId, tenant_id: tenantId, source_phone: "813-555-1234" }]
+          : [],
+      }),
+    });
+    const token = "synthetic-twilio-token";
+    const request = await twilioRequest(
+      {
+        MessageSid: "SM_stop_raw",
+        OptOutType: "STOP",
+        From: "+18135551234",
+        To: "+18135550000",
+        Body: "STOP",
+      },
+      token,
+    );
+    const app = createApp({
+      createWebhookClient: () => fake.client,
+      webhookEnv: { TWILIO_AUTH_TOKEN: token },
+      webhookNow: () => new Date("2026-07-18T12:00:00Z"),
+    });
+
+    expect(
+      (
+        await app.request(request.url, {
+          method: "POST",
+          headers: request.headers,
+          body: request.body,
+        })
+      ).status,
+    ).toBe(200);
+
+    expect(fake.calls).toContainEqual({
+      table: "people",
+      method: "eq",
+      args: ["phone_e164", "+18135551234"],
+    });
+    expect(fake.calls).not.toContainEqual({
+      table: "people",
+      method: "limit",
+      args: expect.anything(),
+    });
+    const suppression = fake.calls.find(
+      (call) => call.table === "comms_suppressions" && call.method === "upsert",
+    );
+    expect(suppression?.args[0]).toEqual([
+      {
+        tenant_id: tenantId,
+        person_id: personId,
+        channel: "sms",
+        address: "+18135551234",
+        reason: "stop_reply",
+      },
+    ]);
+  });
+
+  it("fails open across every tenant sharing a STOP number", async () => {
+    const tenantA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const tenantB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const fake = fakeUserClient({
+      webhook_events: inboxHandler,
+      people: () => ({
+        data: [
+          { id: "11111111-1111-4111-8111-111111111111", tenant_id: tenantA },
+          { id: "22222222-2222-4222-8222-222222222222", tenant_id: tenantA },
+          { id: "33333333-3333-4333-8333-333333333333", tenant_id: tenantB },
+        ],
+      }),
+    });
+    const token = "synthetic-twilio-token";
+    const request = await twilioRequest(
+      {
+        MessageSid: "SM_stop_shared",
+        OptOutType: "STOP",
+        From: "+18135551234",
+        To: "+18135550000",
+        Body: "STOP",
+      },
+      token,
+    );
+    const app = createApp({
+      createWebhookClient: () => fake.client,
+      webhookEnv: { TWILIO_AUTH_TOKEN: token },
+    });
+
+    await app.request(request.url, {
+      method: "POST",
+      headers: request.headers,
+      body: request.body,
+    });
+
+    const suppression = fake.calls.find(
+      (call) => call.table === "comms_suppressions" && call.method === "upsert",
+    );
+    expect(suppression?.args[0]).toEqual([
+      expect.objectContaining({ tenant_id: tenantA, person_id: null }),
+      expect.objectContaining({
+        tenant_id: tenantB,
+        person_id: "33333333-3333-4333-8333-333333333333",
+      }),
+    ]);
+    const consent = fake.calls.find(
+      (call) => call.table === "communication_consents" && call.method === "insert",
+    );
+    expect(consent?.args[0]).toHaveLength(3);
+    const inbound = fake.calls.find(
+      (call) => call.table === "comms_log" && call.method === "insert",
+    );
+    expect(inbound?.args[0]).toEqual([
+      expect.objectContaining({ tenant_id: tenantA, person_id: null }),
+      expect.objectContaining({
+        tenant_id: tenantB,
+        person_id: "33333333-3333-4333-8333-333333333333",
+      }),
+    ]);
+  });
+
+  it("processes an unresolved STOP with a review note instead of discarding it", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fake = fakeUserClient({
+      webhook_events: inboxHandler,
+      people: () => ({ data: [] }),
+    });
+    const token = "synthetic-twilio-token";
+    const request = await twilioRequest(
+      {
+        MessageSid: "SM_stop_unknown",
+        OptOutType: "STOP",
+        From: "+18135559999",
+        To: "+18135550000",
+        Body: "STOP",
+      },
+      token,
+    );
+    const app = createApp({
+      createWebhookClient: () => fake.client,
+      webhookEnv: { TWILIO_AUTH_TOKEN: token },
+    });
+
+    const response = await app.request(request.url, {
+      method: "POST",
+      headers: request.headers,
+      body: request.body,
+    });
+
+    expect(response.status).toBe(200);
+    const finalized = fake.calls.find(
+      (call) => call.table === "webhook_events" && call.method === "update",
+    );
+    expect(finalized?.args[0]).toMatchObject({
+      status: "processed",
+      error: "stop_unresolved_no_person",
+    });
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining("unresolved Twilio STOP"));
+    expect(
+      fake.calls.some((call) =>
+        ["comms_suppressions", "communication_consents", "comms_log"].includes(call.table),
+      ),
+    ).toBe(false);
+    warning.mockRestore();
   });
 });

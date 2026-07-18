@@ -125,6 +125,14 @@ describe("mapMember — synthetic edge cases", () => {
     expect(person[0]!.phone).toBeNull();
   });
 
+  it("preserves a raw phone for the generated phone_e164 column", () => {
+    const member = glofoxMemberSchema.parse(minimalMemberRaw({ phone: "813-555-1234" }));
+    const { person } = partitionPersonRows(mapMember(member, { tenantId: TENANT }));
+
+    expect(person[0]!.phone).toBe("813-555-1234");
+    expect(person[0]).not.toHaveProperty("phone_e164");
+  });
+
   it("active:false mirrors the soft-delete (never purges)", () => {
     const member = glofoxMemberSchema.parse(minimalMemberRaw({ active: false }));
     const { person } = partitionPersonRows(mapMember(member, { tenantId: TENANT }));
