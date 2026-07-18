@@ -125,6 +125,19 @@ sources. Full details per operation: [openapi.json](openapi.json).
   (100%-comp structure) and are recovered by the owner's A8 catalog mapping marking NOEQL recurring.
   **The member-count canary target is 22 (not 23); the owner's member list is the gold-label positive
   set.** (Member PII stays OUT of the repo — public — used only at validation via service creds.)
+- **The NOEQL partner channel (owner-explained 2026-07-17; unique to this studio):** NoEqual (NOEQL)
+  is a partner gym on **PushPress**; a custom PushPress→Glofox API integration lets their members buy
+  this studio's memberships inside PushPress. **Billing happens on NoEqual's side; the studio invoices
+  NoEqual monthly.** Because Glofox refuses true $0 memberships, these run as **$1 / CASH / 100%-discount
+  ("NOEQL") memberships** — a deliberate workaround. Of the two NOEQL members: one is **genuinely
+  comped** (the partner gym's owner, NOEQL Unlimited) and one is a **real 4-class recurring member
+  billed via the partnership** (NOEQL Monthly). Implications: (1) both COUNT as recurring members
+  (they're in the owner's Current Members ground truth); (2) their $1 transactions are placeholders —
+  **revenue/MRR must NEVER treat NOEQL $1 rows as real revenue** (real revenue arrives as the monthly
+  partner invoice, outside Glofox — a phase-2 revenue-dictionary line: partner-invoiced revenue is
+  recorded manually or excluded-and-labeled, never inferred from the $1 rows); (3) NOEQL membership
+  items may be private/non-sellable in the catalog API — verify the catalog import captures private
+  items so the A8 kelo_type mapping can recover these members.
 
 ### Plan catalog — `GET /2.0/memberships` [LIVE] ([samples/memberships.get.json](samples/memberships.get.json))
 
