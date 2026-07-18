@@ -38,6 +38,9 @@ importers:
       '@hono/node-server':
         specifier: 2.0.10
         version: 2.0.10(hono@4.12.30)
+      '@kelo/comms':
+        specifier: workspace:*
+        version: link:../../packages/comms
       '@kelo/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -131,6 +134,12 @@ importers:
         specifier: 5.3.0
         version: 5.3.0
 
+  packages/comms:
+    devDependencies:
+      vitest:
+        specifier: 4.1.10
+        version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@20.19.43)(jsdom@29.1.1)(vite@8.1.5(@types/node@20.19.43)(jiti@1.21.7))
+
   packages/contracts:
     dependencies:
       zod:
@@ -165,6 +174,9 @@ importers:
 
   workers:
     dependencies:
+      '@kelo/comms':
+        specifier: workspace:*
+        version: link:../packages/comms
       '@kelo/contracts':
         specifier: workspace:*
         version: link:../packages/contracts

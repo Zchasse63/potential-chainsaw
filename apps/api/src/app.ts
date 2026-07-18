@@ -15,6 +15,7 @@ import { registerHealthRoutes } from "./routes/health.js";
 import { registerImportRoutes } from "./routes/import.js";
 import { registerReportRoutes } from "./routes/reports.js";
 import { registerTenantRoutes } from "./routes/tenant.js";
+import { registerWebhookRoutes, type WebhookDeps } from "./routes/webhooks.js";
 import type { AppDeps, AppEnv } from "./types.js";
 
 /**
@@ -24,7 +25,7 @@ import type { AppDeps, AppEnv } from "./types.js";
  * requireAuth → resolveTenant (SOLE source of tenant id) → requireRole →
  * requireIdempotencyKey on mutations.
  */
-export function createApp(deps: AppDeps = {}): Hono<AppEnv> {
+export function createApp(deps: AppDeps & WebhookDeps = {}): Hono<AppEnv> {
   const resolved = resolveDeps(deps);
   const app = new Hono<AppEnv>().basePath("/api/v1");
 
@@ -80,6 +81,9 @@ export function createApp(deps: AppDeps = {}): Hono<AppEnv> {
   });
 
   registerHealthRoutes(app, resolved);
+  // Public provider callbacks are mounted outside every auth/tenant middleware
+  // chain. Their verified raw-body signature is the authentication boundary.
+  registerWebhookRoutes(app, deps);
   registerAuthRoutes(app, resolved);
   registerTenantRoutes(app, resolved);
   registerImportRoutes(app, resolved);

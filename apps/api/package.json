@@ -20,6 +20,7 @@
   "dependencies": {
     "@hono/node-server": "2.0.10",
     "@kelo/contracts": "workspace:*",
+    "@kelo/comms": "workspace:*",
     "@kelo/db": "workspace:*",
     "@sentry/node": "10.66.0",
     "@supabase/supabase-js": "2.110.7",

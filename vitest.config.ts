@@ -10,6 +10,7 @@ export default defineConfig({
     // same code `tsc -b` compiles, without requiring a prior build.
     alias: {
       "@kelo/contracts": `${root}packages/contracts/src/index.ts`,
+      "@kelo/comms": `${root}packages/comms/src/index.ts`,
       "@kelo/db": `${root}packages/db/src/index.ts`,
       "@kelo/glofox": `${root}packages/glofox/src/index.ts`,
       "@kelo/workers": `${root}workers/src/index.ts`,

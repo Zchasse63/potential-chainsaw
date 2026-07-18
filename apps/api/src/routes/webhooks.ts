@@ -1,0 +1,351 @@
+import type { Hono } from "hono";
+import {
+  mapResendEvent,
+  mapTwilioEvent,
+  verifyResendSignature,
+  verifyTwilioSignature,
+  type ProviderAction,
+  type SuppressionReason,
+  type TwilioParams,
+} from "@kelo/comms";
+import { createServiceRoleClient, type KeloSupabaseClient } from "@kelo/db";
+import type { AppEnv } from "../types.js";
+
+interface QueryError {
+  message: string;
+}
+
+interface QueryResult {
+  data: unknown;
+  error: QueryError | null;
+}
+
+interface ServiceBuilder extends PromiseLike<QueryResult> {
+  select(columns?: string): ServiceBuilder;
+  insert(values: unknown): ServiceBuilder;
+  upsert(
+    values: unknown,
+    options?: { onConflict?: string; ignoreDuplicates?: boolean },
+  ): ServiceBuilder;
+  update(values: unknown): ServiceBuilder;
+  eq(column: string, value: unknown): ServiceBuilder;
+  in(column: string, values: readonly unknown[]): ServiceBuilder;
+  limit(count: number): ServiceBuilder;
+}
+
+export interface WebhookDeps {
+  createWebhookClient?: () => KeloSupabaseClient;
+  webhookEnv?: Record<string, string | undefined>;
+  webhookNow?: () => Date;
+}
+
+interface LogReference {
+  id: string;
+  tenant_id: string;
+  person_id: string | null;
+  channel: "email" | "sms";
+  to_address: string;
+  status: string;
+}
+
+interface PersonReference {
+  id: string;
+  tenant_id: string;
+}
+
+function from(client: KeloSupabaseClient, table: string): ServiceBuilder {
+  return client.from(table) as unknown as ServiceBuilder;
+}
+
+async function run(builder: ServiceBuilder, label: string): Promise<unknown> {
+  const { data, error } = await builder;
+  if (error !== null) throw new Error(`${label} failed: ${error.message}`);
+  return data;
+}
+
+function rows<T>(data: unknown): T[] {
+  return Array.isArray(data) ? (data as T[]) : [];
+}
+
+function eventIdForTwilio(params: Record<string, string>): string | null {
+  const sid = params["MessageSid"] ?? params["SmsSid"];
+  if (sid === undefined || sid === "") return null;
+  const transition = params["OptOutType"] ?? params["MessageStatus"] ?? params["SmsStatus"];
+  return transition === undefined || transition === "" ? sid : `${sid}:${transition.toUpperCase()}`;
+}
+
+function twilioParams(rawBody: string): {
+  signatureParams: TwilioParams;
+  payload: Record<string, string>;
+} {
+  const parsed = new URLSearchParams(rawBody);
+  const signatureParams: TwilioParams = {};
+  const payload: Record<string, string> = {};
+  for (const key of new Set(parsed.keys())) {
+    const values = parsed.getAll(key);
+    signatureParams[key] = values.length === 1 ? values[0]! : values;
+    payload[key] = values.at(-1) ?? "";
+  }
+  return { signatureParams, payload };
+}
+
+async function insertInbox(
+  client: KeloSupabaseClient,
+  provider: "resend" | "twilio",
+  eventId: string,
+  payload: unknown,
+): Promise<boolean> {
+  const data = await run(
+    from(client, "webhook_events")
+      .upsert(
+        { provider, event_id: eventId, payload, status: "received" },
+        { onConflict: "provider,event_id", ignoreDuplicates: true },
+      )
+      .select("id")
+      .limit(1),
+    "webhook inbox insert",
+  );
+  if (rows<{ id: string }>(data).length > 0) return true;
+
+  // A processed/received duplicate is a no-op. An earlier inline processing
+  // error may be retried by a provider redelivery while preserving the same
+  // inbox row and event id.
+  const existing = await run(
+    from(client, "webhook_events")
+      .select("status")
+      .eq("provider", provider)
+      .eq("event_id", eventId)
+      .limit(1),
+    "webhook inbox duplicate lookup",
+  );
+  return rows<{ status: string }>(existing)[0]?.status === "error";
+}
+
+async function finishInbox(
+  client: KeloSupabaseClient,
+  provider: "resend" | "twilio",
+  eventId: string,
+  status: "processed" | "error",
+  now: Date,
+  error: string | null,
+): Promise<void> {
+  await run(
+    from(client, "webhook_events")
+      .update({ status, processed_at: now.toISOString(), error })
+      .eq("provider", provider)
+      .eq("event_id", eventId),
+    "webhook inbox finalize",
+  );
+}
+
+async function insertSuppression(
+  client: KeloSupabaseClient,
+  row: LogReference,
+  reason: SuppressionReason,
+  address: string,
+): Promise<void> {
+  await run(
+    from(client, "comms_suppressions").upsert(
+      {
+        tenant_id: row.tenant_id,
+        person_id: row.person_id,
+        channel: row.channel,
+        address: row.channel === "email" ? address.toLowerCase() : address,
+        reason,
+      },
+      { onConflict: "tenant_id,channel,address", ignoreDuplicates: true },
+    ),
+    "provider suppression insert",
+  );
+}
+
+async function processStatus(
+  client: KeloSupabaseClient,
+  action: Extract<ProviderAction, { kind: "status" }>,
+): Promise<void> {
+  const data = await run(
+    from(client, "comms_log")
+      .select("id, tenant_id, person_id, channel, to_address, status")
+      .eq("provider_message_id", action.providerMessageId)
+      .limit(1),
+    "provider message lookup",
+  );
+  const row = rows<LogReference>(data)[0];
+  if (row === undefined) {
+    throw new Error(`no comms_log row for provider message ${action.providerMessageId}`);
+  }
+
+  const allowedPriorStatuses: Record<typeof action.status, readonly string[]> = {
+    sent: ["queued", "sent"],
+    delivered: ["queued", "sent"],
+    bounced: ["queued", "sent", "delivered"],
+    failed: ["queued", "sent"],
+    suppressed: ["queued", "sent", "delivered"],
+  };
+
+  // Resolve tenant through the message first, then scope every service-role
+  // mutation explicitly by both row id and resolved tenant id. The prior-state
+  // predicate also prevents an out-of-order `sent` callback from regressing a
+  // row that is already delivered/bounced/failed.
+  if (action.suppressionReason !== undefined) {
+    await insertSuppression(
+      client,
+      row,
+      action.suppressionReason,
+      action.suppressionAddress ?? row.to_address,
+    );
+  }
+  await run(
+    from(client, "comms_log")
+      .update({ status: action.status, status_detail: action.detail ?? null })
+      .eq("id", row.id)
+      .eq("tenant_id", row.tenant_id)
+      .in("status", allowedPriorStatuses[action.status]),
+    "provider status update",
+  );
+}
+
+async function processStop(
+  client: KeloSupabaseClient,
+  action: Extract<ProviderAction, { kind: "stop" }>,
+): Promise<void> {
+  const data = await run(
+    from(client, "people").select("id, tenant_id").eq("phone", action.from).limit(2),
+    "STOP person lookup",
+  );
+  const people = rows<PersonReference>(data);
+  if (people.length !== 1) {
+    throw new Error(
+      people.length === 0
+        ? `cannot resolve STOP tenant for ${action.from}`
+        : `ambiguous STOP tenant for ${action.from}`,
+    );
+  }
+  const person = people[0]!;
+
+  await run(
+    from(client, "comms_suppressions").upsert(
+      {
+        tenant_id: person.tenant_id,
+        person_id: person.id,
+        channel: "sms",
+        address: action.from,
+        reason: "stop_reply",
+      },
+      { onConflict: "tenant_id,channel,address", ignoreDuplicates: true },
+    ),
+    "STOP suppression insert",
+  );
+  await run(
+    from(client, "communication_consents").insert({
+      tenant_id: person.tenant_id,
+      person_id: person.id,
+      channel: "sms",
+      status: "revoked",
+      evidence: {
+        source: "stop_reply",
+        details: { provider: "twilio", provider_message_id: action.providerMessageId },
+      },
+    }),
+    "STOP consent evidence insert",
+  );
+  await run(
+    from(client, "comms_log").insert({
+      tenant_id: person.tenant_id,
+      person_id: person.id,
+      channel: "sms",
+      direction: "inbound",
+      body_preview: action.body.slice(0, 200),
+      to_address: action.from,
+      provider: "twilio",
+      provider_message_id: action.providerMessageId,
+      status: "delivered",
+      status_detail: "inbound STOP",
+    }),
+    "STOP inbound comms log insert",
+  );
+}
+
+async function processAction(client: KeloSupabaseClient, action: ProviderAction): Promise<void> {
+  if (action.kind === "status") await processStatus(client, action);
+  if (action.kind === "stop") await processStop(client, action);
+}
+
+async function processPersisted(
+  client: KeloSupabaseClient,
+  provider: "resend" | "twilio",
+  eventId: string,
+  action: ProviderAction,
+  now: Date,
+): Promise<void> {
+  try {
+    await processAction(client, action);
+    await finishInbox(client, provider, eventId, "processed", now, null);
+  } catch (error) {
+    const detail = (error instanceof Error ? error.message : "unknown webhook error").slice(
+      0,
+      1_000,
+    );
+    // v1 processes immediately after the durable insert. Processing errors are
+    // retained in the inbox and still ACKed; moving this exact step to a queue
+    // processor is the scale-later 200-fast/process-async shape.
+    await finishInbox(client, provider, eventId, "error", now, detail);
+  }
+}
+
+/** Public routes: no auth middleware. The provider signature is the auth. */
+export function registerWebhookRoutes(app: Hono<AppEnv>, deps: WebhookDeps = {}): void {
+  const env = () => deps.webhookEnv ?? process.env;
+  const client = () => deps.createWebhookClient?.() ?? createServiceRoleClient();
+  const now = () => deps.webhookNow?.() ?? new Date();
+
+  app.post("/webhooks/resend", async (c) => {
+    // Hono's c.req.text() reads the untouched request bytes as text. Verify
+    // this raw string before JSON.parse; reserialization breaks Svix HMACs.
+    const rawBody = await c.req.text();
+    const secret = env()["RESEND_WEBHOOK_SECRET"];
+    if (secret === undefined || secret === "") return c.text("webhook not configured", 503);
+    if (!(await verifyResendSignature(rawBody, c.req.raw.headers, secret))) {
+      return c.text("invalid signature", 401);
+    }
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(rawBody) as unknown;
+    } catch {
+      return c.text("invalid payload", 400);
+    }
+    const eventId = c.req.header("svix-id");
+    if (eventId === undefined || eventId === "") return c.text("missing event id", 400);
+    const service = client();
+    if (await insertInbox(service, "resend", eventId, payload)) {
+      await processPersisted(service, "resend", eventId, mapResendEvent(payload), now());
+    }
+    return c.json({ received: true });
+  });
+
+  app.post("/webhooks/twilio", async (c) => {
+    // Twilio signs the exact public URL plus every form field. Read raw first,
+    // then preserve all URLSearchParams values for the documented sorted-field
+    // HMAC-SHA1 calculation before applying any business logic.
+    const rawBody = await c.req.text();
+    const parsed = twilioParams(rawBody);
+    // TWILIO_WEBHOOK_AUTH may hold the same primary Auth Token in a
+    // webhook-only secret binding; fall back to the adapter's AUTH_TOKEN.
+    const token = env()["TWILIO_WEBHOOK_AUTH"] ?? env()["TWILIO_AUTH_TOKEN"];
+    if (token === undefined || token === "") return c.text("webhook not configured", 503);
+    if (
+      !(await verifyTwilioSignature(c.req.url, parsed.signatureParams, c.req.raw.headers, token))
+    ) {
+      return c.text("invalid signature", 401);
+    }
+
+    const eventId = eventIdForTwilio(parsed.payload);
+    if (eventId === null) return c.text("missing event id", 400);
+    const service = client();
+    if (await insertInbox(service, "twilio", eventId, parsed.payload)) {
+      await processPersisted(service, "twilio", eventId, mapTwilioEvent(parsed.payload), now());
+    }
+    return c.json({ received: true });
+  });
+}

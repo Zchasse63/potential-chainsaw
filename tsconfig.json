@@ -3,6 +3,8 @@
   "references": [
     { "path": "packages/contracts" },
     { "path": "packages/contracts/tsconfig.test.json" },
+    { "path": "packages/comms" },
+    { "path": "packages/comms/tsconfig.test.json" },
     { "path": "packages/db" },
     { "path": "packages/glofox" },
     { "path": "packages/glofox/tsconfig.test.json" },

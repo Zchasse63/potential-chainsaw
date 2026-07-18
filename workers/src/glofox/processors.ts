@@ -15,6 +15,8 @@ import { recomputeAllRelationships } from "./relationships/recompute.js";
 import { recomputeSegments } from "./segments/derive.js";
 import { runBriefing } from "../briefing/generate.js";
 import type { FetchImpl } from "../briefing/synthesize.js";
+import { COMMS_SEND_KIND, createCommsSendProcessor } from "../comms/send.js";
+import type { Env, FetchImpl as CommsFetchImpl, MessageAdapter } from "@kelo/comms";
 
 /**
  * Phase 1 · unit 4 — the Glofox sync job processors. Each 'glofox.sync.*'
@@ -74,6 +76,10 @@ export interface GlofoxProcessorDeps {
   readonly now?: () => Date;
   readonly briefingFetchImpl?: FetchImpl;
   readonly briefingEnv?: NodeJS.ProcessEnv;
+  readonly commsEnv?: Env;
+  readonly commsFetchImpl?: CommsFetchImpl;
+  readonly commsEmailAdapter?: MessageAdapter;
+  readonly commsSmsAdapter?: MessageAdapter;
 }
 
 function requireTenant(job: JobRow): string {
@@ -123,6 +129,13 @@ export function createGlofoxProcessors(
     };
 
   return {
+    [COMMS_SEND_KIND]: createCommsSendProcessor({
+      env: deps.commsEnv,
+      fetchImpl: deps.commsFetchImpl,
+      emailAdapter: deps.commsEmailAdapter,
+      smsAdapter: deps.commsSmsAdapter,
+      now,
+    }),
     [GLOFOX_SYNC_KINDS[0]]: syncProcessor(() => erase(membersSpec)),
     [GLOFOX_SYNC_KINDS[1]]: syncProcessor(() => erase(membershipsSpec)),
     [GLOFOX_SYNC_KINDS[2]]: syncProcessor(() => erase(eventsSpec)),
