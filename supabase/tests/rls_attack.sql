@@ -834,6 +834,90 @@ end
 $$;
 
 -- ---------------------------------------------------------------------------
+-- (23) Trust-engine tables (migration 0011): reconciliations + import_snapshots
+--      are member-read, service-write. Seed one row per tenant; uB sees only
+--      her own and cannot insert (the service role writes).
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; n int; raised boolean := false;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+
+  insert into public.reconciliations (tenant_id, entity, status) values (v_a, 'members', 'match');
+  insert into public.reconciliations (tenant_id, entity, status) values (v_b, 'members', 'drift');
+  insert into public.import_snapshots (tenant_id, entity, external_refs, ref_count)
+    values (v_a, 'members', array['a1'], 1);
+  insert into public.import_snapshots (tenant_id, entity, external_refs, ref_count)
+    values (v_b, 'members', array['b1'], 1);
+
+  perform app_test.become(v_ub);
+  select count(*) into n from public.reconciliations where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(23) uB can SELECT tenant A reconciliations');
+  select count(*) into n from public.reconciliations where tenant_id = v_b;
+  perform app_test.assert(n = 1, '(23) uB cannot read her OWN reconciliations');
+  select count(*) into n from public.import_snapshots where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(23) uB can SELECT tenant A import_snapshots');
+
+  begin
+    insert into public.reconciliations (tenant_id, entity, status) values (v_b, 'forged', 'match');
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(23) uB could INSERT into reconciliations');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (24) deletion_candidates: member-read isolation; owner/manager may resolve
+--      via the `status` COLUMN grant ONLY (positive control); no client INSERT;
+--      the evidence column external_ref is NOT client-updatable.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; n int; raised boolean := false;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+
+  insert into public.deletion_candidates (tenant_id, entity, external_ref, first_missing_at)
+    values (v_a, 'members', 'gone-a', now());
+  insert into public.deletion_candidates (tenant_id, entity, external_ref, first_missing_at)
+    values (v_b, 'members', 'gone-b', now());
+
+  perform app_test.become(v_ub);
+  select count(*) into n from public.deletion_candidates where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(24) uB can SELECT tenant A deletion_candidates');
+  select count(*) into n from public.deletion_candidates where tenant_id = v_b;
+  perform app_test.assert(n = 1, '(24) uB cannot read her OWN deletion_candidates');
+
+  -- Positive control: owner resolves her own tenant's candidate via `status`.
+  update public.deletion_candidates set status = 'dismissed' where tenant_id = v_b;
+  get diagnostics n = row_count;
+  perform app_test.assert(n = 1, '(24) owner uB could not dismiss her own deletion candidate');
+
+  begin
+    insert into public.deletion_candidates (tenant_id, entity, external_ref, first_missing_at)
+      values (v_b, 'members', 'forged', now());
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(24) uB could INSERT into deletion_candidates');
+
+  reset role;
+  perform app_test.assert(
+    has_column_privilege('authenticated', 'public.deletion_candidates', 'status', 'update'),
+    '(24) authenticated lacks the status column grant — the review UI cannot resolve');
+  perform app_test.assert(
+    not has_column_privilege('authenticated', 'public.deletion_candidates', 'external_ref', 'update'),
+    '(24) authenticated can UPDATE deletion_candidates.external_ref — evidence must be immutable');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
 -- Verdict
 -- ---------------------------------------------------------------------------
 do $$
