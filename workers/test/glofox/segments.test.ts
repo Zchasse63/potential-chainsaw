@@ -50,7 +50,9 @@ describe("derive.segments processor", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.text).toBe("select app.recompute_segments($1::uuid) as run_id");
     expect(calls[0]?.values).toEqual([TENANT]);
-    expect(pool.calls).toHaveLength(1);
+    expect(pool.calls).toHaveLength(2);
+    expect(pool.calls[1]?.text).toContain("app.enqueue_job");
+    expect(pool.calls[1]?.values?.[0]).toBe("campaigns.lifecycle");
   });
 
   it("fails loudly without a tenant", async () => {
