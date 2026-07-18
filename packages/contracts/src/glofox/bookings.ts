@@ -66,10 +66,15 @@ export const glofoxBookingSchema = z.object({
   timestamp: z.number().int(),
   /** Aggregator-channel candidate (null in all pinned samples — README §5 must-answer #2). */
   origin: z.string().nullable(),
+  // LIVE 2026-07-18: some rows serialize an EMPTY metadata as `[]` (PHP-style)
+  // instead of an object — accept and normalize to null.
   metadata: z
-    .object({
-      service: z.object({ type: z.string(), id: z.string() }).nullish(),
-    })
+    .union([
+      z.object({
+        service: z.object({ type: z.string(), id: z.string() }).nullish(),
+      }),
+      z.array(z.never()).transform(() => null),
+    ])
     .nullish(),
   batch_id: z.string().nullable(),
 });

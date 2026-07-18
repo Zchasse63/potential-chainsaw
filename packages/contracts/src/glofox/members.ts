@@ -36,7 +36,7 @@ export const glofoxMemberSchema = z.object({
   first_name: z.string(),
   last_name: z.string(),
   gender: genderSchema.optional(),
-  phone: z.string().optional(),
+  phone: z.string().nullish(),
   email: z.string(),
   /** Soft-delete flag: member deletion arrives as `MEMBER_UPDATED` with active:false (README §6). */
   active: z.boolean(),
@@ -46,11 +46,14 @@ export const glofoxMemberSchema = z.object({
    * people; the plan NAME resolves by joining `user_membership_id` / transaction
    * `plan_code` to the memberships catalog.
    */
+  // Population-variant tolerance (LIVE backfill 2026-07-18: the pinned 2-member
+  // sample hid these — 644 payg members carry NO user_membership_id, 49 carry a
+  // null/blank start_date, and status can be absent):
   membership: z.object({
     type: z.string(),
-    start_date: glofoxUnixTimestamp,
-    user_membership_id: z.string(),
-    status: z.string(),
+    start_date: glofoxUnixTimestamp.nullish(),
+    user_membership_id: z.string().nullish(),
+    status: z.string().nullish(),
   }),
   /** Aggregator-channel candidate (e.g. "classpass"); absent on some rows. */
   origin: z.string().nullable().optional(),
