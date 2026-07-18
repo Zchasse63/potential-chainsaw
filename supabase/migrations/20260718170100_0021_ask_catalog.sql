@@ -165,7 +165,7 @@ as $$
          (coalesce(sum(e.amount) filter (where e.transaction_status = 'PAID'), 0)
            + coalesce(sum(-abs(e.amount)) filter (where e.transaction_status = 'REFUNDED'), 0))::numeric,
          count(*)::int
-  from eligible e group by e.tender order by net desc, e.tender;
+  from eligible e group by e.tender order by 4 desc, e.tender;
 $$;
 
 comment on function public.ask_revenue_by_tender(uuid, date, date) is
