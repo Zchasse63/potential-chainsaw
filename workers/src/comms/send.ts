@@ -130,7 +130,7 @@ async function loadSendRow(
          and cs.channel = cl.channel
          and case
            when cl.channel = 'email' then lower(cs.address) = lower(cl.to_address)
-           else cs.address = cl.to_address
+           else public.to_e164_us(cs.address) = public.to_e164_us(cl.to_address)
          end
        order by cs.created_at desc, cs.id desc
        limit 1

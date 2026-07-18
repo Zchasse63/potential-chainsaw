@@ -96,4 +96,25 @@ describe("comms.send", () => {
     expect(update?.values?.[2]).toBe("dry_run");
     expect(String(update?.values?.[3])).toMatch(/^dry-run-/);
   });
+
+  it("blocks raw local SMS destinations against canonical E.164 suppressions", async () => {
+    const smsAdapter = { send: vi.fn(async () => ({ providerMessageId: "sms_never" })) };
+    const fake = poolWith(
+      row({
+        channel: "sms",
+        to_address: "813-555-1234",
+        suppression_reason: "stop_reply",
+      }),
+    );
+    const processor = createCommsSendProcessor({ smsAdapter });
+
+    await processor(job(), { pool: fake.pool, workerId: "worker-1" });
+
+    expect(smsAdapter.send).not.toHaveBeenCalled();
+    const select = fake.calls[0]?.text ?? "";
+    expect(select).toContain("public.to_e164_us(cs.address) = public.to_e164_us(cl.to_address)");
+    expect(select).toContain("lower(cs.address) = lower(cl.to_address)");
+    const update = fake.calls.find((call) => call.text.trimStart().startsWith("update"));
+    expect(update?.values?.slice(0, 2)).toEqual(["suppressed", "suppressed"]);
+  });
 });

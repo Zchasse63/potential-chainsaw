@@ -44,6 +44,8 @@ export function mapMember(member: GlofoxMember, ctx: MapperContext): PersonMappe
     // Empty string → NULL, never '' (a blank would poison the partial unique
     // index; a conflict on a REAL email quarantines for merge review by design).
     email: blankToNull(member.email),
+    // Preserve source provenance verbatim. Migration 0023 derives the STORED
+    // phone_e164 identity with public.to_e164_us(phone); mappers never set it.
     phone: blankToNull(member.phone),
     first_name: member.first_name,
     last_name: member.last_name,

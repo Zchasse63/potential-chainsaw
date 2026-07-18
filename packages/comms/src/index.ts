@@ -1,4 +1,5 @@
 export * from "./policy.js";
+export * from "./phone.js";
 export * from "./statusMap.js";
 export * from "./webhooks.js";
 export * from "./adapters/types.js";
