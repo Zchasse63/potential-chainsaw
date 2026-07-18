@@ -55,13 +55,28 @@ describe("endpoint wrappers parse the pinned samples", () => {
     expect(new URL(calls[0]!.url).pathname).toBe(`/prod/2.0/members/${userId}`);
   });
 
-  it("memberships.list ← memberships.get.json", async () => {
-    const { fetchImpl } = stubFetch(() => jsonResponse(loadSample("memberships.get.json")));
+  it("memberships.list ← memberships.get.json and keeps the existing no-param call", async () => {
+    const { calls, fetchImpl } = stubFetch(() => jsonResponse(loadSample("memberships.get.json")));
     const client = createGlofoxClient(testConfig, { fetchImpl, sleep: noSleep });
     const res = await client.memberships.list();
     expect(res.object).toBe("list");
     expect(res.data).toHaveLength(6);
     expect(res.data[0]!.plans[0]!.code).toBeTypeOf("number");
+    expect(new URL(calls[0]!.url).searchParams.has("private")).toBe(false);
+  });
+
+  it("memberships.list passes private=true when explicitly requested", async () => {
+    const { calls, fetchImpl } = stubFetch(() =>
+      jsonResponse(loadSample("memberships.get.json")),
+    );
+    const client = createGlofoxClient(testConfig, { fetchImpl, sleep: noSleep });
+
+    await client.memberships.list({ private: true, page: 2, limit: 25 });
+
+    const url = new URL(calls[0]!.url);
+    expect(url.searchParams.get("private")).toBe("true");
+    expect(url.searchParams.get("page")).toBe("2");
+    expect(url.searchParams.get("limit")).toBe("25");
   });
 
   it("credits.forUser ← credits.get.nonempty.json", async () => {

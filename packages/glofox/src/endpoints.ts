@@ -62,6 +62,11 @@ export interface MembersListParams extends PageParams {
   readonly utcModifiedEndDate?: Date;
 }
 
+export interface MembershipsListParams extends PageParams {
+  /** Include the private/non-sellable catalog channel when explicitly set. */
+  readonly private?: boolean;
+}
+
 export interface BookingsListParams extends PageParams {
   /** The incremental-sync watermark (`modified_start_date`). */
   readonly modifiedStartDate?: Date;
@@ -87,7 +92,7 @@ export interface GlofoxEndpoints {
   };
   readonly memberships: {
     /** GET /2.0/memberships — Style A envelope (the plan catalog). */
-    readonly list: (params?: PageParams) => Promise<GlofoxMembershipsResponse>;
+    readonly list: (params?: MembershipsListParams) => Promise<GlofoxMembershipsResponse>;
   };
   readonly credits: {
     /**
@@ -187,7 +192,7 @@ export function createEndpoints(
       list: async (params = {}) => {
         assertPageParams(params);
         const body = await glofoxFetch("/2.0/memberships", {
-          query: { page: params.page, limit: params.limit },
+          query: { private: params.private, page: params.page, limit: params.limit },
         });
         return glofoxMembershipsResponseSchema.parse(body);
       },

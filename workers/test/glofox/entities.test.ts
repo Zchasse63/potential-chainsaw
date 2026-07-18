@@ -40,6 +40,36 @@ describe("memberships upsert — kelo_type is owner-owned", () => {
       expect(setClause).not.toContain("kelo_type");
     }
   });
+
+  it("fetches public and private pages, dedupes overlap, and upserts a private item", async () => {
+    const sample = loadSample("memberships.get.json") as { data: Record<string, unknown>[] };
+    const publicItem = clone(sample.data[0]!);
+    const privateItem = clone(sample.data[0]!);
+    privateItem["_id"] = "private-partner-plan";
+    privateItem["name"] = "Private Partner Plan";
+    const plans = privateItem["plans"] as Record<string, unknown>[];
+    plans[0]!["code"] = 900000001;
+    plans[0]!["name"] = "Private Partner Plan";
+
+    const pool = createFakePool();
+    const client = createFakeClient((path) =>
+      path.includes("private=true")
+        ? styleAPage([clone(publicItem), privateItem])
+        : styleAPage([publicItem]),
+    );
+
+    const outcome = await runEntitySync(pool, client, makeCtx(), membershipsSpec);
+
+    expect(outcome.status).toBe("success");
+    expect(outcome.rowsFetched).toBe(2);
+    expect(client.calls.map((call) => call.path)).toEqual([
+      "/2.0/memberships?page=1&limit=100",
+      "/2.0/memberships?private=true&page=1&limit=100",
+    ]);
+    const upserts = callsMatching(pool.calls, "insert into public.plan_catalog");
+    expect(upserts).toHaveLength(2);
+    expect(upserts.some((call) => call.values?.[1] === "private-partner-plan")).toBe(true);
+  });
 });
 
 describe("credits — debit dedupe rule", () => {

@@ -6,7 +6,7 @@ import { callsMatching, createFakePool, makeJob, TENANT } from "./helpers.js";
 
 const MIGRATION = readFileSync(
   new URL(
-    "../../../supabase/migrations/20260717180100_0013_membership_signal.sql",
+    "../../../supabase/migrations/20260717190100_0014_relationship_overrides.sql",
     import.meta.url,
   ),
   "utf8",
@@ -15,6 +15,11 @@ const MIGRATION = readFileSync(
 const RECURRING_RULE = MIGRATION.slice(
   MIGRATION.indexOf("v_recurring :="),
   MIGRATION.indexOf("if v_recurring then"),
+);
+
+const OVERRIDE_RULE = MIGRATION.slice(
+  MIGRATION.indexOf("if not v_recurring then"),
+  MIGRATION.indexOf("-- Positive UNEXPIRED credit balance"),
 );
 
 function makeCtx(pool: ReturnType<typeof createFakePool>): TickCtx {
@@ -55,9 +60,23 @@ describe("derive.relationships processor", () => {
   });
 });
 
-describe("relationship SQL rule-version 2 contract", () => {
+describe("relationship SQL rule-version 3 contract", () => {
+  it("keeps the adjudication register narrow, audited, tenant-readable, and client-immutable", () => {
+    expect(MIGRATION).toContain("check (forced_relationship in ('recurring_member'))");
+    expect(MIGRATION).toContain("reason                text not null check (length(reason) >= 10)");
+    expect(MIGRATION).toContain("approved_by           text not null");
+    expect(MIGRATION).toMatch(
+      /on public\.relationship_overrides \(tenant_id, person_external_ref\)\s+where active/,
+    );
+    expect(MIGRATION).toContain("tenant_id in (select app.current_tenant_ids())");
+    expect(MIGRATION).toContain(
+      "revoke insert, update, delete on public.relationship_overrides from authenticated",
+    );
+    expect(MIGRATION).toContain("grant select on public.relationship_overrides to authenticated");
+  });
+
   it("ACTIVE + time classifies as recurring_member", () => {
-    expect(MIGRATION).toContain("v_rule_version constant int := 2");
+    expect(MIGRATION).toContain("v_rule_version constant int := 3");
     expect(RECURRING_RULE).toContain("v_membership_status in ('ACTIVE', 'PAUSED')");
     expect(RECURRING_RULE).toContain("v_membership_type in ('time', 'time_classes')");
     expect(MIGRATION).toContain(
@@ -90,6 +109,37 @@ describe("relationship SQL rule-version 2 contract", () => {
     expect(MIGRATION).toContain("gt.glofox_event_class = 'subscription_payment'");
     expect(MIGRATION).toContain("'corroborating_subscription_payment', v_subscription_id");
     expect(MIGRATION).toContain("'phase_1_rule', 'membership-status-based v2'");
+  });
+
+  it("ACTIVE payg + a matching active override adds recurring_member with visible evidence", () => {
+    expect(OVERRIDE_RULE).toContain("from public.relationship_overrides ro");
+    expect(OVERRIDE_RULE).toContain("where ro.tenant_id = p_tenant and ro.active");
+    expect(OVERRIDE_RULE).toContain("ro.forced_relationship = 'recurring_member'");
+    expect(OVERRIDE_RULE).toContain("v_recurring := true");
+    expect(OVERRIDE_RULE).toContain("'override_id', v_override_id");
+    expect(OVERRIDE_RULE).toContain("'override_reason', v_override_reason");
+    expect(OVERRIDE_RULE).toContain("'membership_status', v_membership_status");
+    expect(OVERRIDE_RULE).toContain("'membership_type', v_membership_type");
+    expect(OVERRIDE_RULE).toContain("'phase_1_rule', 'owner-adjudication override v3'");
+  });
+
+  it("does not consult an override when the membership signal already qualifies", () => {
+    const membershipBasis = MIGRATION.indexOf("'phase_1_rule', 'membership-status-based v2'");
+    const overrideGuard = MIGRATION.indexOf("if not v_recurring then");
+    const overrideSelect = MIGRATION.indexOf("from public.relationship_overrides ro");
+
+    expect(membershipBasis).toBeGreaterThan(MIGRATION.indexOf("if v_recurring then"));
+    expect(overrideGuard).toBeGreaterThan(membershipBasis);
+    expect(overrideSelect).toBeGreaterThan(overrideGuard);
+  });
+
+  it("an inactive override has no effect", () => {
+    expect(OVERRIDE_RULE).toMatch(/where ro\.tenant_id = p_tenant and ro\.active\s+and/s);
+  });
+
+  it("an override for a different external ref has no effect", () => {
+    expect(OVERRIDE_RULE).toContain("ro.person_external_ref = any (v_external_refs)");
+    expect(OVERRIDE_RULE).not.toContain("ro.person_external_ref is not null");
   });
 
   it("classifies positive unexpired credit balance as pack_holder", () => {
