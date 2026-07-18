@@ -33,7 +33,7 @@ _Last updated: 2026-07-17 (Phase 0 in progress)._
 
 | # | Item | Owner/external action | Status |
 |---|---|---|---|
-| P2-1 | **Anthropic zero-data-retention terms** | Sign ZDR terms when the account is set up | 🟥 (phase 2) |
+| P2-1 | **Anthropic API** | ✅ key received 2026-07-18 (validated live; stored .env-only; owner advised to rotate later since it passed through chat). **ZDR terms still unsigned** — mitigated by design: the briefing synthesis payload is PII-FREE (ids, counts, dollars, segment keys — no names/contacts); sign ZDR before any PII-bearing drafting (phase 3 outreach). | 🟨 (key ✓ / ZDR pending) |
 | P1-1 | **Gold-label session** | ✅ **Member cohort CERTIFIED 2026-07-18: 22/22 exact person-level match** between the derivation (v3 + 2 audited NOEQL overrides) and the owner's Current Members export — zero misses either direction. The non-member cohorts (pack/guest/lead spot-labels from the ~80-person protocol) remain a lighter follow-up for phase-2 KPI certification. | ✅ / 🟨 (non-member spot-labels) |
 | P1-2 | **Glofox catalog mapping** | ✅ **Done 2026-07-18**: owner confirmed the six sellable items in chat; director applied + obvious legacy/NOEQL equivalents (Student Membership → recurring and the CCCF/sampler packs are director-mapped — owner may adjust; affects segments, not the member count). | ✅ |
 | P1-3b | **ClassPass** (was A4 "may not be in use") | ✅ **ANSWERED BY DATA 2026-07-18: ClassPass IS in use** — 182 bookings carry origin 'classpass'; 45 people derive as aggregator. The aggregator segment is real. | ✅ |
