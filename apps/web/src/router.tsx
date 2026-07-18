@@ -1,21 +1,16 @@
-import {
-  createRootRoute,
-  createRoute,
-  createRouter,
-  Outlet,
-  redirect,
-} from "@tanstack/react-router";
+import { createRootRoute, createRoute, createRouter, Outlet } from "@tanstack/react-router";
 import { useAuth } from "./auth/auth-context.jsx";
 import { SignInScreen } from "./auth/sign-in-screen.jsx";
 import { AppShell } from "./components/app-shell.jsx";
 import { Skeleton } from "./components/skeleton.jsx";
 import { HealthRoute } from "./routes/health.jsx";
 import { ImportRoute } from "./routes/import.jsx";
+import { TodayRoute } from "./routes/today.jsx";
 
 /**
  * Route tree (TanStack Router, code-based). A screen's route lands with its
- * build phase (UX ruling 9 applies to routes as much as nav items): / is a
- * redirect into /health; /import ships with the import-review unit.
+ * build phase (UX ruling 9 applies to routes as much as nav items): Today is
+ * the landing route; Import review and Health are the other shipped units.
  */
 
 function RootComponent() {
@@ -46,9 +41,7 @@ const rootRoute = createRootRoute({ component: RootComponent });
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  beforeLoad: () => {
-    throw redirect({ to: "/health" });
-  },
+  component: TodayRoute,
 });
 
 const healthRoute = createRoute({

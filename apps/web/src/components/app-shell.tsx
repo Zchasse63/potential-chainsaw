@@ -11,9 +11,9 @@ import { Skeleton } from "./skeleton.jsx";
 /**
  * AppShell — owner-desktop frame (design guide §8): 232px left rail + top
  * chrome. UX ruling 9: a nav item appears ONLY when its feature ships, so
- * the rail shows exactly what exists — Health (with its quiet status dot)
- * and, since the import-review unit, Import review (with an open-exception
- * count badge). The top chrome carries the freshness indicator
+ * the rail shows exactly what exists — Today, Import review (with an open-
+ * exception count badge), and Health (with its quiet status dot). The top
+ * chrome carries the freshness indicator
  * (worst-of-sources) plus the signed-in actor.
  */
 
@@ -49,6 +49,23 @@ function ImportNavIcon() {
     >
       <path d="M2 9.5V12a1.5 1.5 0 0 0 1.5 1.5h9A1.5 1.5 0 0 0 14 12V9.5" />
       <path d="M2 9.5h3.2l1.3 2h3l1.3-2H14L11.6 3.6a1.5 1.5 0 0 0-1.4-1.1H5.8a1.5 1.5 0 0 0-1.4 1.1L2 9.5Z" />
+    </svg>
+  );
+}
+
+/** Calibrated gauge glyph for the morning review. */
+function TodayNavIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      className="h-4 w-4 text-icon-inactive"
+    >
+      <circle cx="8" cy="8" r="5.5" />
+      <path d="M8 4.5V8l2.5 1.5" />
     </svg>
   );
 }
@@ -104,7 +121,11 @@ const NAV_LINK_ACTIVE = "bg-selected-bg font-medium text-ink";
 export function AppShell({ children }: { children: ReactNode }) {
   const auth = useAuth();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const screenLabel = pathname.startsWith("/import") ? "Import review" : "Health";
+  const screenLabel = pathname.startsWith("/import")
+    ? "Import review"
+    : pathname.startsWith("/health")
+      ? "Health"
+      : "Today";
   return (
     <div className="flex min-h-screen bg-surface-app">
       <aside className="flex w-rail shrink-0 flex-col border-r border-hairline bg-surface-card">
@@ -118,12 +139,13 @@ export function AppShell({ children }: { children: ReactNode }) {
           <ul className="space-y-1">
             <li>
               <Link
-                to="/health"
+                to="/"
                 className={NAV_LINK_BASE}
+                activeOptions={{ exact: true }}
                 activeProps={{ className: NAV_LINK_ACTIVE }}
               >
-                <HealthNavDot />
-                Health
+                <TodayNavIcon />
+                Today
               </Link>
             </li>
             <li>
@@ -135,6 +157,16 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <ImportNavIcon />
                 Import review
                 <ImportNavBadge />
+              </Link>
+            </li>
+            <li>
+              <Link
+                to="/health"
+                className={NAV_LINK_BASE}
+                activeProps={{ className: NAV_LINK_ACTIVE }}
+              >
+                <HealthNavDot />
+                Health
               </Link>
             </li>
           </ul>

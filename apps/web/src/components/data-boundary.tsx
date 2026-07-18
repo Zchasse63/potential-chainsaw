@@ -40,6 +40,10 @@ export interface DataBoundaryProps<T> {
       the emptiness is real or a sync gap. */
   isEmpty?: (data: T) => boolean;
   emptyState?: ReactNode;
+  /** Optional domain-specific stale treatment. `null` is allowed when the
+      ready child already renders the stale state (for example, a prominent
+      yesterday-artifact badge). */
+  staleState?: ReactNode;
   children: (data: T, meta: EnvelopeMeta) => ReactNode;
 }
 
@@ -79,6 +83,7 @@ export function DataBoundary<T>({
   errorConsequence,
   isEmpty,
   emptyState,
+  staleState,
   children,
 }: DataBoundaryProps<T>) {
   const online = useOnlineStatus();
@@ -151,18 +156,21 @@ export function DataBoundary<T>({
           </p>
         </div>
       )}
-      {meta.stale && (
-        <div
-          role="status"
-          className="rounded-2 border border-warning-border bg-warning-tint px-4 py-2"
-        >
-          <p className="text-body font-medium text-warning-emphasis">Some data below is stale</p>
-          <p className="text-body text-warning-on-tint">
-            At least one source is 4+ hours behind. Freshness chips mark each source — treat
-            red-flagged figures as unreliable for decisions.
-          </p>
-        </div>
-      )}
+      {meta.stale &&
+        (staleState !== undefined ? (
+          staleState
+        ) : (
+          <div
+            role="status"
+            className="rounded-2 border border-warning-border bg-warning-tint px-4 py-2"
+          >
+            <p className="text-body font-medium text-warning-emphasis">Some data below is stale</p>
+            <p className="text-body text-warning-on-tint">
+              At least one source is 4+ hours behind. Freshness chips mark each source — treat
+              red-flagged figures as unreliable for decisions.
+            </p>
+          </div>
+        ))}
       {query.isRefetching === true && (
         <p role="status" className="text-chrome text-ink-muted">
           Updating…
