@@ -1,13 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchEnvelope } from "./api.js";
 import type { FreshnessBucket } from "./freshness.js";
+import type { QuarantineCause, Reconciliation } from "./import.js";
 
 /**
  * The /health response shape, mirrored from the API (the client-side
  * contract): apps/api/src/routes/health.ts assembles it from
- * apps/api/src/data.ts (sync_state / sync_runs / alerts row schemas) and
- * apps/api/src/authority.ts (AUTHORITY_MATRIX). Buckets come from
- * apps/api/src/freshness.ts — the server computes, the client renders.
+ * apps/api/src/data.ts (sync_state / sync_runs / alerts / import_quarantine /
+ * reconciliations row schemas) and apps/api/src/authority.ts
+ * (AUTHORITY_MATRIX). Buckets come from apps/api/src/freshness.ts — the
+ * server computes, the client renders.
  */
 
 export type { FreshnessBucket } from "./freshness.js";
@@ -56,11 +58,25 @@ export interface AuthorityRow {
   cutover: null;
 }
 
+/** Compact quarantine summary — the full review queue lives at /import. */
+export interface HealthQuarantineSummary {
+  open_count: number;
+  by_cause: QuarantineCause[];
+}
+
+/** Recent Kelo-vs-Glofox reconciliation; pending = the 1.5 table isn't there yet. */
+export interface HealthReconciliation {
+  pending: boolean;
+  recent: Reconciliation[];
+}
+
 export interface HealthReport {
   freshness: EntityFreshness[];
   sync_runs: SyncRun[];
   alerts: OpenAlert[];
   authority: AuthorityRow[];
+  quarantine: HealthQuarantineSummary;
+  reconciliation: HealthReconciliation;
 }
 
 /**
