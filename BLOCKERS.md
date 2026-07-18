@@ -34,7 +34,8 @@ _Last updated: 2026-07-17 (Phase 0 in progress)._
 
 | # | Item | Owner/external action needed | Status | What's built & waiting |
 |---|---|---|---|---|
-| P1-3 | **Moonshot / Kimi K3 account suspended** — `429 insufficient balance` (hit mid-1.6, 2026-07-17) | Recharge the Moonshot account, OR authorize routing coding to Sol/Codex (OpenAI) or Grok instead | 🟥 (blocks further delegated coding) | Kimi is the implementer; it's down. Units 1.4/1.5/1.6 completed just before/at the suspension (verified green). Remaining pure-code units need an implementer; 1.7 is director-run (no Kimi). Director can finish small remainders or route to Sol/Codex per the pipeline's documented fallback. |
+| P1-3 | **Moonshot / Kimi K3 account suspended** — `429 insufficient balance` (hit mid-1.6, 2026-07-17) | Recharge the Moonshot account, OR authorize routing coding to Sol/Codex (OpenAI) or Grok instead | 🟥→ resolved by switching to Sol/Codex | Superseded: Sol/Codex became the implementer from 1.8 onward. Now see P4-IMPL. |
+| P4-IMPL | **BOTH delegated implementers now down** — Sol/Codex hit **"Quota exceeded. Check your plan and billing details"** mid-Phase-4 (2026-07-18); Kimi still suspended | Owner action: top up the Codex/OpenAI billing (fastest), OR authorize the director to hand-write remaining units, OR add a third provider | 🟥 (blocks ALL delegated coding) | Phases 0–4.1 are DONE + merged + green (441 tests). Units **4.2 (scheduling)** and **4.3 (waivers)** are PARTIAL: each has a complete migration + core (4.2: 6 tables + publish RPC + 18-handler API; 4.3: 3 tables incl. append-only signatures + 4 RPCs) but is MISSING tests/web/helper and is **NOT merged** (WIP committed to branches `p4-sched`/`p4-waiver`, isolated in worktrees). Completion briefs staged (`scratchpad/brief4-2b.txt`). Nothing broken on main. Resume the moment an implementer is available. |
 
 ## Phase 2+ (recorded early so we don't forget)
 
