@@ -17,6 +17,14 @@ import { runBriefing } from "../briefing/generate.js";
 import type { FetchImpl } from "../briefing/synthesize.js";
 import { COMMS_SEND_KIND, createCommsSendProcessor } from "../comms/send.js";
 import type { Env, FetchImpl as CommsFetchImpl, MessageAdapter } from "@kelo/comms";
+import {
+  CAMPAIGNS_LIFECYCLE_KIND,
+  createLifecycleProcessor,
+} from "../campaigns/lifecycle.js";
+import {
+  CAMPAIGNS_ATTRIBUTE_KIND,
+  createAttributionProcessor,
+} from "../campaigns/attribution.js";
 
 /**
  * Phase 1 · unit 4 — the Glofox sync job processors. Each 'glofox.sync.*'
@@ -66,6 +74,8 @@ export const GLOFOX_SYNC_ALL_KINDS = [
   GLOFOX_DETECT_DELETIONS_KIND,
   DERIVE_RELATIONSHIPS_KIND,
   DERIVE_SEGMENTS_KIND,
+  CAMPAIGNS_LIFECYCLE_KIND,
+  CAMPAIGNS_ATTRIBUTE_KIND,
   DERIVE_BRIEFING_KIND,
 ] as const;
 
@@ -80,6 +90,8 @@ export interface GlofoxProcessorDeps {
   readonly commsFetchImpl?: CommsFetchImpl;
   readonly commsEmailAdapter?: MessageAdapter;
   readonly commsSmsAdapter?: MessageAdapter;
+  readonly campaignDraftFetchImpl?: typeof fetch;
+  readonly campaignDraftEnv?: NodeJS.ProcessEnv;
 }
 
 function requireTenant(job: JobRow): string {
@@ -136,6 +148,11 @@ export function createGlofoxProcessors(
       smsAdapter: deps.commsSmsAdapter,
       now,
     }),
+    [CAMPAIGNS_LIFECYCLE_KIND]: createLifecycleProcessor({
+      now,
+      draft: { fetchImpl: deps.campaignDraftFetchImpl, env: deps.campaignDraftEnv },
+    }),
+    [CAMPAIGNS_ATTRIBUTE_KIND]: createAttributionProcessor(),
     [GLOFOX_SYNC_KINDS[0]]: syncProcessor(() => erase(membersSpec)),
     [GLOFOX_SYNC_KINDS[1]]: syncProcessor(() => erase(membershipsSpec)),
     [GLOFOX_SYNC_KINDS[2]]: syncProcessor(() => erase(eventsSpec)),
@@ -185,6 +202,16 @@ export function createGlofoxProcessors(
     [DERIVE_SEGMENTS_KIND]: async (job, ctx) => {
       const tenantId = requireTenant(job);
       await recomputeSegments(ctx.pool, tenantId);
+      // Lifecycle proposals are enqueued only after segment recomputation has
+      // actually completed (not merely after its job was inserted). The day
+      // key keeps the hourly sync fan-out to one lifecycle evaluation daily.
+      const dayBucket = now().toISOString().slice(0, 10);
+      await ctx.pool.query(`select app.enqueue_job($1, $2, $3, now(), 100, 5, $4)`, [
+        CAMPAIGNS_LIFECYCLE_KIND,
+        JSON.stringify({}),
+        tenantId,
+        `${CAMPAIGNS_LIFECYCLE_KIND}:${tenantId}:${dayBucket}`,
+      ]);
     },
 
     /** Briefing facts consume the latest segment snapshots, so this processor
@@ -204,7 +231,9 @@ export function createGlofoxProcessors(
      * in unit 1.7 — until then the hour-scoped dedupe applies to them too. */
     [GLOFOX_SYNC_ALL_KIND]: async (job, ctx) => {
       const tenantId = requireTenant(job);
-      const hourBucket = now().toISOString().slice(0, 13); // YYYY-MM-DDTHH
+      const instant = now();
+      const hourBucket = instant.toISOString().slice(0, 13); // YYYY-MM-DDTHH
+      const dayBucket = instant.toISOString().slice(0, 10); // YYYY-MM-DD
       const independentlyEnqueuedKinds = [...GLOFOX_SYNC_KINDS, GLOFOX_RECONCILE_KIND] as const;
       for (const kind of independentlyEnqueuedKinds) {
         await ctx.pool.query(`select app.enqueue_job($1, $2, $3, now(), 100, 5, $4)`, [
@@ -215,10 +244,9 @@ export function createGlofoxProcessors(
         ]);
       }
 
-      // One ordered statement preserves the established eight-query fan-out
-      // while creating all eleven logical jobs. The CTE dependencies put
-      // segments after relationships and briefing after segments; jobs retain
-      // distinct kinds and idempotency keys.
+      // One ordered statement preserves the established eight-query fan-out.
+      // Segment execution itself later enqueues the day-deduped lifecycle
+      // proposal, so proposal creation cannot race segment recomputation.
       await ctx.pool.query(
         `with deletion_job as (
            select app.enqueue_job($1, $2, $3, now(), 100, 5, $4) as id
@@ -228,9 +256,12 @@ export function createGlofoxProcessors(
          ), segment_job as (
            select app.enqueue_job($9, $10, $11, now(), 100, 5, $12) as id
            from relationship_job
-         ), briefing_job as (
+         ), attribution_job as (
            select app.enqueue_job($13, $14, $15, now(), 100, 5, $16) as id
            from segment_job
+         ), briefing_job as (
+           select app.enqueue_job($17, $18, $19, now(), 100, 5, $20) as id
+           from attribution_job
          )
          select id from briefing_job`,
         [
@@ -246,6 +277,10 @@ export function createGlofoxProcessors(
           JSON.stringify({}),
           tenantId,
           `${DERIVE_SEGMENTS_KIND}:${tenantId}:${hourBucket}`,
+          CAMPAIGNS_ATTRIBUTE_KIND,
+          JSON.stringify({}),
+          tenantId,
+          `${CAMPAIGNS_ATTRIBUTE_KIND}:${tenantId}:${dayBucket}`,
           DERIVE_BRIEFING_KIND,
           JSON.stringify({}),
           tenantId,

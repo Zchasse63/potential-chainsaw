@@ -33,12 +33,27 @@ interface TableBuilder extends PromiseLike<QueryResult> {
   eq(column: string, value: unknown): TableBuilder;
   lt(column: string, value: unknown): TableBuilder;
   in(column: string, values: readonly unknown[]): TableBuilder;
+  or(filters: string): TableBuilder;
   order(column: string, options?: { ascending?: boolean }): TableBuilder;
   limit(count: number): TableBuilder;
 }
 
+interface RpcClient {
+  rpc(name: string, params?: Record<string, unknown>): PromiseLike<QueryResult>;
+}
+
 function from(client: KeloSupabaseClient, table: string): TableBuilder {
   return client.from(table) as unknown as TableBuilder;
+}
+
+async function rpc(
+  client: KeloSupabaseClient,
+  name: string,
+  params: Record<string, unknown>,
+): Promise<unknown> {
+  const { data, error } = await (client as unknown as RpcClient).rpc(name, params);
+  if (error !== null) throw new Error(`${name} RPC failed: ${error.message}`);
+  return data;
 }
 
 /** Await a query; a PostgREST error is a server defect (→ 500 + Sentry). */
@@ -673,4 +688,354 @@ export async function fetchReconciliations(
     rows: parseInternal(z.array(reconciliationRowSchema), data ?? [], "fetchReconciliations"),
     pending: false,
   };
+}
+
+// -- marketing campaigns (phase 3 · unit 2) ----------------------------------
+
+export const campaignStatusSchema = z.enum([
+  "draft",
+  "pending_approval",
+  "approved",
+  "sending",
+  "sent",
+  "cancelled",
+]);
+export const channelSchema = z.enum(["email", "sms"]);
+export const messageKindSchema = z.enum([
+  "marketing",
+  "transactional",
+  "transactional_quiet",
+]);
+export const plannedStatusSchema = z.enum([
+  "eligible",
+  "skip_no_consent",
+  "skip_suppressed",
+  "skip_quiet_hours",
+  "skip_no_address",
+]);
+
+export const campaignRowSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  segment_key: z.string(),
+  template_key: z.string(),
+  channel: channelSchema,
+  kind: messageKindSchema,
+  draft_subject: z.string().nullable(),
+  draft_body: z.string(),
+  draft_source: z.enum(["template", "ai"]),
+  status: campaignStatusSchema,
+  created_by: z.string().uuid().nullable(),
+  approved_by: z.string().uuid().nullable(),
+  approved_at: z.string().nullable(),
+  scheduled_for: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+export type CampaignRow = z.infer<typeof campaignRowSchema>;
+
+const CAMPAIGN_COLUMNS =
+  "id, name, segment_key, template_key, channel, kind, draft_subject, draft_body, draft_source, status, created_by, approved_by, approved_at, scheduled_for, created_at, updated_at";
+
+export const messageTemplateSchema = z.object({
+  id: z.string().uuid(),
+  tenant_id: z.string().uuid().nullable(),
+  key: z.string(),
+  version: z.number().int(),
+  channel: channelSchema,
+  kind: messageKindSchema,
+  subject: z.string().nullable(),
+  body: z.string(),
+  segment_key: z.string().nullable(),
+  created_at: z.string(),
+});
+export type MessageTemplate = z.infer<typeof messageTemplateSchema>;
+
+const TEMPLATE_COLUMNS =
+  "id, tenant_id, key, version, channel, kind, subject, body, segment_key, created_at";
+
+const sendPersonSchema = z.object({
+  first_name: z.string().nullable(),
+  last_name: z.string().nullable(),
+  email: z.string().nullable(),
+  phone: z.string().nullable(),
+});
+const sendPersonRelationSchema = z.union([sendPersonSchema, z.array(sendPersonSchema)]);
+const campaignSendDbSchema = z.object({
+  id: z.string().uuid(),
+  person_id: z.string().uuid(),
+  channel: channelSchema,
+  planned_status: plannedStatusSchema,
+  comms_log_id: z.string().uuid().nullable(),
+  created_at: z.string(),
+  person: sendPersonRelationSchema,
+});
+
+export interface CampaignSendView {
+  id: string;
+  person_id: string;
+  channel: "email" | "sms";
+  planned_status: z.infer<typeof plannedStatusSchema>;
+  comms_log_id: string | null;
+  created_at: string;
+  person: z.infer<typeof sendPersonSchema>;
+}
+
+const attributionSchema = z.object({
+  id: z.string().uuid(),
+  campaign_send_id: z.string().uuid(),
+  person_id: z.string().uuid(),
+  event_type: z.enum(["booking", "purchase"]),
+  event_ref: z.string(),
+  occurred_at: z.string(),
+  attributed_at: z.string(),
+  window_days: z.number().int(),
+});
+
+export async function fetchCampaigns(
+  client: KeloSupabaseClient,
+  tenantId: string,
+): Promise<CampaignRow[]> {
+  const data = await run(
+    from(client, "campaigns")
+      .select(CAMPAIGN_COLUMNS)
+      .eq("tenant_id", tenantId)
+      .order("created_at", { ascending: false }),
+    "fetchCampaigns",
+  );
+  return parseInternal(z.array(campaignRowSchema), data ?? [], "fetchCampaigns");
+}
+
+export async function fetchTemplates(
+  client: KeloSupabaseClient,
+  tenantId: string,
+): Promise<MessageTemplate[]> {
+  const data = await run(
+    from(client, "message_templates")
+      .select(TEMPLATE_COLUMNS)
+      .or(`tenant_id.is.null,tenant_id.eq.${tenantId}`)
+      .order("version", { ascending: false }),
+    "fetchTemplates",
+  );
+  return parseInternal(z.array(messageTemplateSchema), data ?? [], "fetchTemplates");
+}
+
+function latestTemplate(
+  rows: MessageTemplate[],
+  tenantId: string,
+  key: string,
+  channel: "email" | "sms",
+): MessageTemplate | null {
+  return (
+    rows
+      .filter((row) => row.key === key && row.channel === channel)
+      .sort((a, b) => {
+        const tenantOrder = Number(b.tenant_id === tenantId) - Number(a.tenant_id === tenantId);
+        return tenantOrder !== 0 ? tenantOrder : b.version - a.version;
+      })[0] ?? null
+  );
+}
+
+export async function createCampaign(
+  client: KeloSupabaseClient,
+  input: {
+    tenantId: string;
+    actorId: string;
+    name: string;
+    segmentKey: string;
+    templateKey: string;
+    channel: "email" | "sms";
+  },
+): Promise<CampaignRow> {
+  const template = latestTemplate(
+    await fetchTemplates(client, input.tenantId),
+    input.tenantId,
+    input.templateKey,
+    input.channel,
+  );
+  if (template === null) {
+    throw new ApiError(422, "template_not_found", "no matching template exists for this channel");
+  }
+  if (template.segment_key !== null && template.segment_key !== input.segmentKey) {
+    throw new ApiError(422, "template_segment_mismatch", "template is not mapped to this segment");
+  }
+  const data = await run(
+    from(client, "campaigns")
+      .insert({
+        tenant_id: input.tenantId,
+        name: input.name,
+        segment_key: input.segmentKey,
+        template_key: input.templateKey,
+        channel: input.channel,
+        kind: template.kind,
+        draft_subject: template.subject,
+        draft_body: template.body,
+        draft_source: "template",
+        status: "draft",
+        created_by: input.actorId,
+      })
+      .select(CAMPAIGN_COLUMNS),
+    "createCampaign",
+  );
+  const row = parseInternal(z.array(campaignRowSchema), data ?? [], "createCampaign")[0];
+  if (row === undefined) throw new Error("createCampaign returned no row");
+  return row;
+}
+
+export interface CampaignDetail {
+  campaign: CampaignRow;
+  sends: CampaignSendView[];
+  breakdown: Record<z.infer<typeof plannedStatusSchema>, number>;
+  resolved_sample: { subject: string | null; body: string; person_id: string } | null;
+  attributions: z.infer<typeof attributionSchema>[];
+  attribution_note: string;
+}
+
+function resolvePreview(
+  value: string,
+  person: z.infer<typeof sendPersonSchema>,
+  studioName: string,
+): string {
+  return value
+    .replaceAll("{{first_name}}", person.first_name?.trim() || "there")
+    .replaceAll("{{studio_name}}", studioName);
+}
+
+export async function fetchCampaignDetail(
+  client: KeloSupabaseClient,
+  tenantId: string,
+  campaignId: string,
+): Promise<CampaignDetail | null> {
+  const campaignData = await run(
+    from(client, "campaigns")
+      .select(CAMPAIGN_COLUMNS)
+      .eq("tenant_id", tenantId)
+      .eq("id", campaignId),
+    "fetchCampaignDetail.campaign",
+  );
+  const campaign = parseInternal(
+    z.array(campaignRowSchema),
+    campaignData ?? [],
+    "fetchCampaignDetail.campaign",
+  )[0];
+  if (campaign === undefined) return null;
+
+  const sendsData = await run(
+    from(client, "campaign_sends")
+      .select(
+        "id, person_id, channel, planned_status, comms_log_id, created_at, person:people!campaign_sends_person_id_fkey(first_name, last_name, email, phone)",
+      )
+      .eq("tenant_id", tenantId)
+      .eq("campaign_id", campaignId)
+      .order("created_at", { ascending: true }),
+    "fetchCampaignDetail.sends",
+  );
+  const dbSends = parseInternal(
+    z.array(campaignSendDbSchema),
+    sendsData ?? [],
+    "fetchCampaignDetail.sends",
+  );
+  const sends = dbSends.map((row) => ({
+    ...row,
+    person: Array.isArray(row.person) ? (row.person[0] ?? sendPersonSchema.parse({
+      first_name: null,
+      last_name: null,
+      email: null,
+      phone: null,
+    })) : row.person,
+  }));
+  const breakdown: CampaignDetail["breakdown"] = {
+    eligible: 0,
+    skip_no_consent: 0,
+    skip_suppressed: 0,
+    skip_quiet_hours: 0,
+    skip_no_address: 0,
+  };
+  for (const send of sends) breakdown[send.planned_status] += 1;
+
+  const tenantData = await run(
+    from(client, "tenants").select("id, name").eq("id", tenantId),
+    "fetchCampaignDetail.tenant",
+  );
+  const tenantName = parseInternal(
+    z.array(z.object({ id: z.string().uuid(), name: z.string() })),
+    tenantData ?? [],
+    "fetchCampaignDetail.tenant",
+  )[0]?.name ?? "the studio";
+  const sample = sends.find((send) => send.planned_status === "eligible") ?? null;
+  const resolvedSample =
+    sample === null
+      ? null
+      : {
+          subject:
+            campaign.draft_subject === null
+              ? null
+              : resolvePreview(campaign.draft_subject, sample.person, tenantName),
+          body: resolvePreview(campaign.draft_body, sample.person, tenantName),
+          person_id: sample.person_id,
+        };
+
+  let attributions: z.infer<typeof attributionSchema>[] = [];
+  if (sends.length > 0) {
+    const attributionData = await run(
+      from(client, "campaign_attributions")
+        .select(
+          "id, campaign_send_id, person_id, event_type, event_ref, occurred_at, attributed_at, window_days",
+        )
+        .eq("tenant_id", tenantId)
+        .in("campaign_send_id", sends.map((send) => send.id))
+        .order("occurred_at", { ascending: false }),
+      "fetchCampaignDetail.attributions",
+    );
+    attributions = parseInternal(
+      z.array(attributionSchema),
+      attributionData ?? [],
+      "fetchCampaignDetail.attributions",
+    );
+  }
+  return {
+    campaign,
+    sends,
+    breakdown,
+    resolved_sample: resolvedSample,
+    attributions,
+    attribution_note:
+      "Bookings and purchases after a sent message within the stated window are correlated, not proven to have been caused by the campaign.",
+  };
+}
+
+export async function planCampaign(
+  client: KeloSupabaseClient,
+  campaignId: string,
+): Promise<number> {
+  return z.number().int().nonnegative().parse(
+    await rpc(client, "build_campaign_plan", { p_campaign: campaignId }),
+  );
+}
+
+export async function approveCampaign(
+  client: KeloSupabaseClient,
+  campaignId: string,
+  actorId: string,
+): Promise<number> {
+  return z.number().int().nonnegative().parse(
+    await rpc(client, "approve_campaign", { p_campaign: campaignId, p_actor: actorId }),
+  );
+}
+
+export async function cancelCampaign(
+  client: KeloSupabaseClient,
+  tenantId: string,
+  campaignId: string,
+): Promise<CampaignRow | null> {
+  const data = await run(
+    from(client, "campaigns")
+      .update({ status: "cancelled" })
+      .eq("tenant_id", tenantId)
+      .eq("id", campaignId)
+      .in("status", ["draft", "pending_approval"])
+      .select(CAMPAIGN_COLUMNS),
+    "cancelCampaign",
+  );
+  return parseInternal(z.array(campaignRowSchema), data ?? [], "cancelCampaign")[0] ?? null;
 }

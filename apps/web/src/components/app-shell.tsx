@@ -79,6 +79,15 @@ function AskNavIcon() {
   );
 }
 
+function MarketingNavIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-4 w-4 text-icon-inactive">
+      <path d="M2.5 7.5h2l6-3.5v8l-6-3.5h-2v-1Z" />
+      <path d="M5 9v3.5H3.5V9" />
+    </svg>
+  );
+}
+
 /**
  * Open-exception count badge (design guide §8 count badges), read from the
  * /health envelope's quarantine summary — no extra fetch. Quiet when the
@@ -134,6 +143,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     ? "Import review"
     : pathname.startsWith("/ask")
       ? "Ask"
+      : pathname.startsWith("/marketing")
+        ? "Marketing"
       : pathname.startsWith("/schedule")
         ? "Schedule"
         : pathname.startsWith("/briefing/archive")
@@ -161,6 +172,16 @@ export function AppShell({ children }: { children: ReactNode }) {
               >
                 <TodayNavIcon />
                 Today
+              </Link>
+            </li>
+            <li>
+              <Link
+                to="/marketing"
+                className={NAV_LINK_BASE}
+                activeProps={{ className: NAV_LINK_ACTIVE }}
+              >
+                <MarketingNavIcon />
+                Marketing
               </Link>
             </li>
             <li>

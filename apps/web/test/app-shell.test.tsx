@@ -16,10 +16,17 @@ vi.mock("../src/lib/health.js", () => ({ useHealthQuery: () => ({ status: "pendi
 afterEach(cleanup);
 
 describe("AppShell", () => {
-  it("adds Ask between Today and Import review in the primary rail", () => {
+  it("shows the shipped Today, Marketing, and Ask surfaces in the primary rail", () => {
     render(<AppShell><p>content</p></AppShell>);
     const links = screen.getByRole("navigation", { name: "Primary" }).querySelectorAll("a");
-    expect([...links].map((link) => link.textContent?.trim())).toEqual(["Today", "Ask", "Import review", "Health"]);
+    expect([...links].map((link) => link.textContent?.trim())).toEqual([
+      "Today",
+      "Marketing",
+      "Ask",
+      "Import review",
+      "Health",
+    ]);
+    expect(screen.getByRole("link", { name: "Marketing" }).getAttribute("href")).toBe("/marketing");
     expect(screen.getByRole("link", { name: "Ask" }).getAttribute("href")).toBe("/ask");
   });
 });

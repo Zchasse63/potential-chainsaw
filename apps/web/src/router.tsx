@@ -9,6 +9,7 @@ import { BriefingArchiveRoute } from "./routes/briefing-archive.jsx";
 import { ImportRoute } from "./routes/import.jsx";
 import { TodayRoute } from "./routes/today.jsx";
 import { ScheduleRoute } from "./routes/schedule.jsx";
+import { MarketingRoute } from "./routes/marketing.jsx";
 
 /**
  * Route tree (TanStack Router, code-based). A screen's route lands with its
@@ -71,6 +72,12 @@ const scheduleRoute = createRoute({
   component: ScheduleRoute,
 });
 
+const marketingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/marketing",
+  component: MarketingRoute,
+});
+
 const briefingArchiveRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/briefing/archive",
@@ -81,6 +88,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   askRoute,
   scheduleRoute,
+  marketingRoute,
   briefingArchiveRoute,
   healthRoute,
   importRoute,
