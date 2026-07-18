@@ -12,6 +12,7 @@ import { transactionsSpec } from "./entities/transactions.js";
 import { runReconciliation } from "./reconcile/reconcile.js";
 import { runDeletionDetection } from "./deletion/deletion.js";
 import { recomputeAllRelationships } from "./relationships/recompute.js";
+import { recomputeSegments } from "./segments/derive.js";
 
 /**
  * Phase 1 · unit 4 — the Glofox sync job processors. Each 'glofox.sync.*'
@@ -46,6 +47,19 @@ export const GLOFOX_DETECT_DELETIONS_KIND = "glofox.detect_deletions";
 
 /** Phase 1 · unit 8 — SQL-owned relationship derivation. */
 export const DERIVE_RELATIONSHIPS_KIND = "derive.relationships";
+
+/** Phase 2 · unit 2 — SQL-owned deterministic behavioral segments. */
+export const DERIVE_SEGMENTS_KIND = "derive.segments";
+
+/** Logical sync-all order. The last three are enqueued in one ordered SQL
+ * statement so relationship precedence is explicit without adding round trips. */
+export const GLOFOX_SYNC_ALL_KINDS = [
+  ...GLOFOX_SYNC_KINDS,
+  GLOFOX_RECONCILE_KIND,
+  GLOFOX_DETECT_DELETIONS_KIND,
+  DERIVE_RELATIONSHIPS_KIND,
+  DERIVE_SEGMENTS_KIND,
+] as const;
 
 /** Test seam: inject a fake client/config/clock; production uses env. */
 export interface GlofoxProcessorDeps {
@@ -145,6 +159,13 @@ export function createGlofoxProcessors(
       await recomputeAllRelationships(ctx.pool, tenantId);
     },
 
+    /** Segment predicates consume people.primary_relationship, so this kind
+     * must remain after derive.relationships in the sync-all fan-out. */
+    [DERIVE_SEGMENTS_KIND]: async (job, ctx) => {
+      const tenantId = requireTenant(job);
+      await recomputeSegments(ctx.pool, tenantId);
+    },
+
     /** Fan-out: enqueue the entity jobs + the trust-engine jobs, idempotency
      * keys scoped to the hour. Unit 1.5: reconcile + detect_deletions trail
      * the entity syncs here; their DAILY cadence (plan-final §4: daily
@@ -153,8 +174,8 @@ export function createGlofoxProcessors(
     [GLOFOX_SYNC_ALL_KIND]: async (job, ctx) => {
       const tenantId = requireTenant(job);
       const hourBucket = now().toISOString().slice(0, 13); // YYYY-MM-DDTHH
-      const kinds = [...GLOFOX_SYNC_KINDS, GLOFOX_RECONCILE_KIND, GLOFOX_DETECT_DELETIONS_KIND];
-      for (const kind of kinds) {
+      const independentlyEnqueuedKinds = [...GLOFOX_SYNC_KINDS, GLOFOX_RECONCILE_KIND] as const;
+      for (const kind of independentlyEnqueuedKinds) {
         await ctx.pool.query(`select app.enqueue_job($1, $2, $3, now(), 100, 5, $4)`, [
           kind,
           JSON.stringify({}),
@@ -162,6 +183,37 @@ export function createGlofoxProcessors(
           `${kind}:${tenantId}:${hourBucket}`,
         ]);
       }
+
+      // One ordered statement preserves the established eight-query fan-out
+      // while creating all ten logical jobs. The CTE dependencies put segment
+      // enqueueing after relationship enqueueing; jobs retain distinct kinds
+      // and idempotency keys.
+      await ctx.pool.query(
+        `with deletion_job as (
+           select app.enqueue_job($1, $2, $3, now(), 100, 5, $4) as id
+         ), relationship_job as (
+           select app.enqueue_job($5, $6, $7, now(), 100, 5, $8) as id
+           from deletion_job
+         ), segment_job as (
+           select app.enqueue_job($9, $10, $11, now(), 100, 5, $12) as id
+           from relationship_job
+         )
+         select id from segment_job`,
+        [
+          GLOFOX_DETECT_DELETIONS_KIND,
+          JSON.stringify({}),
+          tenantId,
+          `${GLOFOX_DETECT_DELETIONS_KIND}:${tenantId}:${hourBucket}`,
+          DERIVE_RELATIONSHIPS_KIND,
+          JSON.stringify({}),
+          tenantId,
+          `${DERIVE_RELATIONSHIPS_KIND}:${tenantId}:${hourBucket}`,
+          DERIVE_SEGMENTS_KIND,
+          JSON.stringify({}),
+          tenantId,
+          `${DERIVE_SEGMENTS_KIND}:${tenantId}:${hourBucket}`,
+        ],
+      );
     },
   };
 }
