@@ -181,7 +181,8 @@ async function insertQuarantineRows(
   }
 }
 
-async function openAlert(
+/** Exported for the reconcile/deletion units (1.5) — THE alert writer. */
+export async function openAlert(
   pool: PooledQueryable,
   ctx: SyncRunContext,
   entity: string,
@@ -207,8 +208,9 @@ async function openAlert(
 
 /** One client transaction per batch (step 3). A real pg Pool takes a dedicated
  * client; the recording fake in unit tests has no connect() and runs the same
- * statements on itself (single-threaded test drivers only). */
-async function withTransaction<T>(
+ * statements on itself (single-threaded test drivers only).
+ * Exported for the reconcile/deletion units (1.5). */
+export async function withTransaction<T>(
   pool: PooledQueryable,
   fn: (tx: Queryable) => Promise<T>,
 ): Promise<T> {

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { processors } from "../../src/processors.js";
 import {
   createGlofoxProcessors,
+  GLOFOX_DETECT_DELETIONS_KIND,
+  GLOFOX_RECONCILE_KIND,
   GLOFOX_SYNC_ALL_KIND,
   GLOFOX_SYNC_KINDS,
 } from "../../src/glofox/processors.js";
@@ -30,6 +32,11 @@ describe("registry", () => {
     expect(processors[GLOFOX_SYNC_ALL_KIND]).toBeTypeOf("function");
     expect(processors["noop"]).toBeTypeOf("function");
     expect(processors["heartbeat"]).toBeTypeOf("function");
+  });
+
+  it("registers the unit-1.5 trust-engine kinds", () => {
+    expect(processors[GLOFOX_RECONCILE_KIND]).toBeTypeOf("function");
+    expect(processors[GLOFOX_DETECT_DELETIONS_KIND]).toBeTypeOf("function");
   });
 });
 
@@ -96,7 +103,7 @@ describe("glofox.sync.* processors", () => {
 });
 
 describe("glofox.sync.all fan-out", () => {
-  it("enqueues the six entity jobs with hour-scoped idempotency keys", async () => {
+  it("enqueues the six entity jobs + the trust-engine jobs with hour-scoped idempotency keys", async () => {
     const pool = createFakePool();
     const procs = createGlofoxProcessors({
       client: createFakeClient(() => styleAPage([])),
@@ -110,9 +117,13 @@ describe("glofox.sync.all fan-out", () => {
     });
 
     const enqueues = callsMatching(pool.calls, "app.enqueue_job");
-    expect(enqueues).toHaveLength(6);
+    expect(enqueues).toHaveLength(8);
     const kinds = enqueues.map((call) => call.values?.[0]);
-    expect(kinds).toEqual([...GLOFOX_SYNC_KINDS]);
+    expect(kinds).toEqual([
+      ...GLOFOX_SYNC_KINDS,
+      GLOFOX_RECONCILE_KIND,
+      GLOFOX_DETECT_DELETIONS_KIND,
+    ]);
     for (const call of enqueues) {
       expect(call.values?.[2]).toBe(TENANT);
       expect(String(call.values?.[3])).toBe(`${String(call.values?.[0])}:${TENANT}:2026-07-17T23`);

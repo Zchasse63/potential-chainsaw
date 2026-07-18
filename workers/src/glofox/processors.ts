@@ -9,6 +9,8 @@ import { eventsSpec } from "./entities/events.js";
 import { membersSpec } from "./entities/members.js";
 import { membershipsSpec } from "./entities/memberships.js";
 import { transactionsSpec } from "./entities/transactions.js";
+import { runReconciliation } from "./reconcile/reconcile.js";
+import { runDeletionDetection } from "./deletion/deletion.js";
 
 /**
  * Phase 1 · unit 4 — the Glofox sync job processors. Each 'glofox.sync.*'
@@ -36,6 +38,10 @@ export const GLOFOX_SYNC_KINDS = [
 ] as const;
 
 export const GLOFOX_SYNC_ALL_KIND = "glofox.sync.all";
+
+/** Phase 1 · unit 5 — the trust engine + deletion detection (plan-final §4). */
+export const GLOFOX_RECONCILE_KIND = "glofox.reconcile";
+export const GLOFOX_DETECT_DELETIONS_KIND = "glofox.detect_deletions";
 
 /** Test seam: inject a fake client/config/clock; production uses env. */
 export interface GlofoxProcessorDeps {
@@ -98,11 +104,46 @@ export function createGlofoxProcessors(
     [GLOFOX_SYNC_KINDS[4]]: syncProcessor(() => erase(transactionsSpec)),
     [GLOFOX_SYNC_KINDS[5]]: syncProcessor(() => erase(createCreditsSpec())),
 
-    /** Fan-out: enqueue the six entity jobs, idempotency keys scoped to the hour. */
+    /**
+     * Phase 1 · unit 5 — the trust engine (tripwire 5) + deletion detection.
+     * Same tenant/job-row + per-run client resolution as the sync processors.
+     */
+    [GLOFOX_RECONCILE_KIND]: async (job, ctx) => {
+      const tenantId = requireTenant(job);
+      const { config, client } = resolve();
+      await runReconciliation(ctx.pool, client, {
+        tenantId,
+        jobId: job.id,
+        branchId: config.branchId,
+        namespace: config.namespace,
+        now,
+        payload: job.payload,
+      });
+    },
+
+    [GLOFOX_DETECT_DELETIONS_KIND]: async (job, ctx) => {
+      const tenantId = requireTenant(job);
+      const { config, client } = resolve();
+      await runDeletionDetection(ctx.pool, client, {
+        tenantId,
+        jobId: job.id,
+        branchId: config.branchId,
+        namespace: config.namespace,
+        now,
+        payload: job.payload,
+      });
+    },
+
+    /** Fan-out: enqueue the entity jobs + the trust-engine jobs, idempotency
+     * keys scoped to the hour. Unit 1.5: reconcile + detect_deletions trail
+     * the entity syncs here; their DAILY cadence (plan-final §4: daily
+     * reconciliation) is wired when the scheduler gains a real schedule table
+     * in unit 1.7 — until then the hour-scoped dedupe applies to them too. */
     [GLOFOX_SYNC_ALL_KIND]: async (job, ctx) => {
       const tenantId = requireTenant(job);
       const hourBucket = now().toISOString().slice(0, 13); // YYYY-MM-DDTHH
-      for (const kind of GLOFOX_SYNC_KINDS) {
+      const kinds = [...GLOFOX_SYNC_KINDS, GLOFOX_RECONCILE_KIND, GLOFOX_DETECT_DELETIONS_KIND];
+      for (const kind of kinds) {
         await ctx.pool.query(`select app.enqueue_job($1, $2, $3, now(), 100, 5, $4)`, [
           kind,
           JSON.stringify({}),
