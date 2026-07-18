@@ -223,14 +223,17 @@ async function keloActiveMemberProxyCount(
   tenantId: string,
   since: Date,
 ): Promise<number> {
+  // Phase-2 upgrade (derivation CERTIFIED 22/22 on 2026-07-18): the canary now
+  // counts the AUTHORITATIVE primary_relationship — the payment-evidence proxy
+  // below remains as corroboration in detail (via the `since` window callers
+  // pass) but the headline Kelo count is the derived member cohort.
+  void since;
   const result = await pool.query(
-    `select count(distinct person_external_ref)::int as n
-     from public.glofox_transactions
+    `select count(*)::int as n
+     from public.people
      where tenant_id = $1
-       and glofox_event_class = 'subscription_payment'
-       and person_external_ref is not null
-       and transaction_created_at >= $2`,
-    [tenantId, since.toISOString()],
+       and primary_relationship = 'recurring_member'`,
+    [tenantId],
   );
   return asNumber((result.rows[0] as { n?: unknown } | undefined)?.n ?? 0);
 }
@@ -283,10 +286,26 @@ async function glofoxActiveMembersTotal(client: SyncGlofoxClient): Promise<numbe
 
 async function glofoxBookingsTotal(client: SyncGlofoxClient, ctx: SyncRunContext): Promise<number> {
   if (ctx.branchId === undefined) throw new Error("bookings reconciliation requires ctx.branchId");
-  const payload = await client.fetch(
-    withQuery(`/2.2/branches/${encodeURIComponent(ctx.branchId)}/bookings`, { page: 1, limit: 1 }),
-  );
-  return glofoxBookingsResponseSchema.parse(payload).meta.totalCount;
+  // LIVE FINDING (first production reconcile, 2026-07-18): Style B
+  // meta.totalCount does NOT mean total matching rows (it returned 2 against
+  // 6,636 real bookings; even the pinned sample shows 6 for a 3-row page).
+  // The vendor field is untrustworthy — count honestly by paginating.
+  // ~67 pages at limit=100 under the 10 rps budget ≈ 7s: fine for a daily job.
+  let total = 0;
+  let page = 1;
+  for (;;) {
+    const payload = await client.fetch(
+      withQuery(`/2.2/branches/${encodeURIComponent(ctx.branchId)}/bookings`, {
+        page,
+        limit: 100,
+      }),
+    );
+    const parsed = glofoxBookingsResponseSchema.parse(payload);
+    total += parsed.data.length;
+    if (parsed.data.length < 100 || page > 500) break;
+    page += 1;
+  }
+  return total;
 }
 
 /** Lenient per-row read for the money totals — the mapper owns the STRICT row;

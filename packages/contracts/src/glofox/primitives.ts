@@ -26,6 +26,8 @@ export const glofoxEvent = z.enum([
   // LIVE-discovered 2026-07-18 (full backfill): failed recurring charges — the
   // pre-cutover dunning signal alongside transaction_status ERROR.
   "subscription_payment_failed",
+  // LIVE-discovered 2026-07-18 (3 open quarantines): rare manual/one-off charges.
+  "custom_charge",
 ]);
 export type GlofoxEvent = z.infer<typeof glofoxEvent>;
 

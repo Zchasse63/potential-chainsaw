@@ -42,10 +42,14 @@ function bookingsCountPage(totalCount: number): unknown {
     success: boolean;
     meta: { totalCount: number; page: number; limit: number };
   };
+  // LIVE FINDING (2026-07-18): meta.totalCount is untrustworthy — the counter
+  // now paginates and counts DATA ROWS, so the fake emits N real rows (< 100,
+  // ending pagination after one page). meta.totalCount is deliberately wrong
+  // here to prove the counter never reads it.
   return {
-    data: [clone(sample.data[0])],
+    data: Array.from({ length: totalCount }, () => clone(sample.data[0])),
     success: true,
-    meta: { totalCount, page: 1, limit: 1 },
+    meta: { totalCount: 2, page: 1, limit: 100 },
   };
 }
 
@@ -66,6 +70,11 @@ function keloCounts(counts: {
   transactions?: { rows: unknown[] };
 }) {
   return (text: string) => {
+    // The canary now counts the AUTHORITATIVE derived cohort (certified
+    // 22/22); route it BEFORE the generic people-count branch.
+    if (text.includes("primary_relationship = 'recurring_member'")) {
+      return { rows: [{ n: counts.membersActive ?? 0 }] };
+    }
     if (text.includes("count(distinct person_external_ref)")) {
       return { rows: [{ n: counts.membersActive ?? 0 }] };
     }

@@ -36,7 +36,7 @@ export const glofoxPlanSchema = z.object({
   upfront_fee: z.number().nullish(),
   credits: z.array(planCreditSchema),
   starts_on: z.string(),
-  is_group_membership: z.boolean(),
+  is_group_membership: z.boolean().nullish(),
   max_group_membership_size: z.number().int().nullable(),
   free_time_unit_count: z.number().int(),
   min_price: z.number(),
