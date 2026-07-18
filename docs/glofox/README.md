@@ -104,6 +104,17 @@ sources. Full details per operation: [openapi.json](openapi.json).
   feeds the D2 owner decision (counsel may accept these as opt-in provenance).
 - Plan *name* resolves by joining `membership.user_membership_id` / transaction `plan_code` to
   the catalog (§5 confirmed).
+- **`membership.type` + `membership.status` IS THE MEMBER SIGNAL (verified live 2026-07-17, full
+  1,366-population scan):** `time`/`time_classes` + status `ACTIVE` = the recurring-member cohort;
+  `num_classes` = credit packs (pack-holders); `payg` = drop-in/guest. Distribution:
+  **payg/ACTIVE 652 · num_classes/none 693 · time_classes/ACTIVE 13 · time/ACTIVE 6 ·
+  time_classes/PAUSED 1 · num_classes/LOCKED 1**. So **recurring members ≈ 19 ACTIVE (+1 PAUSED)** —
+  matches the owner's ~22-23 far better than a payment-recency window (which gave only 16, missing
+  members who bill on longer cycles / paid differently but hold an ACTIVE recurring membership).
+  **DERIVATION FIX REQUIRED:** import `membership.{type,status,user_membership_id,start_date}` onto
+  `people` (mapMember + a people migration) and derive `recurring_member` from membership.status
+  ACTIVE (+ recurring type), with `subscription_payment` as CORROBORATION, not a hard requirement.
+  The remaining ~2-3 gap to ~23 is gold-label territory (comped/edge members the owner adjudicates).
 
 ### Plan catalog — `GET /2.0/memberships` [LIVE] ([samples/memberships.get.json](samples/memberships.get.json))
 
