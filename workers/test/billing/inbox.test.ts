@@ -46,6 +46,12 @@ function eventUpdate(call: QueryCall) {
 describe("payment_intent.succeeded", () => {
   it("flips the payment to 'succeeded' and marks the event processed", async () => {
     const pool = createBillingPool((text, values) => {
+      // The guarded money UPDATE reports a matched row (the seeded prior is in
+      // the allowed set) so applyGuardedTransition treats it as applied, not a
+      // 0-row no-op (F1). The chaos harness exercises the true guard end-to-end.
+      if (text.includes("update public.payments") && text.includes("returning id")) {
+        return { rows: [{ id: "pay_match" }] };
+      }
       if (text.includes("from public.stripe_events")) {
         return {
           rows: [
@@ -78,6 +84,12 @@ describe("payment_intent.succeeded", () => {
 
   it("is idempotent: re-applying to an already-succeeded payment stays a no-op", async () => {
     const pool = createBillingPool((text, values) => {
+      // The guarded money UPDATE reports a matched row (the seeded prior is in
+      // the allowed set) so applyGuardedTransition treats it as applied, not a
+      // 0-row no-op (F1). The chaos harness exercises the true guard end-to-end.
+      if (text.includes("update public.payments") && text.includes("returning id")) {
+        return { rows: [{ id: "pay_match" }] };
+      }
       if (text.includes("from public.stripe_events")) {
         return {
           rows: [
@@ -120,6 +132,12 @@ describe("payment_intent.succeeded", () => {
 describe("payment_intent.payment_failed", () => {
   it("flips the payment to 'failed' without regressing a success", async () => {
     const pool = createBillingPool((text, values) => {
+      // The guarded money UPDATE reports a matched row (the seeded prior is in
+      // the allowed set) so applyGuardedTransition treats it as applied, not a
+      // 0-row no-op (F1). The chaos harness exercises the true guard end-to-end.
+      if (text.includes("update public.payments") && text.includes("returning id")) {
+        return { rows: [{ id: "pay_match" }] };
+      }
       if (text.includes("from public.stripe_events")) {
         return {
           rows: [
@@ -160,6 +178,11 @@ describe("charge.refunded — full vs partial by amount", () => {
 
   function poolFor(event: unknown) {
     return createBillingPool((text, values) => {
+      // The guarded refund UPDATE reports a matched row (prior 'succeeded' is in
+      // the allowed set) so it is treated as applied, not a 0-row no-op (F1).
+      if (text.includes("update public.payments") && text.includes("returning id")) {
+        return { rows: [{ id: "pay_match" }] };
+      }
       if (text.includes("from public.stripe_events")) {
         return { rows: [eventRow("e1", "evt_r", event)] };
       }
@@ -225,6 +248,12 @@ describe("unknown / unhandled kinds", () => {
 describe("error isolation — one bad event never blinds the others", () => {
   it("records 'error' for an event whose payment is missing; the next event still processes", async () => {
     const pool = createBillingPool((text, values) => {
+      // The guarded money UPDATE reports a matched row (the seeded prior is in
+      // the allowed set) so applyGuardedTransition treats it as applied, not a
+      // 0-row no-op (F1). The chaos harness exercises the true guard end-to-end.
+      if (text.includes("update public.payments") && text.includes("returning id")) {
+        return { rows: [{ id: "pay_match" }] };
+      }
       if (text.includes("from public.stripe_events")) {
         return {
           rows: [

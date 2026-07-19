@@ -33,6 +33,10 @@ import type { PooledQueryable } from "../glofox/types.js";
  *   5. stuck_inbox_event / dead_lettered_events — an event still 'received'
  *      past the SLA (the inbox has not applied it), and the count of 'error'
  *      (dead-lettered) events surfaced. WARNING.
+ *   6. dead_lettered_command — a stripe_commands row that exhausted its outbox
+ *      retries (status 'failed'): an intended charge/refund that will NEVER
+ *      reach Stripe until an operator intervenes. Tenant-scoped → deduped alert
+ *      to the owner. CRITICAL (money is stuck).
  *
  * The command KIND literals here are the RPC-emitted ones the tables actually
  * hold ('create_payment_intent' / 'create_refund' — migration 0034), NOT the
@@ -222,6 +226,36 @@ async function checkStuckInbox(pool: PooledQueryable, cutoff: Date): Promise<Vio
   });
 }
 
+async function checkFailedCommands(pool: PooledQueryable): Promise<Violation[]> {
+  // A stripe_commands row that exhausted its outbox retries (status 'failed') is
+  // a DEAD money command — an intended charge/refund that will NEVER reach
+  // Stripe until an operator intervenes. Tenant-scoped (commands carry
+  // tenant_id) so the alert reaches the owner. CRITICAL: money is stuck.
+  const result = await pool.query(
+    `select id, tenant_id, kind, last_error
+     from public.stripe_commands
+     where status = 'failed'`,
+  );
+  return result.rows.map((raw) => {
+    const row = raw as {
+      id?: unknown;
+      tenant_id?: unknown;
+      kind?: unknown;
+      last_error?: unknown;
+    };
+    return {
+      check: "dead_lettered_command",
+      severity: "critical" as const,
+      tenantId: asString(row.tenant_id),
+      detail: {
+        command_id: asString(row.id),
+        kind: asString(row.kind),
+        last_error: asString(row.last_error),
+      },
+    };
+  });
+}
+
 async function checkDeadLetteredEvents(pool: PooledQueryable): Promise<Violation[]> {
   const result = await pool.query(
     `select count(*)::int as n from public.stripe_events where status = 'error'`,
@@ -317,6 +351,7 @@ export async function runVerifyMoney(
     ...(await checkOverRefund(pool)),
     ...(await checkStuckOutbox(pool, cutoff)),
     ...(await checkStuckInbox(pool, cutoff)),
+    ...(await checkFailedCommands(pool)),
     ...(await checkDeadLetteredEvents(pool)),
   ];
 

@@ -50,9 +50,12 @@ create policy verify_runs_select on public.verify_runs
 -- grants --------------------------------------------------------------------
 -- Strip the hosted-Supabase default writes from authenticated FIRST (the 0011
 -- revoke pattern), then grant back exactly member-SELECT; the service role
--- INSERTS run rows (append-once — no update/delete grant).
+-- INSERTS run rows. APPEND-ONCE (invariant #6, the repo ledger pattern): a
+-- completed run is a fact, never edited — so UPDATE and DELETE are revoked from
+-- EVERY role including service_role (block 26 re-asserts this for all three).
 revoke all on public.verify_runs from anon;
 revoke insert, update, delete on public.verify_runs from authenticated;
 
 grant select on public.verify_runs to authenticated;
 grant select, insert on public.verify_runs to service_role;
+revoke update, delete on public.verify_runs from anon, authenticated, service_role;

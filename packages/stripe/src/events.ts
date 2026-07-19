@@ -41,6 +41,14 @@ export type StripeEventAction =
       readonly currentPeriodEnd?: number;
       /** True for customer.subscription.deleted — the inbox forces 'cancelled'. */
       readonly deleted?: boolean;
+      /**
+       * The Stripe EVENT's `created` timestamp (unix seconds), NOT the object's.
+       * The inbox uses it as the monotonicity clock for subscription status:
+       * an out-of-order/replayed update older than the last applied event is a
+       * benign no-op, so a delayed webhook can never regress a PAID/CANCELLED
+       * member back into an earlier state (F6).
+       */
+      readonly eventCreatedAt?: number;
     }
   | {
       readonly kind: "invoice_payment_failed";
@@ -86,6 +94,9 @@ export function mapStripeEvent(event: unknown): StripeEventAction {
   const envelope = record(event);
   const rawType = str(envelope?.["type"]) ?? "";
   const eventId = str(envelope?.["id"]);
+  // The event envelope's own `created` (unix seconds) — the ordering clock for
+  // subscription state (F6). Distinct from any object-level timestamp.
+  const eventCreatedAt = num(envelope?.["created"]);
   const object = record(record(envelope?.["data"])?.["object"]);
 
   const ignored: StripeEventAction = { kind: "ignored", eventId, rawType };
@@ -142,6 +153,7 @@ export function mapStripeEvent(event: unknown): StripeEventAction {
         // A deletion is the definitive cancellation signal regardless of the
         // object's reported status.
         deleted: rawType === "customer.subscription.deleted" ? true : undefined,
+        eventCreatedAt,
       };
     }
     case "invoice.payment_failed": {

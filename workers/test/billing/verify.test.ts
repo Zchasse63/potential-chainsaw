@@ -128,6 +128,42 @@ describe("verify_money · invariant breaches", () => {
     assertReadOnly(pool.calls);
   });
 
+  it("flags a dead-lettered (failed) command as CRITICAL and alerts the tenant (F3)", async () => {
+    const pool = createBillingPool((text) => {
+      if (text.includes("from public.stripe_commands") && text.includes("where status = 'failed'")) {
+        return {
+          rows: [
+            {
+              id: "cmd_dead",
+              tenant_id: "t1",
+              kind: "create_payment_intent",
+              last_error: "card_declined",
+            },
+          ],
+        };
+      }
+      return undefined;
+    });
+
+    const outcome = await runVerifyMoney(pool, { now: () => NOW });
+
+    expect(outcome.ok).toBe(false);
+    const dead = outcome.violations.find((v) => v.check === "dead_lettered_command");
+    expect(dead).toMatchObject({
+      check: "dead_lettered_command",
+      severity: "critical",
+      tenantId: "t1",
+      detail: { command_id: "cmd_dead", kind: "create_payment_intent" },
+    });
+    // A tenant-scoped, deduped verify_money alert is opened for the dead command.
+    const alert = callsMatching(pool.calls, "insert into public.alerts")[0];
+    expect(alert).toBeDefined();
+    expect(alert?.values?.[0]).toBe("t1"); // tenant_id
+    expect(alert?.values?.[4]).toBe("dead_lettered_command"); // dedupe_key
+    // A dead command is a stuck money mutation — verify never mutates the ledgers.
+    assertReadOnly(pool.calls);
+  });
+
   it("surfaces dead-lettered events as a global (null-tenant) violation, no alert", async () => {
     const pool = createBillingPool((text) => {
       if (text.includes("status = 'error'")) return { rows: [{ n: 3 }] };

@@ -23,21 +23,27 @@ function command(overrides: CommandOverrides = {}) {
   return {
     id: "c1",
     tenant_id: "t1",
-    kind: "payment_intent",
+    // The canonical RPC contract from migration 0034 (F2): kind
+    // 'create_payment_intent' with payload {amount_cents, currency, customer_id}.
+    kind: "create_payment_intent",
     idempotency_key: "idem-1",
-    payload: { amount: 5000, currency: "usd", customer: "cus_1" },
+    payload: { amount_cents: 5000, currency: "usd", customer_id: "cust_1" },
     attempts: 0,
     ...overrides,
   };
 }
 
 /** Responder: the claim returns the given commands; the account resolves to
- * `account` (pass null for "no connected account"). */
+ * `account` (pass null for "no connected account"); the customer resolves to a
+ * Stripe id on file (F2: the outbox reads stripe_customer_id from customers). */
 function respondFor(commands: unknown[], account: string | null = "acct_1"): Responder {
   return (text) => {
     if (text.includes("from public.stripe_commands")) return { rows: commands };
     if (text.includes("from public.stripe_accounts")) {
       return { rows: account === null ? [] : [{ stripe_account_id: account }] };
+    }
+    if (text.includes("from public.customers")) {
+      return { rows: [{ stripe_customer_id: "cus_1" }] };
     }
     return undefined;
   };

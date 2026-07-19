@@ -113,25 +113,74 @@ function parseRecurring(
   return { interval, intervalCount: num(rec["interval_count"]) };
 }
 
+/**
+ * The command KINDS + payload KEYS the money RPCs (migration 0034 —
+ * app.create_payment_intent / app.create_refund) actually emit into
+ * stripe_commands. The outbox consumes EXACTLY this canonical contract (the RPC
+ * SQL is live and immutable). The drift-tripwire test parses 0034 and asserts
+ * these match the SQL's jsonb_build_object keys + kind literals, so the two
+ * sides can never drift silently again (F2).
+ */
+export const RPC_COMMAND_CONTRACT = {
+  create_payment_intent: ["amount_cents", "currency", "customer_id"],
+  create_refund: ["payment_id", "amount_cents", "reason"],
+} as const;
+
 /** Dispatch the claimed command to its adapter method, ALWAYS forwarding the
  * command's own idempotency key (never a fresh one — the key is what makes a
- * retried call safe). An unknown kind is loud (throws → attempts/last_error). */
-async function dispatch(client: StripeAdapter, cmd: ClaimedCommand): Promise<StripeObjectResult> {
+ * retried call safe). Reads the RPC contract (0034) verbatim, resolving the
+ * customer/payment Stripe ids from the persisted rows. An unknown kind is loud
+ * (throws → attempts/last_error). */
+async function dispatch(
+  tx: Queryable,
+  client: StripeAdapter,
+  cmd: ClaimedCommand,
+): Promise<StripeObjectResult> {
   const p = cmd.payload;
   switch (cmd.kind) {
-    case "payment_intent":
+    case "create_payment_intent": {
+      // Resolve the customer's Stripe id from the RPC-recorded customer_id. A
+      // missing/null stripe_customer_id (lazy — created on first charge) leaves
+      // `customer` undefined: dry-run mints a synthetic id, and production simply
+      // attaches no customer until one is created by a later unit.
+      const customerId = str(p["customer_id"]);
+      let stripeCustomer: string | undefined;
+      if (customerId !== undefined) {
+        const r = await tx.query(
+          `select stripe_customer_id from public.customers where tenant_id = $1 and id = $2`,
+          [cmd.tenantId, customerId],
+        );
+        stripeCustomer = str(asRecord(r.rows[0])["stripe_customer_id"]);
+      }
       return client.createPaymentIntent({
-        amount: requireNum(p["amount"], "amount"),
+        amount: requireNum(p["amount_cents"], "amount_cents"),
         currency: requireStr(p["currency"], "currency"),
-        customer: str(p["customer"]),
+        customer: stripeCustomer,
         idempotencyKey: cmd.idempotencyKey,
       });
-    case "refund":
+    }
+    case "create_refund": {
+      // Resolve the payment's Stripe intent id from the RPC-recorded payment_id.
+      // If the payment is not yet LINKED (the outbox hasn't delivered its
+      // create_payment_intent), this is a RETRYABLE gap — throw so the command
+      // stays pending and self-heals on a later tick, NOT an unknown-kind drop.
+      const paymentId = requireStr(p["payment_id"], "payment_id");
+      const r = await tx.query(
+        `select stripe_payment_intent_id from public.payments where tenant_id = $1 and id = $2`,
+        [cmd.tenantId, paymentId],
+      );
+      const intentId = str(asRecord(r.rows[0])["stripe_payment_intent_id"]);
+      if (intentId === undefined) {
+        throw new Error(
+          `refund payment ${paymentId} is not yet linked to a Stripe payment_intent; retrying`,
+        );
+      }
       return client.createRefund({
-        paymentIntent: requireStr(p["payment_intent"], "payment_intent"),
-        amount: num(p["amount"]),
+        paymentIntent: intentId,
+        amount: num(p["amount_cents"]),
         idempotencyKey: cmd.idempotencyKey,
       });
+    }
     case "customer":
       return client.createCustomer({
         email: str(p["email"]),
@@ -218,7 +267,7 @@ async function markSent(
   );
   // Link the created object back onto the payment the RPC opened for this
   // command (the webhook later flips its money state by this intent id).
-  if (cmd.kind === "payment_intent") {
+  if (cmd.kind === "create_payment_intent") {
     await tx.query(
       `update public.payments
        set stripe_payment_intent_id = $1
@@ -296,7 +345,7 @@ export async function runOutbox(
           throw new Error(`no connected Stripe account for tenant ${cmd.tenantId}`);
         }
         const client = makeClient({ stripeAccountId });
-        const result = await dispatch(client, cmd);
+        const result = await dispatch(tx, client, cmd);
         await markSent(tx, cmd, result);
         outcomes.push({ commandId: cmd.id, status: "sent", stripeObjectId: result.id });
       } catch (err) {
