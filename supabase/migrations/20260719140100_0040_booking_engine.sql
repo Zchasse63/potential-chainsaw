@@ -30,6 +30,23 @@
 --     phase-4 advisory desk queue stays as a monitored backstop.
 
 -- ---------------------------------------------------------------------------
+-- PREREQUISITE — the (tenant_id, id) unique key on scheduled_sessions.
+-- ---------------------------------------------------------------------------
+-- booking_holds AND bookings both carry a tenant-consistent composite FK
+--   (tenant_id, session_id) → scheduled_sessions (tenant_id, id)
+-- so a hold/booking can never point at a session in a DIFFERENT tenant. A
+-- Postgres composite FK requires a UNIQUE constraint on EXACTLY the referenced
+-- columns; migration 0027 declared scheduled_sessions.id as the primary key and
+-- a PARTIAL unique index on (tenant_id, schedule_rule_id, starts_at), but never
+-- unique (tenant_id, id) (its sibling authoring tables — resources,
+-- offering_templates, schedule_rules — all did). Without this, the two FKs below
+-- fail to create ("no unique constraint matching given keys"). id is already
+-- globally unique (PK), so this composite key is redundant for uniqueness and
+-- exists solely to back the tenant-consistent FK.
+alter table public.scheduled_sessions
+  add constraint scheduled_sessions_tenant_id_key unique (tenant_id, id);
+
+-- ---------------------------------------------------------------------------
 -- booking_holds — server-side seat reservation with a TTL.
 -- ---------------------------------------------------------------------------
 -- A hold reserves a seat for a bounded window (default 300s). Payment
