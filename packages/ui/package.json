@@ -1,0 +1,29 @@
+{
+  "name": "@kelo/ui",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Design-system seam (plan-member-app §6): canonical CSS tokens + TS-consumable tokens.json, the Tailwind preset mapping them, and the validated tenant brand layer. React components (§6.4) land in a later unit.",
+  "exports": {
+    "./tokens/tokens.css": "./tokens/tokens.css",
+    "./tokens/tokens.json": "./tokens/tokens.json",
+    "./tailwind-preset": {
+      "types": "./dist/tailwind-preset.d.ts",
+      "default": "./dist/tailwind-preset.js"
+    },
+    "./brands/default.css": "./brands/default.css"
+  },
+  "files": [
+    "dist",
+    "tokens",
+    "brands"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@kelo/contracts": "workspace:*",
+    "tailwindcss": "3.4.19",
+    "vitest": "4.1.10"
+  }
+}

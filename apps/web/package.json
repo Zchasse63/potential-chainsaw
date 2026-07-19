@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@kelo/contracts": "workspace:*",
+    "@kelo/ui": "workspace:*",
     "@sentry/react": "10.66.0",
     "@supabase/supabase-js": "2.110.7",
     "@tanstack/react-query": "5.101.2",
