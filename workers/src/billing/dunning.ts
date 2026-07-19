@@ -221,7 +221,7 @@ export async function selectLatestStage(
   const result = await pool.query(
     `select stage from public.dunning_states
      where tenant_id = $1 and subscription_id = $2
-     order by occurred_at desc, created_at desc, id desc
+     order by seq desc
      limit 1`,
     [tenantId, subscriptionId],
   );
