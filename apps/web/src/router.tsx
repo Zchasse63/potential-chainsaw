@@ -2,7 +2,7 @@ import { createRootRoute, createRoute, createRouter, Outlet } from "@tanstack/re
 import { useAuth } from "./auth/auth-context.jsx";
 import { SignInScreen } from "./auth/sign-in-screen.jsx";
 import { AppShell } from "./components/app-shell.jsx";
-import { Skeleton } from "./components/skeleton.jsx";
+import { Skeleton } from "@kelo/ui/react";
 import { HealthRoute } from "./routes/health.jsx";
 import { AskRoute } from "./routes/ask.jsx";
 import { BookRoute } from "./routes/book.jsx";

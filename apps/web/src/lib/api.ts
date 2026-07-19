@@ -1,4 +1,4 @@
-import { errorResponseSchema, IDEMPOTENCY_KEY_HEADER } from "@kelo/contracts";
+import { ApiRequestError, errorResponseSchema, IDEMPOTENCY_KEY_HEADER } from "@kelo/contracts";
 import { API_BASE_URL } from "./env.js";
 
 /**
@@ -7,19 +7,9 @@ import { API_BASE_URL } from "./env.js";
  * provenance-or-nothing check; callers never trust a payload blindly.
  */
 
-export class ApiRequestError extends Error {
-  readonly status: number;
-  readonly code: string;
-  readonly correlationId: string | undefined;
-
-  constructor(status: number, code: string, message: string, correlationId: string | undefined) {
-    super(message);
-    this.name = "ApiRequestError";
-    this.status = status;
-    this.code = code;
-    this.correlationId = correlationId;
-  }
-}
+// Wave 8.1b: the error CLASS lives in @kelo/contracts (its shape is the
+// contract's); only the env-dependent client around it stays here.
+export { ApiRequestError };
 
 /**
  * Shared request path: Bearer auth, structured-error mapping (non-2xx →

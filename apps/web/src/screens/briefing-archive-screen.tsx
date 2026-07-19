@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { BriefingArtifactView, BriefingStatusChip } from "../components/briefing-artifact.jsx";
 import { DataBoundary, type BoundaryQuery } from "../components/data-boundary.jsx";
-import { EmptyState } from "../components/empty-state.jsx";
-import { Skeleton } from "../components/skeleton.jsx";
+import { EmptyState } from "@kelo/ui/react";
+import { Skeleton } from "@kelo/ui/react";
 import type { BriefingArchiveArtifact, BriefingArchiveResponse } from "../lib/intelligence.js";
 
 function Archive({ artifacts }: { artifacts: BriefingArchiveArtifact[] }) {

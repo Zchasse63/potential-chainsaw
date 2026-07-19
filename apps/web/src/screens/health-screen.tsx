@@ -2,11 +2,11 @@ import type { ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import type { EnvelopeMeta } from "@kelo/contracts";
 import { DataBoundary, type BoundaryQuery } from "../components/data-boundary.jsx";
-import { EmptyState } from "../components/empty-state.jsx";
-import { FreshnessChip } from "../components/freshness-chip.jsx";
+import { EmptyState } from "@kelo/ui/react";
+import { FreshnessChip } from "@kelo/ui/react";
 import { ReconciliationRegion } from "../components/reconciliation.jsx";
-import { Skeleton } from "../components/skeleton.jsx";
-import { SourceLabel } from "../components/source-label.jsx";
+import { Skeleton } from "@kelo/ui/react";
+import { SourceLabel } from "@kelo/ui/react";
 import type {
   AlertSeverity,
   AuthorityRow,

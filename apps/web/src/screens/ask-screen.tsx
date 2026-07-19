@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button } from "../components/button.jsx";
 import { DataBoundary, type BoundaryQuery } from "../components/data-boundary.jsx";
-import { Skeleton } from "../components/skeleton.jsx";
+import { Skeleton } from "@kelo/ui/react";
 import { inspectEnvelope } from "../lib/envelope.js";
 import type {
   AskCatalogEntry,

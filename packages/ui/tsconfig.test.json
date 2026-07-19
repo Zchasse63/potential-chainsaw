@@ -6,7 +6,9 @@
     "emitDeclarationOnly": true,
     "rootDir": ".",
     "outDir": "dist-test",
-    "tsBuildInfoFile": "dist-test/tsconfig.test.tsbuildinfo"
+    "tsBuildInfoFile": "dist-test/tsconfig.test.tsbuildinfo",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx"
   },
-  "include": ["test/**/*.ts"]
+  "include": ["test/**/*.ts", "test/**/*.tsx", "react/**/*.ts", "react/**/*.tsx"]
 }

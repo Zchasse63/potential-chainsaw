@@ -1,8 +1,8 @@
 import type { Reconciliation } from "../lib/import.js";
 import { formatTimestamp } from "../lib/time.js";
-import { EmptyState } from "./empty-state.jsx";
-import { SourceLabel } from "./source-label.jsx";
-import { StatusPill } from "./status-pill.jsx";
+import { EmptyState } from "@kelo/ui/react";
+import { SourceLabel } from "@kelo/ui/react";
+import { StatusPill } from "@kelo/ui/react";
 
 /**
  * Reconciliation rendering, shared by the Health screen and Import review
