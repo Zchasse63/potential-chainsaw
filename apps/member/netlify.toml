@@ -1,0 +1,31 @@
+# Member web site — the SECOND Netlify site (plan-member-app §5). The site's
+# base directory is apps/member (set on the site in the Netlify UI; this file
+# is read relative to it). The SSR function is wired by the
+# @netlify/vite-plugin-tanstack-start vite plugin, so no functions config
+# lives here.
+#
+# One-tick invariant (CLAUDE.md #4), by machine: this site ships ZERO cron or
+# background functions — every recurring job stays on the PRIMARY site's tick
+# + Postgres jobs queue. CI greps this file and the app sources to keep it
+# that way; do not add any cron-style config here.
+#
+# Env (set in the Netlify UI — ALL public values, never secrets; this client
+# ships zero Supabase material, no Stripe secret, no DB URL — ever):
+#   KELO_API_ORIGIN, KELO_TENANT_ID, KELO_TENANT_TIMEZONE (display tz),
+#   later: STRIPE_PUBLISHABLE_KEY, SENTRY_DSN
+
+[build]
+  # pnpm finds the workspace root upwards from the base dir; the filter's `...`
+  # builds @kelo/member's workspace deps (contracts, member-core, ui) first.
+  command = "pnpm --filter @kelo/member... build"
+  publish = "dist/client"
+
+# /api/* → the one Hono API on the PRIMARY site. Status 200 = rewrite: the
+# function sees the original /api/v1/... path, and the host-only member cookie
+# (no Domain attribute) survives the proxy untouched (plan §3.2/§5).
+# PRIMARY-SITE-PLACEHOLDER is swapped for the real primary site host at deploy
+# time (owner gate P0-3) — a host name, never a secret.
+[[redirects]]
+  from = "/api/*"
+  to = "https://PRIMARY-SITE-PLACEHOLDER.netlify.app/.netlify/functions/api/:splat"
+  status = 200

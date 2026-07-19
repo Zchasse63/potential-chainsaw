@@ -10,6 +10,10 @@ dist/
 dist-test/
 .turbo/
 *.tsbuildinfo
+# TanStack Start build output + plugin caches (apps/member)
+.output/
+.tanstack/
+.netlify/
 
 # supabase local
 supabase/.temp/

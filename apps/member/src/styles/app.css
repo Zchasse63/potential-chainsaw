@@ -1,0 +1,23 @@
+/* Member app stylesheet — the same token contract as the operator app
+   (plan-member-app §6): canonical tokens from @kelo/ui, then the tenant brand
+   layer (default = the Kelo house brand until owner gate P8-1 lands the first
+   tenant remap), then Tailwind on the shared preset. Vite resolves the
+   package specifiers in @import and inlines them at build. */
+@import "@kelo/ui/tokens/tokens.css";
+@import "@kelo/ui/brands/default.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-surface-app font-ui text-ink antialiased;
+  }
+
+  /* Focus ring (design guide §10): 2px brand-600, 2px offset — tokenized. */
+  :focus-visible {
+    outline: var(--kelo-focus-ring-width) solid var(--kelo-focus-ring-color);
+    outline-offset: var(--kelo-focus-ring-offset);
+  }
+}
