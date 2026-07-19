@@ -7,6 +7,7 @@ import { fakeUserClient, TENANT_A, USER_ID, type RpcHandler } from "./fakes.js";
 const SESSION_ID = "40000000-0000-4000-8000-000000000501";
 const PERSON_ID = "40000000-0000-4000-8000-000000000601";
 const HOLD_ID = "40000000-0000-4000-8000-000000000701";
+const HOLD_EXPIRES = "2026-07-20T18:05:00.000Z";
 const BOOKING_ID = "40000000-0000-4000-8000-000000000801";
 const CREDIT_ID = "40000000-0000-4000-8000-000000000901";
 const FROM = "2026-07-20T00:00:00.000Z";
@@ -127,7 +128,14 @@ const defaultRpc: Record<string, RpcHandler> = {
 };
 
 function userFake(role: string, rpc: Record<string, RpcHandler> = defaultRpc) {
-  return fakeUserClient({ tenant_users: () => ({ data: [{ tenant_id: TENANT_A, role }] }) }, rpc);
+  return fakeUserClient(
+    {
+      tenant_users: () => ({ data: [{ tenant_id: TENANT_A, role }] }),
+      // F4 server-authoritative expiry read-back after hold_session.
+      booking_holds: () => ({ data: [{ expires_at: HOLD_EXPIRES, frozen: false }] }),
+    },
+    rpc,
+  );
 }
 
 function appFor(fake: ReturnType<typeof fakeUserClient>) {
@@ -190,7 +198,7 @@ describe("GET /sessions/availability — member-read picker", () => {
 // -- POST /bookings/hold --------------------------------------------------------
 
 describe("POST /bookings/hold — reserve a seat (owner/manager/front_desk)", () => {
-  it("threads the actor + TTL into hold_session and returns the hold", async () => {
+  it("threads the actor + TTL into hold_session and returns the server-authoritative hold (F4)", async () => {
     const fake = userFake("front_desk");
     const { app } = appFor(fake);
     const res = await app.request(
@@ -198,8 +206,14 @@ describe("POST /bookings/hold — reserve a seat (owner/manager/front_desk)", ()
       post("/bookings/hold", { session_id: SESSION_ID, person_id: PERSON_ID, ttl_seconds: 120 }),
     );
     expect(res.status).toBe(201);
-    const payload = (await res.json()) as { data: { hold: { hold_id: string } } };
-    expect(payload.data.hold.hold_id).toBe(HOLD_ID);
+    const payload = (await res.json()) as {
+      data: { hold: { id: string; expires_at: string | null; frozen: boolean } };
+    };
+    expect(payload.data.hold.id).toBe(HOLD_ID);
+    // F4: the route reads the persisted hold back so the desk anchors its
+    // countdown on the DB's expires_at, not a client guess.
+    expect(payload.data.hold.expires_at).toBe(HOLD_EXPIRES);
+    expect(payload.data.hold.frozen).toBe(false);
 
     const rpc = fake.calls.find((c) => c.table === "hold_session");
     const params = rpc?.args[0] as Record<string, unknown>;
@@ -208,6 +222,10 @@ describe("POST /bookings/hold — reserve a seat (owner/manager/front_desk)", ()
     expect(params.p_person).toBe(PERSON_ID);
     expect(params.p_actor).toBe(USER_ID);
     expect(params.p_ttl_seconds).toBe(120);
+
+    // The read-back used the SAME user client, keyed on the returned hold id.
+    const read = fake.calls.find((c) => c.table === "booking_holds" && c.method === "eq");
+    expect(read?.args).toEqual(["id", HOLD_ID]);
   });
 
   it("defaults the TTL to 300s when omitted", async () => {

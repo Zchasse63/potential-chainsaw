@@ -5,6 +5,7 @@ import { AppShell } from "./components/app-shell.jsx";
 import { Skeleton } from "./components/skeleton.jsx";
 import { HealthRoute } from "./routes/health.jsx";
 import { AskRoute } from "./routes/ask.jsx";
+import { BookRoute } from "./routes/book.jsx";
 import { BriefingArchiveRoute } from "./routes/briefing-archive.jsx";
 import { ImportRoute } from "./routes/import.jsx";
 import { TodayRoute } from "./routes/today.jsx";
@@ -77,6 +78,12 @@ const scheduleRoute = createRoute({
   component: ScheduleRoute,
 });
 
+const bookRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/book",
+  component: BookRoute,
+});
+
 const marketingRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/marketing",
@@ -123,6 +130,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   askRoute,
   scheduleRoute,
+  bookRoute,
   marketingRoute,
   briefingArchiveRoute,
   healthRoute,

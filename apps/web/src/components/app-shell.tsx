@@ -153,6 +153,22 @@ function RetailNavLink() {
   );
 }
 
+/** Book rail item — Quick Book + front-desk roster/check-in. Owner/manager/
+ * front_desk (UX ruling 9 + unit 6.3: the desk books and checks members in). */
+function BookNavLink() {
+  if (!useHasAnyRole("owner", "manager", "front_desk")) return null;
+  return (
+    <li>
+      <Link to="/book" className={NAV_LINK_BASE} activeProps={{ className: NAV_LINK_ACTIVE }}>
+        <span aria-hidden="true" className="font-mono text-icon-inactive">
+          ◔
+        </span>
+        Book
+      </Link>
+    </li>
+  );
+}
+
 /** POS rail item — the cash till. Owner/manager/front_desk (UX ruling 9 +
  * unit 5.8: front-desk sees the POS screen but not Payments). */
 function PosNavLink() {
@@ -261,6 +277,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         ? "Marketing"
         : pathname.startsWith("/schedule")
           ? "Schedule"
+          : pathname.startsWith("/book")
+            ? "Book"
           : pathname.startsWith("/briefing/archive")
             ? "Briefing archive"
             : pathname.startsWith("/retail")
@@ -335,6 +353,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 Health
               </Link>
             </li>
+            <BookNavLink />
             <RetailNavLink />
             <PosNavLink />
             <PaymentsNavLink />
