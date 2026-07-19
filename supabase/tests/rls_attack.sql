@@ -2285,13 +2285,17 @@ begin
   insert into public.bookings (tenant_id, session_id, person_id, status, booked_via, idempotency_key)
     values (v_a, v_sa_pub, v_pa, 'booked', 'desk', 'seed-35-a');
 
-  -- --- THE ALLOWLIST: the composite return type carries EXACTLY the 8 public
+  -- --- THE ALLOWLIST: the RETURNS TABLE output carries EXACTLY the 8 public
   --     columns, in contract order — no person/attendee column can exist. ----
-  select array_agg(a.attname order by a.attnum) into v_cols
-  from pg_proc p
-  join pg_type t on t.oid = p.prorettype
-  join pg_attribute a on a.attrelid = t.typrelid and a.attnum > 0
-  where p.pronamespace = 'public'::regnamespace and p.proname = 'member_schedule';
+  -- A RETURNS TABLE function's prorettype is the `record` pseudo-type (no
+  -- typrelid), so it has NO pg_attribute rows — the table columns live in
+  -- pg_proc.proargnames where proargmodes = 't' (table-output mode). Read them
+  -- there; joining prorettype→pg_attribute would yield NULL and fail falsely.
+  select array_agg(u.name order by u.ord) into v_cols
+  from pg_proc p,
+    lateral unnest(p.proargnames, p.proargmodes) with ordinality as u(name, mode, ord)
+  where p.pronamespace = 'public'::regnamespace and p.proname = 'member_schedule'
+    and u.mode = 't';
   perform app_test.assert(
     v_cols = array['session_id', 'offering_name', 'starts_at', 'ends_at',
                    'capacity', 'available', 'readiness_ok', 'credit_cost']::text[],
