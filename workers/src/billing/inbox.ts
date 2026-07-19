@@ -120,6 +120,35 @@ async function claimEvents(pool: PooledQueryable, batch: number): Promise<Claime
   return events;
 }
 
+/**
+ * POS gift-card issuance seam (unit 5.7). A stripe-tender pos_checkout defers
+ * gift-card issuance to payment success: after the payment flips to 'succeeded',
+ * find the POS order behind this intent and issue its un-issued gift-card lines
+ * through app.issue_order_gift_cards. That RPC is GATED on the order's payment
+ * being succeeded and IDEMPOTENT (issued_at is null + FOR UPDATE), so at-least-
+ * once redelivery issues each card exactly once. A non-POS payment (no order)
+ * simply matches no row and is a no-op.
+ */
+async function issueGiftCardsForPaidIntent(
+  pool: PooledQueryable,
+  paymentIntentId: string,
+): Promise<void> {
+  const located = await pool.query(
+    `select o.tenant_id, o.id
+     from public.pos_orders o
+     join public.payments p
+       on p.id = o.payment_id and p.tenant_id = o.tenant_id
+     where p.stripe_payment_intent_id = $1`,
+    [paymentIntentId],
+  );
+  const row = asRecord(located.rows[0]);
+  if (row === undefined) return;
+  const tenantId = row["tenant_id"];
+  const orderId = row["id"];
+  if (typeof tenantId !== "string" || typeof orderId !== "string") return;
+  await pool.query(`select app.issue_order_gift_cards($1, $2)`, [tenantId, orderId]);
+}
+
 async function selectPayment(
   pool: PooledQueryable,
   paymentIntentId: string,
@@ -265,6 +294,9 @@ async function applyTransition(
         "failed",
         "succeeded",
       ]);
+      // A stripe-tender POS sale issues its deferred gift-card lines now that the
+      // payment is confirmed (idempotent + gated in the RPC; a no-op otherwise).
+      await issueGiftCardsForPaidIntent(pool, action.paymentIntentId);
       return "succeeded";
     }
     case "payment_failed": {

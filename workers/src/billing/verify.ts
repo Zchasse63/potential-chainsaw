@@ -14,10 +14,12 @@ import type { PooledQueryable } from "../glofox/types.js";
  * The invariants (each violation → an entry in the run's violations array + a
  * deduped alert, mirroring the reconcile engine's open/refresh):
  *
- *   1. terminal_paid_without_intent — every payment in a terminal-PAID state
- *      (succeeded / refunded / partially_refunded) MUST carry a
- *      stripe_payment_intent_id. A paid payment with no intent id is money the
- *      webhook could never have confirmed against a real object → CRITICAL.
+ *   1. terminal_paid_without_intent — every STRIPE payment in a terminal-PAID
+ *      state (succeeded / refunded / partially_refunded) MUST carry a
+ *      stripe_payment_intent_id. A paid stripe payment with no intent id is money
+ *      the webhook could never have confirmed against a real object → CRITICAL.
+ *      TENDER-SCOPED (unit 5.7): a CASH sale (tender='cash') is operator-attested
+ *      with no webhook and no intent id, so it is excluded — not a violation.
  *   2. command_without_payment / command_with_multiple_payments — the intent
  *      layer↔payment linkage, checked BOTH directions: every 'sent'/'confirmed'
  *      create_payment_intent command has exactly one linked payment (a sent
@@ -86,10 +88,15 @@ function asNumber(value: unknown): number {
 // --- the individual checks (each pure SELECT; the ledgers are never mutated) ---
 
 async function checkTerminalPaidWithoutIntent(pool: PooledQueryable): Promise<Violation[]> {
+  // TENDER-SCOPED (unit 5.7): only a STRIPE terminal-paid payment must carry an
+  // intent id. A CASH sale (payments.tender='cash') is operator-attested with no
+  // webhook and legitimately has no stripe_payment_intent_id — flagging it would
+  // make every counter cash sale a false CRITICAL violation.
   const result = await pool.query(
     `select id, tenant_id, status
      from public.payments
      where status in ('succeeded', 'refunded', 'partially_refunded')
+       and tender = 'stripe'
        and stripe_payment_intent_id is null`,
   );
   return result.rows.map((raw) => {

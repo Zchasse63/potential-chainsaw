@@ -22,6 +22,7 @@ import { registerStaffRoutes } from "./routes/staff.js";
 import { registerMarketingRoutes } from "./routes/marketing.js";
 import { registerPaymentRoutes } from "./routes/payments.js";
 import { registerPeopleRoutes } from "./routes/people.js";
+import { registerPosRoutes } from "./routes/pos.js";
 import { registerRetailRoutes } from "./routes/retail.js";
 import { registerWaiverRoutes } from "./routes/waivers.js";
 import { registerTenantRoutes } from "./routes/tenant.js";
@@ -122,6 +123,7 @@ export function createApp(deps: AppDeps & WebhookDeps & StaffDeps & BillingDeps 
   registerWaiverRoutes(app, resolved);
   registerStaffRoutes(app, resolved, deps.env, deps.createStepUpClient);
   registerPaymentRoutes(app, resolved, deps.env, deps.createBillingClient);
+  registerPosRoutes(app, resolved, deps.createBillingClient);
 
   return app;
 }

@@ -1447,6 +1447,165 @@ begin
 end
 $$;
 
+-- ---------------------------------------------------------------------------
+-- (31) POS CHECKOUT + GIFT-CARD REDEMPTION (migration 0039). Proves server-side
+--      pricing (client-sent line prices are ignored), cross-tenant checkout
+--      refusal, the front_desk-discount refusal (a discount is a manager
+--      decision), inline cash gift-card issuance + the append-only 'issue'
+--      entry, idempotent checkout AND redemption, over-redemption refusal, and
+--      that the redemption ledger stays append-only (block 26 lists
+--      gift_card_ledger; re-assert on the redeem path). Seeds tenant-B catalog +
+--      a front_desk user; reuses block-27/29 tenants/people.
+--      (invariant #5/#6/#7: every new RPC gets a cross-tenant attack test.)
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; v_uf uuid; v_pb uuid;
+  v_retail_b uuid; v_gcp_b uuid; v_plan_dropin_b uuid;
+  v_lines jsonb; v_res jsonb; v_order uuid; v_payment uuid;
+  v_gc_code text; v_card uuid; v_redeem jsonb;
+  v_status text; v_tender text; n int; raised boolean;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+  select id into v_pb from public.people where tenant_id = v_b limit 1;
+
+  -- A front_desk user in tenant B (the seed only creates owners).
+  insert into auth.users (id, email) values (gen_random_uuid(), 'fd-b@example.test')
+    returning id into v_uf;
+  insert into public.tenant_users (tenant_id, user_id, role) values (v_b, v_uf, 'front_desk');
+
+  -- Tenant-B catalog: retail, gift-card denomination, and a drop_in plan + its
+  -- CURRENT price phase (one-time, interval null).
+  insert into public.retail_products (tenant_id, name, price_cents)
+    values (v_b, 'Towel', 1500) returning id into v_retail_b;
+  insert into public.gift_card_products (tenant_id, name, amount_cents)
+    values (v_b, 'GC 50', 5000) returning id into v_gcp_b;
+  insert into public.plans (tenant_id, kelo_type, name)
+    values (v_b, 'drop_in', 'Drop-in') returning id into v_plan_dropin_b;
+  insert into public.plan_prices (tenant_id, plan_id, amount_cents, interval)
+    values (v_b, v_plan_dropin_b, 2500, null);
+
+  perform app_test.become(v_ub);
+
+  -- Positive: uB (owner of B) rings a CASH sale (retail x2 + gift card + drop_in).
+  v_lines := jsonb_build_array(
+    jsonb_build_object('kind', 'retail',    'ref_id', v_retail_b,       'qty', 2),
+    jsonb_build_object('kind', 'gift_card', 'ref_id', v_gcp_b,          'qty', 1),
+    jsonb_build_object('kind', 'drop_in',   'ref_id', v_plan_dropin_b,  'qty', 1)
+  );
+  v_res := app.pos_checkout(v_b, v_ub, 'pos-b-1', v_pb, v_lines, 'cash', 0);
+  v_order := (v_res ->> 'order_id')::uuid;
+  v_payment := (v_res ->> 'payment_id')::uuid;
+  perform app_test.assert(v_order is not null, '(31) pos_checkout returned no order');
+
+  -- SERVER-SIDE PRICING: subtotal = 2*1500 + 5000 + 2500 = 10500 (no client price).
+  select subtotal_cents into n from public.pos_orders where id = v_order;
+  perform app_test.assert(n = 10500, '(31) pos_checkout mispriced the order server-side');
+
+  -- CASH → a succeeded payment recorded in-body, tender 'cash' (the documented
+  -- webhook exception).
+  select status, tender into v_status, v_tender from public.payments where id = v_payment;
+  perform app_test.assert(v_status = 'succeeded' and v_tender = 'cash',
+    '(31) cash checkout did not record a succeeded cash payment');
+
+  -- The gift card issued INLINE: a raw code was returned once and an append-only
+  -- 'issue' entry exists at the denomination amount.
+  v_gc_code := (v_res -> 'gift_card_codes' -> 0 ->> 'code');
+  perform app_test.assert(v_gc_code is not null, '(31) cash gift-card sale returned no code');
+  select gift_card_id into v_card from public.pos_order_lines
+    where order_id = v_order and kind = 'gift_card';
+  perform app_test.assert(v_card is not null, '(31) gift-card line was not issued inline');
+  select count(*) into n from public.gift_card_ledger
+    where gift_card_id = v_card and entry_type = 'issue' and amount_cents = 5000;
+  perform app_test.assert(n = 1, '(31) gift-card issue ledger entry missing');
+
+  -- Client-sent line prices are IGNORED: an injected unit_price_cents is not read.
+  v_res := app.pos_checkout(v_b, v_ub, 'pos-price-ignore', v_pb,
+    jsonb_build_array(jsonb_build_object(
+      'kind', 'retail', 'ref_id', v_retail_b, 'qty', 1, 'unit_price_cents', 1, 'price_cents', 1)),
+    'cash', 0);
+  select unit_price_cents into n from public.pos_order_lines
+    where order_id = (v_res ->> 'order_id')::uuid and kind = 'retail';
+  perform app_test.assert(n = 1500, '(31) pos_checkout trusted a client-sent line price');
+
+  -- Idempotent: the same key returns the same order, no second order.
+  v_res := app.pos_checkout(v_b, v_ub, 'pos-b-1', v_pb, v_lines, 'cash', 0);
+  perform app_test.assert((v_res ->> 'order_id')::uuid = v_order,
+    '(31) duplicate pos_checkout key created a different order');
+  select count(*) into n from public.pos_orders where tenant_id = v_b and idempotency_key = 'pos-b-1';
+  perform app_test.assert(n = 1, '(31) duplicate pos_checkout wrote a second order');
+
+  -- Cross-tenant: uB cannot check out against tenant A.
+  raised := false;
+  begin perform app.pos_checkout(v_a, v_ub, 'pos-x', null, v_lines, 'cash', 0);
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(31) uB could pos_checkout for tenant A');
+
+  -- An unknown line kind is refused.
+  raised := false;
+  begin
+    perform app.pos_checkout(v_b, v_ub, 'pos-badkind', v_pb,
+      jsonb_build_array(jsonb_build_object('kind', 'bogus', 'ref_id', v_retail_b, 'qty', 1)),
+      'cash', 0);
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(31) pos_checkout accepted an unknown line kind');
+
+  -- REDEEM: a partial redemption appends a NEGATIVE entry; balance = 5000 - 2000.
+  v_redeem := app.redeem_gift_card(v_b, v_ub, v_gc_code, 2000, 'rd-b-1');
+  perform app_test.assert((v_redeem ->> 'balance_cents')::int = 3000,
+    '(31) redemption balance math wrong (5000 - 2000)');
+  select count(*) into n from public.gift_card_ledger
+    where gift_card_id = v_card and entry_type = 'redeem' and amount_cents = -2000;
+  perform app_test.assert(n = 1, '(31) redeem ledger entry missing or not negative');
+
+  -- Idempotent redemption: the same key appends no second entry.
+  v_redeem := app.redeem_gift_card(v_b, v_ub, v_gc_code, 2000, 'rd-b-1');
+  select count(*) into n from public.gift_card_ledger
+    where gift_card_id = v_card and idempotency_key = 'rd-b-1';
+  perform app_test.assert(n = 1, '(31) duplicate redeem key wrote a second ledger entry');
+
+  -- OVER-REDEMPTION: only 3000 remains; 4000 must be refused.
+  raised := false;
+  begin perform app.redeem_gift_card(v_b, v_ub, v_gc_code, 4000, 'rd-b-2');
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(31) redeem allowed exceeding the balance');
+
+  -- FRONT_DESK + DISCOUNT → refused (a discount is a manager decision).
+  perform app_test.become(v_uf);
+  raised := false;
+  begin perform app.pos_checkout(v_b, v_uf, 'pos-fd-disc', v_pb, v_lines, 'cash', 500);
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(31) front_desk could apply a discount');
+
+  -- front_desk CAN check out with NO discount (positive control).
+  v_res := app.pos_checkout(v_b, v_uf, 'pos-fd-ok', v_pb,
+    jsonb_build_array(jsonb_build_object('kind', 'retail', 'ref_id', v_retail_b, 'qty', 1)),
+    'cash', 0);
+  perform app_test.assert((v_res ->> 'order_id') is not null,
+    '(31) front_desk could not check out without a discount');
+
+  reset role;
+  -- The redemption ledger is append-only at the PRIVILEGE level (service_role
+  -- too) — a redeem NEVER mutates a balance, only appends (block 26 lists it).
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'public.gift_card_ledger', 'update'),
+    '(31) service_role holds UPDATE on gift_card_ledger — the redemption ledger is append-only');
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'public.gift_card_ledger', 'delete'),
+    '(31) service_role holds DELETE on gift_card_ledger — the redemption ledger is append-only');
+  -- The receipt tables have NO client/service write path (definer RPCs write).
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'public.pos_orders', 'insert'),
+    '(31) authenticated holds INSERT on pos_orders — orders are RPC-written');
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'public.pos_order_lines', 'insert'),
+    '(31) authenticated holds INSERT on pos_order_lines — lines are RPC-written');
+end
+$$;
+
 do $$
 declare
   n int;
