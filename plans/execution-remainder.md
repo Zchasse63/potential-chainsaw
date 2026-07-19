@@ -46,9 +46,14 @@ reviewers → director integrates, applies migrations live, runs the attack suit
 | **7.1 readiness dashboard + authority flips** | The per-capability authority matrix as a first-class config (tenant settings + health surface), the readiness dashboard (launch hard-gates per UX §Setup: reconciliation green, payment verified, active waiver, resources+plans configured, roles assigned, delivery tested), onboarding checklist assets. |
 
 ### Wave 8 — member surface (code-buildable slice)
+_Owner plan change 2026-07-19 (plan-final §10): native iOS + Android member apps (Expo/React
+Native, one codebase) are REQUIRED and cutover-gating — app parity with the Glofox member app the
+studio's members use today. The web app still ships FIRST (claiming/no-install path; earns beta
+metrics during store review). One client-agnostic member API/auth spine serves all three surfaces._
 | Unit | Scope |
 |---|---|
-| **8.1 member app** | The member-facing SSR surface (on-domain booking, account claiming, credits/cards, waiver signing via the tokenized link path, receipts, unsubscribe prefs) per §6 phase 8 — built against the booking engine; deploys with the Netlify gate. |
+| **8.1 member web app** | The member SSR web surface (on-domain booking, account claiming, credits/cards, waiver, receipts, unsubscribe prefs) per §6 phase 8 + plans/plan-member-app.md — built against the booking engine; deploys with the Netlify gate. |
+| **8.2 mobile apps** | Expo/React Native iOS + Android consuming the same member API spine; shared member-core package (API client, auth/claiming hooks, booking state machine) per the plan-member-app mobile track; push via Expo (APNs/FCM); store submission on the critical path (owner gates: Apple Developer + Play Console accounts, P8-2). |
 
 ### Live-ops / owner-gated (NOT code — tracked in BLOCKERS)
 Netlify deploy (P0-3, unlocks scheduler cadence + every URL) · Stripe Connect account (P0-5 → live

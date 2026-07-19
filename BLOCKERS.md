@@ -48,7 +48,8 @@ _Last updated: 2026-07-17 (Phase 0 in progress)._
 | P1-3b | **ClassPass** (was A4 "may not be in use") | ✅ **ANSWERED BY DATA 2026-07-18: ClassPass IS in use** — 182 bookings carry origin 'classpass'; 45 people derive as aggregator. The aggregator segment is real. | ✅ |
 | P2-2 | **Brand-voice card** | 3–5 tone adjectives, we-say/never-say, sign-off, emoji stance, discount philosophy | 🟥 (phase 2–3) |
 | P5-1 | **Sales-tax practice** (A6) | Are sessions/retail taxed? Who files? | 🟥 (phase 5) |
-| P8-1 | **The Sauna Guys brand assets** | Logo, colors, type for the member-surface skin | 🟧 (phase 8) |
+| P8-1 | **The Sauna Guys brand assets** | Logo, colors, type for the member-surface skin (now ALSO the app icons/splash for the store apps) | 🟧 (phase 8) |
+| P8-2 | **Apple Developer Program + Google Play Console accounts** (owner plan change 2026-07-19: native iOS+Android member apps required at cutover) | Enroll Apple Developer Program ($99/yr — enrollment can take days) + Google Play Console ($25 once). Needed before store submission; store review adds lead time to the phase-8 critical path. | 🟥 (phase-8 store gate) |
 
 ## Owner policy defaults in force (owner-questions §B — using documented defaults until changed)
 

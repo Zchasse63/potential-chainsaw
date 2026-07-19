@@ -752,6 +752,21 @@ verification is).
 
 ## 10. Changelog
 
+**2026-07-19 (OWNER PLAN CHANGE — native member apps added to phase 8):** the councils scoped the
+member surface as SSR-web-only (installable PWA explicitly dropped). The owner has now ruled that
+**native iOS AND Android member apps are required, ready at cutover** — members currently use the
+Glofox member app, so retiring Glofox without store apps would remove something they have today
+(app parity is cutover-gating). Decisions (owner, in chat): **Expo/React Native** for both
+platforms from one codebase; **the member web app still ships, and ships first** — it is the
+claiming/no-install path and earns the member-beta metrics while the apps are in store review; the
+beta gate itself remains web-eligible (channels = web + apps combined). The member API/auth spine
+(OTP claiming, identity resolution, API-only data access) is client-agnostic and serves all three
+surfaces unchanged. Phase-8 planning (plans/plan-member-app.md, in progress) gains a mobile track:
+the web-vs-native code-sharing decision (shared member-core package vs universal app), push
+notifications (APNs/FCM via Expo), and store-submission lead times on the critical path. New owner
+gates: Apple Developer Program account + Google Play Console account (BLOCKERS P8-2). Payments in-app
+stay on Stripe card rails (Apple IAP guideline 3.1.3(e) exempts physical-world services).
+
 **2026-07-17 (Glofox API verification session — pre-phase-0 head start):** the OpenAPI 3.1 spec
 (63 operations) and all 13 portal guides pulled locally; live read-only probes run against
 production with PII-redacted pinned samples — [docs/glofox/README.md](../docs/glofox/README.md)
