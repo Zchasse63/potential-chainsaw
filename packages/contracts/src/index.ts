@@ -5,6 +5,8 @@
  */
 export * from "./brand.js";
 export * from "./envelope.js";
+export * from "./freshness.js";
+export * from "./api-error.js";
 export * from "./mutations.js";
 export * from "./glofox/primitives.js";
 export * from "./glofox/envelopes.js";

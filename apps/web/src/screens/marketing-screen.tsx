@@ -6,8 +6,8 @@ import {
   type ApprovalCampaign,
 } from "../components/approval-ceremony.jsx";
 import { DataBoundary } from "../components/data-boundary.jsx";
-import { EmptyState } from "../components/empty-state.jsx";
-import { Skeleton } from "../components/skeleton.jsx";
+import { EmptyState } from "@kelo/ui/react";
+import { Skeleton } from "@kelo/ui/react";
 import { fetchEnvelope, postEnvelope } from "../lib/api.js";
 
 interface CampaignListResponse {

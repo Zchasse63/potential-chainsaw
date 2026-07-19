@@ -1,4 +1,4 @@
-import type { FreshnessBucket } from "../lib/freshness.js";
+import type { FreshnessBucket } from "@kelo/contracts";
 
 /**
  * FreshnessChip — design guide §4 verbatim:

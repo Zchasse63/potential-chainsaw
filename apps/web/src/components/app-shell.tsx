@@ -7,8 +7,8 @@ import { fetchEnvelope } from "../lib/api.js";
 import { aggregateFreshness, useHealthQuery, type HealthReport } from "../lib/health.js";
 import type { FreshnessBucket } from "../lib/freshness.js";
 import { Button } from "./button.jsx";
-import { FreshnessChip } from "./freshness-chip.jsx";
-import { Skeleton } from "./skeleton.jsx";
+import { FreshnessChip } from "@kelo/ui/react";
+import { Skeleton } from "@kelo/ui/react";
 
 /**
  * AppShell — owner-desktop frame (design guide §8): 232px left rail + top

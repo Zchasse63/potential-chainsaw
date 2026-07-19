@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Button } from "./button.jsx";
-import { EmptyState } from "./empty-state.jsx";
+import { EmptyState } from "@kelo/ui/react";
 import type { BriefingArtifact, FeedbackInput, FeedbackMutationHandle } from "../lib/today.js";
 
 const MONEY = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });

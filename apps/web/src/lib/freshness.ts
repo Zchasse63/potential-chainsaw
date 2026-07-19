@@ -1,6 +1,7 @@
 /**
- * Freshness buckets — mirrors apps/api/src/freshness.ts. The API owns the
- * thresholds (live <1m, synced ≥1m, stale ≥2h, critical ≥4h, null → unknown)
- * and computes the bucket; the web app only renders what it is given.
+ * Wave 8.1b: `FreshnessBucket` moved to @kelo/contracts so packages/ui and
+ * every app share the one type. The API still owns the thresholds
+ * (apps/api/src/freshness.ts); this thin re-export keeps existing apps/web
+ * import sites working unchanged.
  */
-export type FreshnessBucket = "live" | "synced" | "stale" | "critical" | "unknown";
+export type { FreshnessBucket } from "@kelo/contracts";

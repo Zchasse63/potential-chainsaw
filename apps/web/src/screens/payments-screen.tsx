@@ -1,9 +1,9 @@
 import { useRef, useState, type FormEvent } from "react";
 import { Button } from "../components/button.jsx";
 import { DataBoundary, type BoundaryQuery } from "../components/data-boundary.jsx";
-import { EmptyState } from "../components/empty-state.jsx";
+import { EmptyState } from "@kelo/ui/react";
 import { PaymentStatusChip, TenderBadge } from "../components/payment-chips.jsx";
-import { Skeleton } from "../components/skeleton.jsx";
+import { Skeleton } from "@kelo/ui/react";
 import { StepUpPrompt, type StepUpGrantResult } from "../components/step-up-prompt.jsx";
 import type { DunningRow, Payment, RefundAccepted } from "../lib/payments.js";
 import { REFUND_STEP_UP_CONTEXT } from "../lib/payments.js";

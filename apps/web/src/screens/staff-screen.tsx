@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "../components/button.jsx";
 import { DataBoundary } from "../components/data-boundary.jsx";
-import { Skeleton } from "../components/skeleton.jsx";
+import { Skeleton } from "@kelo/ui/react";
 import { StepUpPrompt, type StepUpGrantResult } from "../components/step-up-prompt.jsx";
 import { ApiRequestError, fetchEnvelope, postEnvelope } from "../lib/api.js";
 

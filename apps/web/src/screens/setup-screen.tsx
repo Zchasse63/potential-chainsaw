@@ -1,9 +1,9 @@
 import { useRef, useState, type FormEvent } from "react";
 import { Button } from "../components/button.jsx";
 import { DataBoundary, type BoundaryQuery } from "../components/data-boundary.jsx";
-import { Skeleton } from "../components/skeleton.jsx";
-import { SourceLabel } from "../components/source-label.jsx";
-import { StatusPill } from "../components/status-pill.jsx";
+import { Skeleton } from "@kelo/ui/react";
+import { SourceLabel } from "@kelo/ui/react";
+import { StatusPill } from "@kelo/ui/react";
 import { StepUpPrompt, type StepUpGrantResult } from "../components/step-up-prompt.jsx";
 import {
   AUTHORITY_FLIP_STEP_UP_CONTEXT,

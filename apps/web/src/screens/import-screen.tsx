@@ -3,10 +3,10 @@ import { Link } from "@tanstack/react-router";
 import type { EnvelopeMeta } from "@kelo/contracts";
 import { Button } from "../components/button.jsx";
 import { DataBoundary, type BoundaryQuery } from "../components/data-boundary.jsx";
-import { EmptyState } from "../components/empty-state.jsx";
+import { EmptyState } from "@kelo/ui/react";
 import { ReconciliationRegion } from "../components/reconciliation.jsx";
-import { Skeleton } from "../components/skeleton.jsx";
-import { SourceLabel } from "../components/source-label.jsx";
+import { Skeleton } from "@kelo/ui/react";
+import { SourceLabel } from "@kelo/ui/react";
 import { ApiRequestError } from "../lib/api.js";
 import type {
   QuarantineCause,

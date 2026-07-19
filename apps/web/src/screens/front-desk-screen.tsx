@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Button } from "../components/button.jsx";
 import { DataBoundary, type BoundaryQuery } from "../components/data-boundary.jsx";
-import { EmptyState } from "../components/empty-state.jsx";
-import { Skeleton } from "../components/skeleton.jsx";
+import { EmptyState } from "@kelo/ui/react";
+import { Skeleton } from "@kelo/ui/react";
 import { ApiRequestError } from "../lib/api.js";
 import type { BookResult, CheckInResult, RosterBooking, RosterData, RosterWaitlistEntry } from "../lib/bookings.js";
 import {

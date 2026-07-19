@@ -16,14 +16,18 @@ export default defineConfig({
       "@kelo/glofox": `${root}packages/glofox/src/index.ts`,
       "@kelo/workers": `${root}workers/src/index.ts`,
       "@kelo/api": `${root}apps/api/src/index.ts`,
+      // @kelo/ui/react resolves to its TS source so component tests run
+      // without requiring a prior @kelo/ui build (same rule as the others).
+      "@kelo/ui/react": `${root}packages/ui/react/index.ts`,
     },
   },
   test: {
     include: [
       "packages/*/test/**/*.test.ts",
       "apps/*/test/**/*.test.ts",
-      // apps/web component tests (React TSX; each file opts into the jsdom
+      // Component tests (React TSX; each file opts into the jsdom
       // environment via its @vitest-environment docblock).
+      "packages/*/test/**/*.test.tsx",
       "apps/*/test/**/*.test.tsx",
       "workers/test/**/*.test.ts",
     ],
