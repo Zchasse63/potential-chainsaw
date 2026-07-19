@@ -1574,6 +1574,7 @@ begin
   perform app_test.assert(raised, '(31) redeem allowed exceeding the balance');
 
   -- FRONT_DESK + DISCOUNT → refused (a discount is a manager decision).
+  reset role;  -- become() is superuser-only; drop the uB impersonation first
   perform app_test.become(v_uf);
   raised := false;
   begin perform app.pos_checkout(v_b, v_uf, 'pos-fd-disc', v_pb, v_lines, 'cash', 500);

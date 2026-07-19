@@ -641,7 +641,7 @@ begin
 end;
 $$;
 
-comment on function app.pos_checkout(uuid, uuid, text, uuid, jsonb, text, int) is
+comment on function app.pos_checkout(uuid, uuid, text, uuid, jsonb, text, int, text) is
   'The POS checkout RPC. Resolves every line price from the LIVE catalog (retail_products / gift_card_products / drop_in plan_prices current phase), computes subtotal + server-side tax (tenants.settings->>''tax_rate_bp'') + total in-body — client amounts are never trusted. CASH → a succeeded payment recorded in-body (the documented webhook exception, tender-scoped) + inline gift-card issuance + a receipt. STRIPE → a requires_payment payment + a create_payment_intent outbox command (same key); issuance deferred to the inbox. owner/manager/front_desk; a nonzero discount requires owner/manager. Idempotent on (tenant, idempotency_key). Returns {payment_id, order_id, gift_card_codes?}.';
 
 create or replace function public.pos_checkout(
@@ -651,7 +651,8 @@ create or replace function public.pos_checkout(
   p_person          uuid,
   p_lines           jsonb,
   p_tender          text,
-  p_discount_cents  int default 0
+  p_discount_cents  int default 0,
+  p_gift_card_code  text default null
 )
 returns jsonb
 language sql
@@ -659,7 +660,8 @@ security invoker
 set search_path = ''
 as $$
   select app.pos_checkout(
-    p_tenant, p_actor, p_idempotency_key, p_person, p_lines, p_tender, p_discount_cents
+    p_tenant, p_actor, p_idempotency_key, p_person, p_lines, p_tender, p_discount_cents,
+    p_gift_card_code
   );
 $$;
 
@@ -694,11 +696,11 @@ grant select on public.pos_orders, public.pos_order_lines to authenticated, serv
 -- Function grants. pos_checkout/redeem are member-callable (the RPC re-checks
 -- role); issue_order_gift_cards is service-role only (the inbox), plus the
 -- internal pos_checkout call (definer-owned, so grant-independent).
-revoke all on function app.pos_checkout(uuid, uuid, text, uuid, jsonb, text, int) from public;
-grant execute on function app.pos_checkout(uuid, uuid, text, uuid, jsonb, text, int)
+revoke all on function app.pos_checkout(uuid, uuid, text, uuid, jsonb, text, int, text) from public;
+grant execute on function app.pos_checkout(uuid, uuid, text, uuid, jsonb, text, int, text)
   to authenticated, service_role;
-revoke all on function public.pos_checkout(uuid, uuid, text, uuid, jsonb, text, int) from public;
-grant execute on function public.pos_checkout(uuid, uuid, text, uuid, jsonb, text, int)
+revoke all on function public.pos_checkout(uuid, uuid, text, uuid, jsonb, text, int, text) from public;
+grant execute on function public.pos_checkout(uuid, uuid, text, uuid, jsonb, text, int, text)
   to authenticated, service_role;
 
 revoke all on function app.redeem_gift_card(uuid, uuid, text, int, text) from public;

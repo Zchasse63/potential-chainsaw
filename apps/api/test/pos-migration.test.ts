@@ -115,8 +115,8 @@ describe("migration 0039 — issuance + redemption (append-only, serialized)", (
 
   it("grants execute to authenticated + service_role on the member RPCs and service-only on issuance", () => {
     for (const sig of [
-      "app.pos_checkout(uuid, uuid, text, uuid, jsonb, text, int)",
-      "public.pos_checkout(uuid, uuid, text, uuid, jsonb, text, int)",
+      "app.pos_checkout(uuid, uuid, text, uuid, jsonb, text, int, text)",
+      "public.pos_checkout(uuid, uuid, text, uuid, jsonb, text, int, text)",
       "app.redeem_gift_card(uuid, uuid, text, int, text)",
       "public.redeem_gift_card(uuid, uuid, text, int, text)",
     ]) {
