@@ -12,6 +12,7 @@ import { ScheduleRoute } from "./routes/schedule.jsx";
 import { MarketingRoute } from "./routes/marketing.jsx";
 import { RetailRoute } from "./routes/retail.jsx";
 import { StaffRoute } from "./routes/staff.jsx";
+import { WaiversRoute } from "./routes/waivers.jsx";
 
 /**
  * Route tree (TanStack Router, code-based). A screen's route lands with its
@@ -98,6 +99,12 @@ const staffRoute = createRoute({
   component: StaffRoute,
 });
 
+const waiversRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/waivers",
+  component: WaiversRoute,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   askRoute,
@@ -108,6 +115,7 @@ const routeTree = rootRoute.addChildren([
   importRoute,
   retailRoute,
   staffRoute,
+  waiversRoute,
 ]);
 
 export const router = createRouter({ routeTree });

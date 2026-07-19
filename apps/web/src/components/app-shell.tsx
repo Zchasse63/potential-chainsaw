@@ -123,8 +123,7 @@ function RetailNavIcon() {
   );
 }
 
-/** Retail is owner/manager only (UX ruling 9: a nav item appears with its feature). */
-function RetailNavLink() {
+function useIsOwnerOrManager(): boolean {
   const auth = useAuth();
   const access = useQuery({
     queryKey: ["auth", "me"],
@@ -132,14 +131,36 @@ function RetailNavLink() {
     queryFn: () => fetchEnvelope("/auth/me", auth.accessToken as string),
     retry: false,
   });
-  if (access.status !== "success") return null;
+  if (access.status !== "success") return false;
   const tenants = (access.data as { data?: { tenants?: { role?: string }[] } }).data?.tenants ?? [];
-  if (!tenants.some((tenant) => tenant.role === "owner" || tenant.role === "manager")) return null;
+  return tenants.some((tenant) => tenant.role === "owner" || tenant.role === "manager");
+}
+
+/** Retail is owner/manager only (UX ruling 9: a nav item appears with its feature). */
+function RetailNavLink() {
+  if (!useIsOwnerOrManager()) return null;
   return (
     <li>
       <Link to="/retail" className={NAV_LINK_BASE} activeProps={{ className: NAV_LINK_ACTIVE }}>
         <RetailNavIcon />
         Retail
+      </Link>
+    </li>
+  );
+}
+
+/** Waivers rail item — versioned waiver text + desk capture live here. Shown
+ * only to owner/manager (UX ruling 9: the nav item appears only when the
+ * viewer can act on it; front-desk desk capture is reached from a person). */
+function WaiversNavLink() {
+  if (!useIsOwnerOrManager()) return null;
+  return (
+    <li>
+      <Link to="/waivers" className={NAV_LINK_BASE} activeProps={{ className: NAV_LINK_ACTIVE }}>
+        <span aria-hidden="true" className="font-mono text-icon-inactive">
+          §
+        </span>
+        Waivers
       </Link>
     </li>
   );
@@ -210,6 +231,8 @@ export function AppShell({ children }: { children: ReactNode }) {
               ? "Retail"
               : pathname.startsWith("/staff")
                 ? "Staff"
+                : pathname.startsWith("/waivers")
+                  ? "Waivers"
                 : pathname.startsWith("/health")
                   ? "Health"
                   : "Today";
@@ -274,6 +297,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </li>
             <RetailNavLink />
             <StaffNavLink />
+            <WaiversNavLink />
           </ul>
         </nav>
       </aside>

@@ -20,3 +20,6 @@ docs/glofox/_*
 
 # os
 .DS_Store
+
+# Workflow agent worktrees + local Claude state
+.claude/
