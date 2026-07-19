@@ -40,7 +40,7 @@
 -- legitimately has no intent id and must NOT be a false CRITICAL violation.
 alter table public.payments
   add column tender text not null default 'stripe'
-    check (tender in ('stripe', 'cash'));
+    check (tender in ('stripe', 'cash', 'gift_card'));
 
 comment on column public.payments.tender is
   'How the payment is tendered: ''stripe'' (webhook-confirmed; the default and the backfill for every pre-POS payment) or ''cash'' (operator-attested, recorded ''succeeded'' inside app.pos_checkout — the one documented exception to webhook-as-authority, scoped by this column). verify_money check 1 is tender-scoped to ''stripe'' so a cash sale''s null intent id is not a violation.';
@@ -74,7 +74,7 @@ create table public.pos_orders (
   discount_cents  int not null default 0 check (discount_cents >= 0),
   tax_cents       int not null default 0 check (tax_cents >= 0),
   total_cents     int not null check (total_cents >= 0),
-  tender          text not null check (tender in ('stripe', 'cash')),
+  tender          text not null check (tender in ('stripe', 'cash', 'gift_card')),
   idempotency_key text not null,
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now(),
@@ -328,7 +328,10 @@ create or replace function app.pos_checkout(
   p_person          uuid,
   p_lines           jsonb,
   p_tender          text,
-  p_discount_cents  int default 0
+  p_discount_cents  int default 0,
+  -- Settlement gift card (tender='gift_card'): the RAW code the member hands
+  -- over; hashed + ledger-debited in-body. Null for cash/stripe tenders.
+  p_gift_card_code  text default null
 )
 returns jsonb
 language plpgsql
@@ -349,6 +352,7 @@ declare
   v_resolved   jsonb := '[]'::jsonb;
   v_r          jsonb;
   v_rate_bp    int;
+  v_gift_sale  int := 0;
   v_taxable    int;
   v_tax        int;
   v_total      int;
@@ -381,8 +385,28 @@ begin
   if p_idempotency_key is null or length(trim(p_idempotency_key)) = 0 then
     raise exception 'idempotency key is required' using errcode = '22023';
   end if;
-  if p_tender is null or p_tender not in ('cash', 'stripe') then
-    raise exception 'tender must be cash or stripe' using errcode = '22023';
+  if p_tender is null or p_tender not in ('cash', 'stripe', 'gift_card') then
+    raise exception 'tender must be cash, stripe, or gift_card' using errcode = '22023';
+  end if;
+  -- REVIEW FIX (5.7-crit-1): a stripe-tender gift-card SALE is refused until the
+  -- code-delivery seam ships with the live Connect account — the inbox issues
+  -- the card on payment success but the raw code's only carrier is the RPC
+  -- return, which the buyer never sees on the async path. Money must never buy
+  -- an unredeemable card. Cash (code returned once, in-person) is unaffected.
+  if p_tender = 'stripe' and exists (
+    select 1 from jsonb_array_elements(p_lines) l where l ->> 'kind' = 'gift_card'
+  ) then
+    raise exception 'gift-card sales are cash-only until card checkout ships (code delivery)'
+      using errcode = '22023';
+  end if;
+  -- REVIEW FIX (5.7-crit-2): buying a gift card WITH a gift card is circular.
+  if p_tender = 'gift_card' and exists (
+    select 1 from jsonb_array_elements(p_lines) l where l ->> 'kind' = 'gift_card'
+  ) then
+    raise exception 'a gift card cannot pay for a gift card' using errcode = '22023';
+  end if;
+  if p_tender = 'gift_card' and (p_gift_card_code is null or length(trim(p_gift_card_code)) = 0) then
+    raise exception 'gift_card tender requires the card code' using errcode = '22023';
   end if;
   if p_lines is null or jsonb_typeof(p_lines) <> 'array' or jsonb_array_length(p_lines) = 0 then
     raise exception 'at least one line is required' using errcode = '22023';
@@ -464,14 +488,24 @@ begin
   -- TAX is computed server-side from tenants.settings->>'tax_rate_bp' (basis
   -- points; default 0 — owner question A6 open). A client tax amount is
   -- deliberately NOT a parameter; the client cannot assert a tax figure.
-  select coalesce(nullif(t.settings ->> 'tax_rate_bp', '')::int, 0) into v_rate_bp
+  -- Digit-guarded (a malformed setting falls back to 0, never 500s checkout).
+  select coalesce(
+           case when t.settings ->> 'tax_rate_bp' ~ '^[0-9]{1,5}$'
+                then (t.settings ->> 'tax_rate_bp')::int
+           end, 0) into v_rate_bp
   from public.tenants t where t.id = p_tenant;
   if v_rate_bp is null or v_rate_bp < 0 then
     v_rate_bp := 0;
   end if;
-  v_taxable := v_subtotal - coalesce(p_discount_cents, 0);
+  -- Gift-card FACE VALUE is excluded from the taxable base (standard treatment:
+  -- the card is stored value; tax applies when it buys goods — and settlement
+  -- tender='gift_card' orders ARE taxed normally on their goods). Pending A6.
+  select coalesce(sum((r ->> 'line_total')::int), 0) into v_gift_sale
+  from jsonb_array_elements(v_resolved) r
+  where r ->> 'kind' = 'gift_card';
+  v_taxable := greatest(v_subtotal - v_gift_sale - coalesce(p_discount_cents, 0), 0);
   v_tax     := (v_taxable * v_rate_bp) / 10000;   -- integer floor
-  v_total   := v_taxable + v_tax;
+  v_total   := v_subtotal - coalesce(p_discount_cents, 0) + v_tax;
 
   -- For stripe tender the buyer must be a customer on file (the create_intent
   -- seam needs it). Terminal is not built now — this documents the card path.
@@ -505,6 +539,22 @@ begin
         (tenant_id, customer_id, amount_cents, currency, status, tender, command_id)
       values
         (p_tenant, v_customer, v_total, 'usd', 'requires_payment', 'stripe', v_command_id)
+      returning id into v_payment_id;
+    elsif p_tender = 'gift_card' then
+      -- REVIEW FIX (5.7-crit-2): SETTLEMENT WITH A GIFT CARD — the ledger debit
+      -- and the payment record happen in THIS transaction, so a sale paid by
+      -- gift card is never rung as phantom cash (double-counted revenue). The
+      -- debit reuses app.redeem_gift_card (row-lock serialization, ledger-sum
+      -- balance, over-redemption raises, idempotent on the derived key); the
+      -- payment is an attested non-stripe settlement (tender scopes it out of
+      -- verify_money check 1, like cash).
+      perform app.redeem_gift_card(
+        p_tenant, p_actor, p_gift_card_code, v_total, p_idempotency_key || ':settle');
+
+      insert into public.payments
+        (tenant_id, customer_id, amount_cents, currency, status, tender)
+      values
+        (p_tenant, null, v_total, 'usd', 'succeeded', 'gift_card')
       returning id into v_payment_id;
     else
       -- CASH: operator-attested succeeded, no webhook, no intent id. tender scopes

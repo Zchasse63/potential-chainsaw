@@ -23,7 +23,9 @@ const checkoutLine = z.object({
 // line price from the live catalog; a client-sent amount is never accepted.
 const checkoutBody = z.object({
   person_id: z.string().uuid().nullable().optional(),
-  tender: z.enum(["cash", "stripe"]),
+  tender: z.enum(["cash", "stripe", "gift_card"]),
+  // Settlement card code (tender='gift_card' only) — hashed server-side in the RPC.
+  gift_card_code: z.string().trim().min(1).max(200).optional(),
   lines: z.array(checkoutLine).min(1).max(200),
   discount_cents: discountCents.default(0),
 });
@@ -90,6 +92,7 @@ export function registerPosRoutes(
         personId: body.person_id ?? null,
         lines: body.lines,
         tender: body.tender,
+        giftCardCode: body.gift_card_code ?? null,
         discountCents: body.discount_cents,
       });
       return c.json(c.var.ok({ checkout: result }, native), 201);

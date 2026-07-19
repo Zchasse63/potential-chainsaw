@@ -26,9 +26,9 @@ function fnBody(sql: string, signature: string): string {
 }
 
 describe("migration 0039 — payments.tender + append-only ledger idempotency", () => {
-  it("adds payments.tender constrained to stripe|cash with a stripe default (backfill)", () => {
+  it("adds payments.tender constrained to stripe|cash|gift_card with a stripe default (backfill)", () => {
     expect(migration).toMatch(/alter table public\.payments\s+add column tender text not null default 'stripe'/);
-    expect(migration).toContain("check (tender in ('stripe', 'cash'))");
+    expect(migration).toContain("check (tender in ('stripe', 'cash', 'gift_card'))");
   });
 
   it("adds a redemption idempotency key WITHOUT granting UPDATE/DELETE (still append-only)", () => {
@@ -190,5 +190,28 @@ describe("rls_attack.sql — POS coverage (block 31)", () => {
     expect(attackSuite).toContain("front_desk could apply a discount");
     expect(attackSuite).toContain("redeem allowed exceeding the balance");
     expect(attackSuite).toContain("redemption ledger is append-only");
+  });
+});
+
+describe("5.7 review fixes (director) — settlement + refusals in the RPC SQL", () => {
+  it("refuses gift-card SALES on stripe tender until code delivery ships (crit-1)", () => {
+    expect(migration).toContain("gift-card sales are cash-only until card checkout ships");
+    // The refusal fires for stripe tender + any gift_card line.
+    expect(migration).toMatch(/p_tender = 'stripe' and exists \(\s*select 1 from jsonb_array_elements\(p_lines\) l where l ->> 'kind' = 'gift_card'/);
+  });
+
+  it("adds tender='gift_card' SETTLEMENT: ledger debit + payment in ONE transaction (crit-2)", () => {
+    expect(migration).toContain("tender must be cash, stripe, or gift_card");
+    // Settlement reuses the serialized, idempotent redeem path with a derived key…
+    expect(migration).toContain("p_idempotency_key || ':settle'");
+    // …and records an attested non-stripe payment (tender-scoped out of check 1).
+    expect(migration).toMatch(/'succeeded', 'gift_card'/);
+    // Circularity refused: a gift card cannot pay for a gift card.
+    expect(migration).toContain("a gift card cannot pay for a gift card");
+  });
+
+  it("tax: digit-guarded rate + gift-card face value excluded from the taxable base", () => {
+    expect(migration).toContain("~ '^[0-9]{1,5}$'");
+    expect(migration).toMatch(/v_taxable := greatest\(v_subtotal - v_gift_sale/);
   });
 });

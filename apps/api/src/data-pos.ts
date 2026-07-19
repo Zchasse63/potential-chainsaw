@@ -87,7 +87,7 @@ export const posOrderSchema = z.object({
   discount_cents: z.number().int().nonnegative(),
   tax_cents: z.number().int().nonnegative(),
   total_cents: z.number().int().nonnegative(),
-  tender: z.enum(["stripe", "cash"]),
+  tender: z.enum(["stripe", "cash", "gift_card"]),
   created_at: timestamp,
   pos_order_lines: z.array(posOrderLineSchema).default([]),
 });
@@ -142,7 +142,8 @@ export interface CheckoutArgs {
   idempotencyKey: string;
   personId: string | null;
   lines: CheckoutLine[];
-  tender: "cash" | "stripe";
+  tender: "cash" | "stripe" | "gift_card";
+  giftCardCode?: string | null;
   discountCents: number;
 }
 
@@ -173,6 +174,7 @@ export async function posCheckout(
     p_person: args.personId,
     p_lines: args.lines,
     p_tender: args.tender,
+    p_gift_card_code: args.giftCardCode ?? null,
     p_discount_cents: args.discountCents,
   });
   if (error !== null) throw mapRpcError(error, "posCheckout");
