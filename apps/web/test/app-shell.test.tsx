@@ -46,6 +46,7 @@ describe("AppShell", () => {
       "Ask",
       "Import review",
       "Health",
+      "◔Book",
       "Retail",
       "◧Point of sale",
       "$Payments",
