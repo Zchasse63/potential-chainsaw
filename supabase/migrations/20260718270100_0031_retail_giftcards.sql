@@ -204,8 +204,13 @@ create policy gift_card_products_update on public.gift_card_products for update
 create policy gift_card_products_delete on public.gift_card_products for delete
   using (app.has_tenant_role(tenant_id, array['owner', 'manager']));
 
+-- gift_cards.code_hash is secret credential material (like
+-- tenant_invitations.token_hash, gated to owner/manager in 0004). Restrict the
+-- row read to owner/manager so a front_desk/trainer JWT cannot harvest code
+-- hashes via direct PostgREST. Redemption (phase 5) looks up by code through a
+-- definer RPC, never a member table read.
 create policy gift_cards_select on public.gift_cards for select
-  using (tenant_id in (select app.current_tenant_ids()));
+  using (app.has_tenant_role(tenant_id, array['owner', 'manager']));
 create policy gift_card_ledger_select on public.gift_card_ledger for select
   using (tenant_id in (select app.current_tenant_ids()));
 

@@ -976,6 +976,37 @@ $$;
 -- ---------------------------------------------------------------------------
 -- Verdict
 -- ---------------------------------------------------------------------------
+-- (26) APPEND-ONLY GRANT GUARD (invariant #6: ledgers/evidence are append-only).
+--      Every append-only table must deny UPDATE and DELETE to every client role
+--      (anon, authenticated, service_role) — inserts + the definer/owner append,
+--      but history is never rewritten. A migration that accidentally grants
+--      write to one of these (e.g. `grant update on public.credit_ledger`) fails
+--      HERE, not in production. Explicit list (comment-driven enumeration missed
+--      the pre-comment-convention ledgers). Add new append-only tables here.
+do $$
+declare
+  t text;
+  role_name text;
+begin
+  reset role;
+  foreach t in array array[
+    'credit_ledger', 'gift_card_ledger', 'waiver_signatures', 'audit_events',
+    'communication_consents', 'step_up_events', 'person_relationship_log',
+    'briefing_feedback', 'campaign_attributions', 'person_deletions',
+    'ask_misses', 'schedule_publish_log'
+  ] loop
+    foreach role_name in array array['anon', 'authenticated', 'service_role'] loop
+      perform app_test.assert(
+        not has_table_privilege(role_name, format('public.%I', t), 'UPDATE'),
+        format('(26) append-only public.%s grants UPDATE to %s', t, role_name));
+      perform app_test.assert(
+        not has_table_privilege(role_name, format('public.%I', t), 'DELETE'),
+        format('(26) append-only public.%s grants DELETE to %s', t, role_name));
+    end loop;
+  end loop;
+end
+$$;
+
 do $$
 declare
   n int;
