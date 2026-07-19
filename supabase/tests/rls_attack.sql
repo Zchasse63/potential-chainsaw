@@ -994,7 +994,7 @@ begin
     'communication_consents', 'step_up_events', 'person_relationship_log',
     'briefing_feedback', 'campaign_attributions', 'person_deletions',
     'ask_misses', 'schedule_publish_log', 'plan_prices', 'dunning_states',
-    'verify_runs'
+    'verify_runs', 'authority_flips'
   ] loop
     foreach role_name in array array['anon', 'authenticated', 'service_role'] loop
       perform app_test.assert(
@@ -2066,6 +2066,157 @@ begin
   perform app_test.assert(
     not has_table_privilege('service_role', 'public.waitlist_entries', 'delete'),
     '(33) service_role holds DELETE on waitlist_entries — it is RPC-written');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (34) AUTHORITY MATRIX (migration 0042): the per-capability cutover ledger.
+--      Proves:
+--        * cross-tenant read refusal — uB sees zero of tenant A's authority_flips
+--          AND zero of A's current_authority rows (the invoker view is
+--          RLS-scoped; app.current_tenant_ids() enumerates only the caller's);
+--        * OWNER-ONLY flip — a manager AND a front_desk of B are BOTH refused
+--          (the cutover lever is owner-only, re-checked in-body);
+--        * cross-tenant flip refusal — uA (owner of A) cannot flip tenant B;
+--        * APPEND-ONLY — UPDATE/DELETE on authority_flips is refused for the
+--          owning tenant's owner AND at the privilege level for service_role;
+--        * unknown-domain refusal + empty-reason refusal (the closed sets + the
+--          non-empty reason guard, both enforced in the RPC body);
+--        * idempotent replay — the SAME key returns the same flip id and appends
+--          EXACTLY ONE row (never a second ledger row, never a second audit row);
+--        * the derived view — an un-flipped domain defaults to 'glofox' (absence
+--          = Glofox; no seeding) and a committed flip reads back as 'kelo'.
+--      authority_flips is RPC-written (NO client INSERT path) and append-only
+--      (block 26 lists it). Reuses tenant-A/B + owners uA/uB; seeds a manager +
+--      front_desk of B. (invariant #6/#7: every new table/RPC gets an attack test.)
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ua uuid; v_ub uuid; v_bm uuid; v_bf uuid;
+  v_id1 uuid; v_id2 uuid; v_auth text; n int; raised boolean;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ua from app_test.ctx where key = 'user_a';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+
+  -- A manager + a front_desk of tenant B (the seed only creates owners).
+  insert into auth.users (id, email) values (gen_random_uuid(), 'bm34@example.test')
+    returning id into v_bm;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'bf34@example.test')
+    returning id into v_bf;
+  insert into public.tenant_users (tenant_id, user_id, role) values (v_b, v_bm, 'manager');
+  insert into public.tenant_users (tenant_id, user_id, role) values (v_b, v_bf, 'front_desk');
+
+  -- Seed one flip per tenant DIRECTLY (superuser bypasses grants/RLS) so the
+  -- cross-tenant READ has something to (not) see.
+  insert into public.authority_flips (tenant_id, domain, authority, reason, actor, idempotency_key)
+    values (v_a, 'bookings', 'kelo', 'A seed', v_ua, 'a-seed-1');
+  insert into public.authority_flips (tenant_id, domain, authority, reason, actor, idempotency_key)
+    values (v_b, 'bookings', 'kelo', 'B seed', v_ub, 'b-seed-1');
+
+  -- --- cross-tenant read refusal (as uB, owner of B) -----------------------
+  perform app_test.become(v_ub);
+  select count(*) into n from public.authority_flips where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(34) uB can SELECT tenant A authority_flips');
+  select count(*) into n from public.current_authority where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(34) uB can SELECT tenant A current_authority');
+  -- uB sees exactly her own eight domains (all of the closed set).
+  select count(*) into n from public.current_authority where tenant_id = v_b;
+  perform app_test.assert(n = 8, '(34) current_authority did not yield all 8 domains for the owner');
+
+  -- The derived view: an UN-FLIPPED domain defaults to 'glofox'; the seeded flip
+  -- reads back as 'kelo'.
+  select authority into v_auth from public.current_authority
+    where tenant_id = v_b and domain = 'retail';
+  perform app_test.assert(v_auth = 'glofox', '(34) an un-flipped domain did not default to glofox');
+  select authority into v_auth from public.current_authority
+    where tenant_id = v_b and domain = 'bookings';
+  perform app_test.assert(v_auth = 'kelo', '(34) a flipped domain did not read back as kelo');
+
+  -- APPEND-ONLY at runtime: even the owning tenant's owner cannot UPDATE/DELETE.
+  raised := false;
+  begin update public.authority_flips set authority = 'glofox' where tenant_id = v_b;
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(34) uB could UPDATE authority_flips — append-only violated');
+  raised := false;
+  begin delete from public.authority_flips where tenant_id = v_b;
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(34) uB could DELETE authority_flips — append-only violated');
+
+  -- --- OWNER-ONLY flip: manager AND front_desk of B are BOTH refused --------
+  reset role;
+  perform app_test.become(v_bm);
+  raised := false;
+  begin perform app.flip_authority(v_b, 'payments', 'kelo', 'mgr try', v_bm, 'mgr-1');
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(34) a manager could flip authority (owner-only breached)');
+
+  reset role;
+  perform app_test.become(v_bf);
+  raised := false;
+  begin perform app.flip_authority(v_b, 'payments', 'kelo', 'fd try', v_bf, 'fd-1');
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(34) a front_desk could flip authority (owner-only breached)');
+
+  -- No non-owner attempt appended a row.
+  reset role;
+  select count(*) into n from public.authority_flips
+    where tenant_id = v_b and domain = 'payments';
+  perform app_test.assert(n = 0, '(34) a non-owner flip attempt appended a row');
+
+  -- --- cross-tenant flip refusal: uA (owner of A) cannot flip tenant B ------
+  perform app_test.become(v_ua);
+  raised := false;
+  begin perform app.flip_authority(v_b, 'payments', 'kelo', 'x-tenant', v_ua, 'x-1');
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(34) uA (owner of A) could flip tenant B authority');
+
+  -- --- unknown-domain + empty-reason refusal (as uB, owner) ----------------
+  reset role;
+  perform app_test.become(v_ub);
+  raised := false;
+  begin perform app.flip_authority(v_b, 'nonsense', 'kelo', 'bad domain', v_ub, 'bad-dom');
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(34) an unknown domain was accepted');
+  raised := false;
+  begin perform app.flip_authority(v_b, 'payments', 'kelo', '   ', v_ub, 'empty-reason');
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(34) an empty reason was accepted');
+
+  -- --- idempotent replay: same key → same id, EXACTLY one row appended ------
+  v_id1 := app.flip_authority(v_b, 'payments', 'kelo', 'go-live payments', v_ub, 'idem-1');
+  v_id2 := app.flip_authority(v_b, 'payments', 'kelo', 'go-live payments', v_ub, 'idem-1');
+  perform app_test.assert(v_id1 = v_id2, '(34) an idempotent replay returned a different flip id');
+  select count(*) into n from public.authority_flips
+    where tenant_id = v_b and idempotency_key = 'idem-1';
+  perform app_test.assert(n = 1, '(34) an idempotent replay appended a second flip row');
+  -- The flip wrote its audit trail exactly once (append-once, not per replay).
+  reset role;
+  select count(*) into n from public.audit_events
+    where tenant_id = v_b and action = 'authority.flipped'
+      and target_id = 'payments' and (metadata ->> 'flip_id') = v_id1::text;
+  perform app_test.assert(n = 1, '(34) an idempotent replay wrote a second audit row');
+
+  -- The flip is now live in the derived matrix.
+  perform app_test.become(v_ub);
+  select authority into v_auth from public.current_authority
+    where tenant_id = v_b and domain = 'payments';
+  perform app_test.assert(v_auth = 'kelo', '(34) a committed flip did not surface in current_authority');
+
+  -- authority_flips is RPC-written: no client/service INSERT grant; append-only
+  -- UPDATE/DELETE for service_role (block 26 lists it; re-asserted here).
+  reset role;
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'public.authority_flips', 'insert'),
+    '(34) authenticated holds INSERT on authority_flips — it is RPC-written');
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'public.authority_flips', 'update'),
+    '(34) service_role holds UPDATE on authority_flips — the cutover ledger is append-only');
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'public.authority_flips', 'delete'),
+    '(34) service_role holds DELETE on authority_flips — the cutover ledger is append-only');
 end
 $$;
 

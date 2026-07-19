@@ -12,6 +12,7 @@ import { envelopeMiddleware } from "./middleware/envelope.js";
 import { captureError, sentry } from "./middleware/sentry.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerAskRoutes } from "./routes/ask.js";
+import { registerAuthorityRoutes } from "./routes/authority.js";
 import { registerBookingRoutes } from "./routes/bookings.js";
 import { registerBriefingRoutes } from "./routes/briefing.js";
 import { registerHealthRoutes } from "./routes/health.js";
@@ -130,6 +131,7 @@ export function createApp(deps: AppDeps & WebhookDeps & StaffDeps & BillingDeps 
   registerPosRoutes(app, resolved, deps.createBillingClient);
   registerBookingRoutes(app, resolved, deps.createBillingClient);
   registerWaitlistRoutes(app, resolved, deps.createBillingClient);
+  registerAuthorityRoutes(app, resolved, deps.env);
 
   return app;
 }
