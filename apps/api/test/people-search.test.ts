@@ -115,6 +115,26 @@ describe("GET /people/search (Quick Book desk search)", () => {
     expect(orFilter(fake.calls)).toContain("phone_e164.ilike.*555000*");
   });
 
+  it("refuses a bare-underscore probe without touching the people table", async () => {
+    // `_` is LIKE's single-char wildcard; unsanitized, q=__ passes the 2-char
+    // minimum yet ILIKE-matches every row — a blind directory enumeration.
+    const { app, fake } = build("front_desk", [ROW_ONE, ROW_TWO]);
+    const response = await app.request("/api/v1/people/search?q=__", { headers: auth });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { data: { people: unknown[] } };
+    expect(body.data.people).toHaveLength(0);
+    expect(fake.calls.some((c) => c.table === "people")).toBe(false);
+  });
+
+  it("strips embedded underscores from the ilike term (near-miss, never wildcard)", async () => {
+    const { app, fake } = build("front_desk", []);
+    const response = await app.request("/api/v1/people/search?q=te_st", { headers: auth });
+    expect(response.status).toBe(200);
+    const filter = orFilter(fake.calls);
+    expect(filter).toContain("first_name.ilike.*test*");
+    expect(filter).not.toContain("te_st");
+  });
+
   it("caps results at limit and flags truncated when more matched", async () => {
     const { app } = build("front_desk", [ROW_ONE, ROW_TWO, ROW_THREE]);
     const response = await app.request("/api/v1/people/search?q=Test&limit=2", { headers: auth });

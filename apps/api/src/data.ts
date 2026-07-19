@@ -1425,10 +1425,14 @@ const PERSON_SEARCH_SCAN_CAP = 100;
 /**
  * Strip PostgREST `or()`/`ilike` metacharacters so a crafted `q` cannot inject
  * extra filter conditions or turn into a match-everything wildcard. `,` `(` `)`
- * delimit or-conditions; `*`/`%` are ilike wildcards; `\`/`"` quote-escape.
+ * delimit or-conditions; `*`/`%` are ilike wildcards; `\`/`"` quote-escape;
+ * `_` is LIKE's single-char wildcard (a bare `__` would otherwise blind-match
+ * the whole directory, defeating the 2-char minimum). Stripping `_` makes an
+ * underscored email a near-miss (search the surrounding letters instead) —
+ * escaping it through the or() filter string is not reliably possible.
  */
 function sanitizeIlikeTerm(value: string): string {
-  return value.replace(/[,()*%\\"]/g, "");
+  return value.replace(/[,()*%\\"_]/g, "");
 }
 
 export interface PeopleSearchResult {
