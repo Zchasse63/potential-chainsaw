@@ -27,6 +27,7 @@ import { BILLING_PROCESS_OUTBOX_KIND, runOutbox, type StripeAdapter } from "../b
 import { BILLING_VERIFY_MONEY_KIND, runVerifyMoney } from "../billing/verify.js";
 import { BILLING_DUNNING_KIND, runDunning } from "../billing/dunning.js";
 import { BOOKING_EXPIRE_HOLDS_KIND, runExpireHolds } from "../booking/expire-holds.js";
+import { NO_SHOW_SWEEP_KIND, WAITLIST_SWEEP_KIND } from "../booking/sweeps.js";
 import type { Env as StripeEnv } from "@kelo/stripe";
 
 export {
@@ -401,18 +402,37 @@ export function createGlofoxProcessors(
         `${BILLING_DUNNING_KIND}:${dayBucket}`,
       ]);
 
+      const minuteBucket = instant.toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
+
       // The hold-expiry sweep (unit 6.1) reclaims expired UN-frozen seat holds.
       // Holds have a 300s default TTL, so the hour key the other drains use is
-      // far too coarse — this enqueues with a MINUTE-scoped key. NOTE: the tick
-      // cadence (the single 5-minute Netlify scheduled function) is the REAL
-      // granularity bound; a seat can linger up to one tick past its TTL. That is
-      // acceptable — a held seat only delays reuse, never oversells (capacity
-      // counts live holds), and payment initiation FREEZES the hold so tender is
-      // never reclaimed mid-flight. GLOBAL (tenant NULL): one sweep spans tenants.
+      // far too coarse — MINUTE-scoped key. NOTE: the tick cadence (the single
+      // 5-minute Netlify scheduled function) is the REAL granularity bound; a
+      // seat can linger up to one tick past its TTL. Acceptable — a held seat
+      // only delays reuse, never oversells, and payment initiation FREEZES the
+      // hold so tender is never reclaimed mid-flight. GLOBAL (tenant NULL).
       await ctx.pool.query(`select app.enqueue_job($1, $2, null, now(), 100, 5, $3)`, [
         BOOKING_EXPIRE_HOLDS_KIND,
         JSON.stringify({}),
         `${BOOKING_EXPIRE_HOLDS_KIND}:${minuteBucket}`,
+      ]);
+
+      // The waitlist sweep (unit 6.2) settles lapsed offers + cascade-promotes —
+      // FREQUENT global pass, MINUTE-keyed like expire_holds. GLOBAL (tenant NULL).
+      await ctx.pool.query(`select app.enqueue_job($1, $2, null, now(), 100, 5, $3)`, [
+        WAITLIST_SWEEP_KIND,
+        JSON.stringify({}),
+        `${WAITLIST_SWEEP_KIND}:${minuteBucket}`,
+      ]);
+
+      // The no-show sweep is a DAILY per-tenant money event (forfeit) — day-keyed
+      // and tenant-scoped so the frequent fan-out converges on ONE pass per
+      // tenant per day.
+      await ctx.pool.query(`select app.enqueue_job($1, $2, $3, now(), 100, 5, $4)`, [
+        NO_SHOW_SWEEP_KIND,
+        JSON.stringify({}),
+        tenantId,
+        `${NO_SHOW_SWEEP_KIND}:${tenantId}:${dayBucket}`,
       ]);
     },
   };

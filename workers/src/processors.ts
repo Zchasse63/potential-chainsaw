@@ -5,6 +5,7 @@
  * never a second cron.
  */
 import { createGlofoxProcessors } from "./glofox/processors.js";
+import { createBookingProcessors } from "./booking/sweeps.js";
 
 /**
  * Minimal structural subset of pg.Pool used by the tick. Keeping this an
@@ -66,4 +67,12 @@ export const processors: Record<string, JobProcessor> = {
    * only); each run still re-reads nothing — credentials rotate by redeploy.
    */
   ...createGlofoxProcessors(),
+
+  /**
+   * Booking engine (phase 6 · unit 6.2): the frequent global waitlist sweep +
+   * the daily per-tenant no-show sweep. Enqueued from the same fan-out as the
+   * other cadenced jobs (glofox.sync.all) until the dedicated schedule table
+   * lands — never a second cron.
+   */
+  ...createBookingProcessors(),
 };

@@ -26,6 +26,7 @@ import { registerPeopleRoutes } from "./routes/people.js";
 import { registerPosRoutes } from "./routes/pos.js";
 import { registerPosCatalogRoutes } from "./routes/pos-catalog.js";
 import { registerRetailRoutes } from "./routes/retail.js";
+import { registerWaitlistRoutes } from "./routes/waitlist.js";
 import { registerWaiverRoutes } from "./routes/waivers.js";
 import { registerTenantRoutes } from "./routes/tenant.js";
 import { registerWebhookRoutes, type WebhookDeps } from "./routes/webhooks.js";
@@ -128,6 +129,7 @@ export function createApp(deps: AppDeps & WebhookDeps & StaffDeps & BillingDeps 
   registerPaymentRoutes(app, resolved, deps.env, deps.createBillingClient);
   registerPosRoutes(app, resolved, deps.createBillingClient);
   registerBookingRoutes(app, resolved, deps.createBillingClient);
+  registerWaitlistRoutes(app, resolved, deps.createBillingClient);
 
   return app;
 }

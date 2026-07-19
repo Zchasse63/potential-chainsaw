@@ -1830,6 +1830,241 @@ begin
 end
 $$;
 
+-- ---------------------------------------------------------------------------
+-- (33) WAITLIST + CHECK-IN + NO-SHOW (migration 0041, built on 0040's native
+--      booking engine). Proves: joining requires a FULL session (an OPEN one is
+--      refused); the FIFO promotion cascade off a cancel; accept books through
+--      app.book_session so the WAIVER is enforced there; double-accept is
+--      idempotent (no second debit); the check-in arrival window; cross-tenant
+--      join/accept/check-in refusal; and the no-show sweep leaving checked_in /
+--      cancelled bookings untouched. Seeds its own tenant-B scheduling scaffold;
+--      reuses the seed tenants + user_b (owner of B) / user_a (owner of A).
+--      (invariant #5/#6/#7: every new RPC gets a cross-tenant attack test.)
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; v_ua uuid;
+  v_ot uuid; v_rs uuid; v_wv uuid;
+  v_sfull uuid; v_sopen uuid; v_swaiver uuid; v_snow uuid; v_spast uuid;
+  v_p1 uuid; v_p2 uuid; v_p3 uuid; v_pf uuid; v_pw uuid; v_pci uuid; v_pwin uuid;
+  v_pa uuid;
+  v_pns uuid; v_pcin uuid; v_pcx uuid;
+  v_book1 uuid; v_bookpf uuid; v_bookci uuid; v_bwin uuid;
+  v_e2 uuid; v_ew uuid;
+  v_bk_forfeit uuid; v_bk_ci uuid; v_bk_cx uuid;
+  v_res jsonb; v_bid uuid; v_bid2 uuid;
+  v_status text; n int; raised boolean;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+  select val::uuid into v_ua from app_test.ctx where key = 'user_a';
+
+  -- --- Phase A: superuser seeds (auth.uid() is null → book_session's actor/role
+  --     checks are bypassed for setup; the RPC's own capacity/waiver still run). --
+  insert into public.offering_templates (tenant_id, name, duration_minutes)
+    values (v_b, 'Flow', 60) returning id into v_ot;
+  insert into public.resources (tenant_id, name) values (v_b, 'Studio 1') returning id into v_rs;
+
+  insert into public.people (tenant_id, first_name, source) values (v_b, 'P1',  'native') returning id into v_p1;
+  insert into public.people (tenant_id, first_name, source) values (v_b, 'P2',  'native') returning id into v_p2;
+  insert into public.people (tenant_id, first_name, source) values (v_b, 'P3',  'native') returning id into v_p3;
+  insert into public.people (tenant_id, first_name, source) values (v_b, 'PF',  'native') returning id into v_pf;
+  insert into public.people (tenant_id, first_name, source) values (v_b, 'PW',  'native') returning id into v_pw;
+  insert into public.people (tenant_id, first_name, source) values (v_b, 'PCI', 'native') returning id into v_pci;
+  insert into public.people (tenant_id, first_name, source) values (v_b, 'PWN', 'native') returning id into v_pwin;
+  insert into public.people (tenant_id, first_name, source) values (v_b, 'PNS', 'native') returning id into v_pns;
+  insert into public.people (tenant_id, first_name, source) values (v_b, 'PCN', 'native') returning id into v_pcin;
+  insert into public.people (tenant_id, first_name, source) values (v_b, 'PCX', 'native') returning id into v_pcx;
+  insert into public.people (tenant_id, first_name, source) values (v_a, 'PA',  'native') returning id into v_pa;
+
+  -- P2 gets a credit so its promotion-accept can debit; the waiver-blocked PW
+  -- needs none (the waiver raises before the credit block in book_session).
+  insert into public.credit_ledger (tenant_id, person_id, entry_type, delta, source, reason)
+    values (v_b, v_p2, 'grant', 1, 'native', 'seed');
+
+  -- An ACTIVE waiver version for B + a relationship for PW ONLY, so exactly PW
+  -- owes the active signature (needs_signature = active ∧ relationship ∧ unsigned).
+  insert into public.waiver_versions (tenant_id, version, body, active)
+    values (v_b, 1, 'Assumption of risk.', true) returning id into v_wv;
+  insert into public.person_relationships (tenant_id, person_id, relationship_type, rule_version)
+    values (v_b, v_pw, 'recurring_member', 1);
+
+  -- Sessions. Full (cap 1), open (cap 2), waiver (cap 1), soon (cap 1 for the
+  -- positive check-in), and a PAST session (cap 3) for the no-show sweep.
+  insert into public.scheduled_sessions
+    (tenant_id, offering_template_id, resource_id, starts_at, ends_at, capacity, status, published_at)
+  values (v_b, v_ot, v_rs, now() + interval '2 hours', now() + interval '3 hours', 1, 'published', now())
+  returning id into v_sfull;
+  insert into public.scheduled_sessions
+    (tenant_id, offering_template_id, resource_id, starts_at, ends_at, capacity, status, published_at)
+  values (v_b, v_ot, v_rs, now() + interval '4 hours', now() + interval '5 hours', 2, 'published', now())
+  returning id into v_sopen;
+  insert into public.scheduled_sessions
+    (tenant_id, offering_template_id, resource_id, starts_at, ends_at, capacity, status, published_at)
+  values (v_b, v_ot, v_rs, now() + interval '6 hours', now() + interval '7 hours', 1, 'published', now())
+  returning id into v_swaiver;
+  insert into public.scheduled_sessions
+    (tenant_id, offering_template_id, resource_id, starts_at, ends_at, capacity, status, published_at)
+  values (v_b, v_ot, v_rs, now() + interval '30 minutes', now() + interval '90 minutes', 1, 'published', now())
+  returning id into v_snow;
+  insert into public.scheduled_sessions
+    (tenant_id, offering_template_id, resource_id, starts_at, ends_at, capacity, status, published_at)
+  values (v_b, v_ot, v_rs, now() - interval '2 hours', now() - interval '1 hours', 3, 'published', now())
+  returning id into v_spast;
+
+  -- Fills (use_credit=false → no credit needed). FULL, WAIVER, SOON, and one seat
+  -- of OPEN so it stays open (1 of 2) yet gives a >60min-away booking to reject.
+  v_res := app.book_session(v_b, v_p1,   v_sfull,   v_ub, 'seed-full',  'desk', null, false);
+  v_book1  := (v_res ->> 'booking_id')::uuid;
+  v_res := app.book_session(v_b, v_pf,   v_swaiver, v_ub, 'seed-waiv',  'desk', null, false);
+  v_bookpf := (v_res ->> 'booking_id')::uuid;
+  v_res := app.book_session(v_b, v_pci,  v_snow,    v_ub, 'seed-soon',  'desk', null, false);
+  v_bookci := (v_res ->> 'booking_id')::uuid;
+  v_res := app.book_session(v_b, v_pwin, v_sopen,   v_ub, 'seed-open',  'desk', null, false);
+  v_bwin   := (v_res ->> 'booking_id')::uuid;
+
+  -- PAST-session bookings inserted DIRECTLY (book_session refuses a started
+  -- session): a booked (→ no_show), a checked_in, and a cancelled (both untouched).
+  insert into public.bookings (tenant_id, session_id, person_id, status, booked_via, idempotency_key)
+    values (v_b, v_spast, v_pns, 'booked', 'desk', 'past-booked') returning id into v_bk_forfeit;
+  insert into public.bookings (tenant_id, session_id, person_id, status, booked_via, idempotency_key, checked_in_at)
+    values (v_b, v_spast, v_pcin, 'checked_in', 'desk', 'past-ci', now() - interval '90 minutes')
+    returning id into v_bk_ci;
+  insert into public.bookings (tenant_id, session_id, person_id, status, booked_via, idempotency_key, cancelled_at)
+    values (v_b, v_spast, v_pcx, 'cancelled', 'desk', 'past-cx', now() - interval '90 minutes')
+    returning id into v_bk_cx;
+
+  -- --- Phase B: the desk surface, as user_b (owner of B). -------------------
+  perform app_test.become(v_ub);
+
+  -- FIFO: P2 then P3 join the FULL session; positions are 1, 2.
+  perform app_test.assert(app.join_waitlist(v_b, v_sfull, v_p2, v_ub, 'wl-p2') = 1,
+    '(33) first waitlist joiner did not get position 1');
+  perform app_test.assert(app.join_waitlist(v_b, v_sfull, v_p3, v_ub, 'wl-p3') = 2,
+    '(33) second waitlist joiner did not get position 2');
+
+  -- Idempotent join: same key returns the same position, no second entry.
+  perform app_test.assert(app.join_waitlist(v_b, v_sfull, v_p2, v_ub, 'wl-p2') = 1,
+    '(33) duplicate join key changed the position');
+  select count(*) into n from public.waitlist_entries
+    where tenant_id = v_b and session_id = v_sfull and status = 'waiting';
+  perform app_test.assert(n = 2, '(33) duplicate join wrote a third waiting entry');
+
+  -- Joining an OPEN session (1 of 2 taken) is refused — the seat should be booked.
+  raised := false;
+  begin perform app.join_waitlist(v_b, v_sopen, v_p3, v_ub, 'wl-open');
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(33) join succeeded on an OPEN (not full) session');
+
+  -- Cancel P1 → the AFTER UPDATE trigger promotes P2 (FIFO) to an OFFER.
+  perform app.cancel_booking(v_b, v_book1, v_ub, 'cx-p1', now());
+  select id, status into v_e2, v_status from public.waitlist_entries
+    where tenant_id = v_b and session_id = v_sfull and person_id = v_p2;
+  perform app_test.assert(v_status = 'offered', '(33) cancel did not promote the first waiter to offered');
+  -- The offer reserved the seat with a live hold (0040 availability = 0 again).
+  select count(*) into n from public.booking_holds
+    where tenant_id = v_b and session_id = v_sfull and person_id = v_p2;
+  perform app_test.assert(n = 1, '(33) promotion did not create the offer hold');
+
+  -- Accept: books through book_session (debits P2's credit; waiver n/a — no
+  -- relationship). Entry → promoted; exactly one booking for P2.
+  v_bid := app.accept_waitlist_offer(v_b, v_e2, v_ub, 'ac-p2', 'desk');
+  perform app_test.assert(v_bid is not null, '(33) accept returned no booking');
+  select status into v_status from public.waitlist_entries where id = v_e2;
+  perform app_test.assert(v_status = 'promoted', '(33) accepted entry is not promoted');
+  select count(*) into n from public.bookings
+    where tenant_id = v_b and session_id = v_sfull and person_id = v_p2 and status = 'booked';
+  perform app_test.assert(n = 1, '(33) accept did not create exactly one booking');
+  -- The credit was debited exactly once (append-only ledger).
+  select count(*) into n from public.credit_ledger
+    where tenant_id = v_b and person_id = v_p2 and entry_type = 'debit';
+  perform app_test.assert(n = 1, '(33) accept did not debit exactly one credit');
+
+  -- Double-accept is idempotent: same key → same booking, no second debit.
+  v_bid2 := app.accept_waitlist_offer(v_b, v_e2, v_ub, 'ac-p2', 'desk');
+  perform app_test.assert(v_bid2 = v_bid, '(33) double-accept returned a different booking');
+  select count(*) into n from public.credit_ledger
+    where tenant_id = v_b and person_id = v_p2 and entry_type = 'debit';
+  perform app_test.assert(n = 1, '(33) double-accept debited a second credit');
+
+  -- WAIVER enforced at accept: PW (owes the active signature) is offered then
+  -- refused by book_session (waiver_required). Fill session was PF; cancel frees it.
+  perform app_test.assert(app.join_waitlist(v_b, v_swaiver, v_pw, v_ub, 'wl-pw') = 1,
+    '(33) waiver waitlister did not get position 1');
+  perform app.cancel_booking(v_b, v_bookpf, v_ub, 'cx-pf', now());
+  select id, status into v_ew, v_status from public.waitlist_entries
+    where tenant_id = v_b and session_id = v_swaiver and person_id = v_pw;
+  perform app_test.assert(v_status = 'offered', '(33) PW was not promoted to offered');
+  raised := false;
+  begin perform app.accept_waitlist_offer(v_b, v_ew, v_ub, 'ac-pw', 'desk');
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(33) accept booked despite an unsigned active waiver');
+
+  -- CHECK-IN: positive inside the window (v_snow starts in 30min); refused when
+  -- the session is >60min away (v_sopen starts in 4h).
+  perform app_test.assert(app.check_in(v_b, v_bookci, v_ub, now()) = 'checked_in',
+    '(33) check-in inside the arrival window failed');
+  -- Idempotent re-check-in no-ops.
+  perform app_test.assert(app.check_in(v_b, v_bookci, v_ub, now()) = 'checked_in',
+    '(33) idempotent re-check-in did not no-op');
+  raised := false;
+  begin perform app.check_in(v_b, v_bwin, v_ub, now());
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(33) check-in succeeded outside the arrival window');
+
+  -- --- Phase C: cross-tenant, as user_a (owner of A). ----------------------
+  reset role;
+  perform app_test.become(v_ua);
+
+  raised := false;
+  begin perform app.join_waitlist(v_b, v_sfull, v_pa, v_ua, 'x-join');
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(33) uA could join a tenant-B waitlist');
+
+  raised := false;
+  begin perform app.accept_waitlist_offer(v_b, v_ew, v_ua, 'x-acc', 'desk');
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(33) uA could accept a tenant-B offer');
+
+  raised := false;
+  begin perform app.check_in(v_b, v_bookci, v_ua, now());
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(33) uA could check in a tenant-B booking');
+
+  -- Cross-tenant SELECT: uA sees none of tenant B's waitlist entries.
+  select count(*) into n from public.waitlist_entries where tenant_id = v_b;
+  perform app_test.assert(n = 0, '(33) uA can SELECT tenant-B waitlist entries');
+
+  -- --- Phase D: the no-show sweep (service context) + privilege guards. -----
+  reset role;
+  perform app.mark_no_shows(v_b, now());
+  select status into v_status from public.bookings where id = v_bk_forfeit;
+  perform app_test.assert(v_status = 'no_show', '(33) mark_no_shows did not forfeit the booked attendee');
+  select status into v_status from public.bookings where id = v_bk_ci;
+  perform app_test.assert(v_status = 'checked_in', '(33) mark_no_shows touched a checked_in booking');
+  select status into v_status from public.bookings where id = v_bk_cx;
+  perform app_test.assert(v_status = 'cancelled', '(33) mark_no_shows touched a cancelled booking');
+  -- No credit refund on forfeit (the debit stands) — none was even debited here,
+  -- but assert the sweep appended NO refund_credit for the no-show person.
+  select count(*) into n from public.credit_ledger
+    where tenant_id = v_b and person_id = v_pns and entry_type = 'refund_credit';
+  perform app_test.assert(n = 0, '(33) no-show forfeit appended a credit refund');
+
+  -- waitlist_entries is RPC-written: no client/service INSERT/UPDATE/DELETE grant.
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'public.waitlist_entries', 'insert'),
+    '(33) authenticated holds INSERT on waitlist_entries — it is RPC-written');
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'public.waitlist_entries', 'update'),
+    '(33) authenticated holds UPDATE on waitlist_entries — it is RPC-written');
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'public.waitlist_entries', 'delete'),
+    '(33) service_role holds DELETE on waitlist_entries — it is RPC-written');
+end
+$$;
+
 do $$
 declare
   n int;
