@@ -32,6 +32,7 @@ import { registerWaitlistRoutes } from "./routes/waitlist.js";
 import { registerWaiverRoutes } from "./routes/waivers.js";
 import { registerTenantRoutes } from "./routes/tenant.js";
 import { registerWebhookRoutes, type WebhookDeps } from "./routes/webhooks.js";
+import { registerMemberRoutes, type MemberDeps } from "./routes/member.js";
 import type { AppDeps, AppEnv } from "./types.js";
 
 export interface StaffDeps {
@@ -55,7 +56,9 @@ export interface BillingDeps {
  * requireAuth → resolveTenant (SOLE source of tenant id) → requireRole →
  * requireIdempotencyKey on mutations.
  */
-export function createApp(deps: AppDeps & WebhookDeps & StaffDeps & BillingDeps = {}): Hono<AppEnv> {
+export function createApp(
+  deps: AppDeps & WebhookDeps & MemberDeps & StaffDeps & BillingDeps = {},
+): Hono<AppEnv> {
   const resolved = resolveDeps(deps);
   const app = new Hono<AppEnv>().basePath("/api/v1");
 
@@ -114,6 +117,11 @@ export function createApp(deps: AppDeps & WebhookDeps & StaffDeps & BillingDeps 
   // Public provider callbacks are mounted outside every auth/tenant middleware
   // chain. Their verified raw-body signature is the authentication boundary.
   registerWebhookRoutes(app, deps);
+  // The member group is also mounted outside every auth/tenant middleware
+  // chain: /member/schedule is ANONYMOUS (unit 8.1c) — the tenant is a public
+  // uuid query param and the definer function's locked allowlist shape is the
+  // boundary. Later member routes (auth, account, bookings) join this group.
+  registerMemberRoutes(app, deps);
   registerAuthRoutes(app, resolved);
   registerTenantRoutes(app, resolved);
   registerImportRoutes(app, resolved);
