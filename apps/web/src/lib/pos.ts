@@ -126,11 +126,15 @@ export async function checkout(
     undefined,
     idempotencyKey,
   );
-  const inspection = inspectEnvelope<CheckoutResult>(response);
+  const inspection = inspectEnvelope<{ checkout: CheckoutResult }>(response);
   if (!inspection.ok) {
     throw new Error("The checkout response was missing its provenance record; no sale is shown.");
   }
-  return inspection.data;
+  // The route nests the result (c.var.ok({ checkout })) — unwrap it, mirroring
+  // requestRefund's `.refund` convention. Re-review blocker B1: returning the
+  // envelope data verbatim rendered 'Order undefined' and silently DROPPED the
+  // one-time gift-card codes (unrecoverable — the server stores only hashes).
+  return inspection.data.checkout;
 }
 
 /**
@@ -151,9 +155,9 @@ export async function redeemGiftCard(
     undefined,
     idempotencyKey,
   );
-  const inspection = inspectEnvelope<RedeemResult>(response);
+  const inspection = inspectEnvelope<{ redemption: RedeemResult }>(response);
   if (!inspection.ok) {
     throw new Error("The redeem response was missing its provenance record; no balance is shown.");
   }
-  return inspection.data;
+  return inspection.data.redemption;
 }

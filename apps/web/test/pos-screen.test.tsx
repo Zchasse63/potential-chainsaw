@@ -186,3 +186,26 @@ describe("PosScreen", () => {
     expect(onRedeem).not.toHaveBeenCalled();
   });
 });
+
+  // Re-review blocker B2a: the idempotency key is PER-INTENT — an EDITED cart
+  // after a failure is a NEW intent and must post a DIFFERENT key (the same key
+  // with different content would 409 against the server hash-check and lock the
+  // till out of the sale).
+  it("rotates the idempotency key when the cart changes after a failed attempt", async () => {
+    const { onCheckout } = renderPos();
+    onCheckout.mockRejectedValueOnce(new Error("network dropped"));
+    fireEvent.click(screen.getByRole("button", { name: /Recovery towel/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Take cash payment" }));
+    await waitFor(() => expect(onCheckout).toHaveBeenCalledTimes(1));
+    const firstKey = onCheckout.mock.calls[0]?.[1] as string;
+
+    // Edit the cart (add another item) — a new intent.
+    fireEvent.click(screen.getByRole("button", { name: /Recovery towel/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Take cash payment" }));
+    await waitFor(() => expect(onCheckout).toHaveBeenCalledTimes(2));
+    const secondKey = onCheckout.mock.calls[1]?.[1] as string;
+
+    expect(typeof firstKey).toBe("string");
+    expect(typeof secondKey).toBe("string");
+    expect(secondKey).not.toBe(firstKey);
+  });

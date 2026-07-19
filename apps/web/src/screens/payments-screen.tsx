@@ -263,6 +263,10 @@ function PaymentDetail({
         </p>
       ) : payment.tender === "stripe" ? (
         <RefundPanel
+          // Re-review blocker B2b: keying by payment id remounts the panel on
+          // payment switch, so the per-intent idempotency key (a useRef inside)
+          // can never leak from payment A's failed refund onto payment B.
+          key={payment.id}
           payment={payment}
           refundThresholdCents={refundThresholdCents}
           onRefund={onRefund}

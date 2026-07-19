@@ -481,6 +481,16 @@ export function PosScreen({ catalogQuery, onCheckout, onRedeem }: PosScreenProps
   // the intent is abandoned (the cart is emptied / a new sale begins).
   const checkoutKey = useRef<string | null>(null);
 
+  /** Re-review blocker B2a: the idempotency key is PER-INTENT — any change to
+   * what will be submitted (lines, qty, person, discount, tender, card code)
+   * is a NEW intent and must rotate the key. Reusing a key for a different
+   * cart would 409 against the server's request-hash check and lock the till
+   * out of the sale. The key is minted at confirm-time and survives only
+   * across UNCHANGED retries. */
+  function invalidateCheckoutIntent() {
+    checkoutKey.current = null;
+  }
+
   const nextKey = useMemo(() => {
     let counter = 0;
     return () => {
@@ -491,6 +501,7 @@ export function PosScreen({ catalogQuery, onCheckout, onRedeem }: PosScreenProps
 
   function addLine(line: Omit<CartLine, "key" | "qty">) {
     setSale(null);
+    invalidateCheckoutIntent();
     setLines((current) => {
       const existing = current.find((item) => item.kind === line.kind && item.ref === line.ref);
       if (existing !== undefined) {
@@ -503,13 +514,8 @@ export function PosScreen({ catalogQuery, onCheckout, onRedeem }: PosScreenProps
   }
 
   function removeLine(key: string) {
-    setLines((current) => {
-      const next = current.filter((line) => line.key !== key);
-      // Emptying the cart abandons the checkout intent — rotate the key so the
-      // next sale cannot collide with this one's idempotency key.
-      if (next.length === 0) checkoutKey.current = null;
-      return next;
-    });
+    invalidateCheckoutIntent(); // any cart change is a new intent (B2a)
+    setLines((current) => current.filter((line) => line.key !== key));
   }
 
   function discountCents(): number | null {
@@ -622,10 +628,10 @@ export function PosScreen({ catalogQuery, onCheckout, onRedeem }: PosScreenProps
                 setLines((current) => current.map((line) => (line.key === key ? { ...line, qty } : line)))
               }
               onRemove={removeLine}
-              onPersonId={setPersonId}
-              onDiscount={setDiscount}
-              onTender={setTender}
-              onGiftCardCode={setGiftCardCode}
+              onPersonId={(v) => { invalidateCheckoutIntent(); setPersonId(v); }}
+              onDiscount={(v) => { invalidateCheckoutIntent(); setDiscount(v); }}
+              onTender={(v) => { invalidateCheckoutIntent(); setTender(v); }}
+              onGiftCardCode={(v) => { invalidateCheckoutIntent(); setGiftCardCode(v); }}
               onConfirm={(event) => void confirm(event)}
             />
           )}
