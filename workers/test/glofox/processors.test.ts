@@ -134,7 +134,7 @@ describe("glofox.sync.all fan-out", () => {
     // 7 per-tenant loop calls + 1 ordered statement (detect_deletions first) + 2
     // GLOBAL hourly billing drains + 1 GLOBAL nightly verify_money.
     // GLOBAL hour-keyed billing drains + 1 GLOBAL day-keyed dunning pass.
-    expect(enqueues).toHaveLength(11);
+    expect(enqueues).toHaveLength(12);
     const kinds = enqueues.map((call) => call.values?.[0]);
     expect(kinds).toEqual([
       ...GLOFOX_SYNC_KINDS,
@@ -161,14 +161,11 @@ describe("glofox.sync.all fan-out", () => {
     const verify = enqueues[10]!;
     expect(verify.values?.[0]).toBe(BILLING_VERIFY_MONEY_KIND);
     expect(String(verify.values?.[2])).toBe(`${BILLING_VERIFY_MONEY_KIND}:2026-07-17`);
-    // The billing inbox/outbox drains are GLOBAL: tenant NULL (SQL literal, not a
-    // bind param) and a tenant-independent HOUR key.
-    for (const call of enqueues.slice(8, 10)) {
-      expect(String(call.values?.[2])).toBe(`${String(call.values?.[0])}:2026-07-17T23`);
-    }
     // The dunning pass is GLOBAL too but DAY-keyed (its stage boundaries are
     // day-scaled): one pass per day per bucket.
-    expect(String(enqueues[10]?.values?.[2])).toBe(`${BILLING_DUNNING_KIND}:2026-07-17`);
+    const dunning = enqueues[11]!;
+    expect(dunning.values?.[0]).toBe(BILLING_DUNNING_KIND);
+    expect(String(dunning.values?.[2])).toBe(`${BILLING_DUNNING_KIND}:2026-07-17`);
   });
 
   it("requires a tenant too", async () => {

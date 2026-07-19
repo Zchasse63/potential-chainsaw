@@ -197,6 +197,9 @@ export function createGlofoxProcessors(
      */
     [BILLING_VERIFY_MONEY_KIND]: async (_job, ctx) => {
       await runVerifyMoney(ctx.pool, { now });
+    },
+
+    /**
      * Phase 5 · unit 5.6 — the DUNNING state machine's time-driven clock. GLOBAL
      * (no tenant on the job): it scans every open dunning cycle across tenants
      * and advances reminders / final-notice / past_due on the studio clock.
@@ -373,6 +376,8 @@ export function createGlofoxProcessors(
         BILLING_VERIFY_MONEY_KIND,
         JSON.stringify({}),
         `${BILLING_VERIFY_MONEY_KIND}:${dayBucket}`,
+      ]);
+
       // The dunning clock (unit 5.6) is time-driven on a DAILY cadence — its
       // stage boundaries are day-scaled (grace 14d, reminder +7d). It is GLOBAL
       // (scans every tenant's open cycles) and day-keyed so the frequent fan-out

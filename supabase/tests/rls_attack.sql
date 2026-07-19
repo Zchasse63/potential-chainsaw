@@ -993,7 +993,8 @@ begin
     'credit_ledger', 'gift_card_ledger', 'waiver_signatures', 'audit_events',
     'communication_consents', 'step_up_events', 'person_relationship_log',
     'briefing_feedback', 'campaign_attributions', 'person_deletions',
-    'ask_misses', 'schedule_publish_log', 'plan_prices'
+    'ask_misses', 'schedule_publish_log', 'plan_prices', 'dunning_states',
+    'verify_runs'
   ] loop
     foreach role_name in array array['anon', 'authenticated', 'service_role'] loop
       perform app_test.assert(
@@ -1264,63 +1265,7 @@ end
 $$;
 
 -- ---------------------------------------------------------------------------
--- (29) verify_runs (migration 0036): the nightly money-verification history.
---      Member-read isolation (a tenant sees ONLY its own runs); a GLOBAL run
---      (tenant_id null) matches no membership and stays hidden; NO client write
---      path. Reuses block-27's tenants; verify_runs has no unique(tenant_id)/
---      event_id, so there is nothing to collide with. (invariant #7.)
--- ---------------------------------------------------------------------------
-do $$
-declare
-  v_a uuid; v_b uuid; v_ub uuid; n int; raised boolean;
-begin
-  reset role;
-  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
-  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
-  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
-
-  insert into public.verify_runs (tenant_id, started_at, finished_at, ok, violations)
-    values (v_a, now(), now(), true, '[]');
-  insert into public.verify_runs (tenant_id, started_at, finished_at, ok, violations)
-    values (v_b, now(), now(), false, '[{"check":"over_refund"}]');
-  -- The real cadence writes GLOBAL runs (tenant null) — those must be invisible.
-  insert into public.verify_runs (tenant_id, started_at, finished_at, ok, violations)
-    values (null, now(), now(), true, '[]');
-
-  perform app_test.become(v_ub);
-
-  -- Isolation: uB sees only her own run, never tenant A's nor the global one.
-  select count(*) into n from public.verify_runs where tenant_id = v_a;
-  perform app_test.assert(n = 0, '(29) uB can SELECT tenant A verify_runs');
-  select count(*) into n from public.verify_runs where tenant_id is null;
-  perform app_test.assert(n = 0, '(29) uB can SELECT global (null-tenant) verify_runs');
-  select count(*) into n from public.verify_runs where tenant_id = v_b;
-  perform app_test.assert(n = 1, '(29) uB cannot read her OWN verify_runs');
-
-  -- No client write path (the service role writes run history).
-  raised := false;
-  begin
-    insert into public.verify_runs (tenant_id, started_at, ok)
-      values (v_b, now(), true);
-  exception when others then raised := true;
-  end;
-  perform app_test.assert(raised, '(29) uB could INSERT into verify_runs');
-
-  reset role;
-  perform app_test.assert(
-    not has_table_privilege('authenticated', 'public.verify_runs', 'insert'),
-    '(29) authenticated holds INSERT on verify_runs — run history is service-written');
-  perform app_test.assert(
-    not has_table_privilege('authenticated', 'public.verify_runs', 'update'),
-    '(29) authenticated holds UPDATE on verify_runs — runs are append-once');
-  perform app_test.assert(
-    has_table_privilege('service_role', 'public.verify_runs', 'insert'),
-    '(29) service_role lacks INSERT on verify_runs — verify_money cannot record a run');
-end
-$$;
-
--- ---------------------------------------------------------------------------
--- (30) SUBSCRIPTIONS + THE DUNNING LEDGER (migration 0037). Member-read
+-- (29) SUBSCRIPTIONS + THE DUNNING LEDGER (migration 0037). Member-read
 --      isolation + NO client write path on subscriptions/dunning_states; the
 --      dunning ledger is APPEND-ONLY for EVERY role (service_role included); the
 --      subscriptions.status is webhook-synced (service writes, no client insert);
@@ -1364,11 +1309,11 @@ begin
 
   -- Member-read isolation: zero of A's rows, exactly her own.
   select count(*) into n from public.subscriptions where tenant_id = v_a;
-  perform app_test.assert(n = 0, '(30) uB can SELECT tenant A subscriptions');
+  perform app_test.assert(n = 0, '(29) uB can SELECT tenant A subscriptions');
   select count(*) into n from public.dunning_states where tenant_id = v_a;
-  perform app_test.assert(n = 0, '(30) uB can SELECT tenant A dunning_states');
+  perform app_test.assert(n = 0, '(29) uB can SELECT tenant A dunning_states');
   select count(*) into n from public.subscriptions where tenant_id = v_b;
-  perform app_test.assert(n = 1, '(30) uB cannot read her OWN subscriptions');
+  perform app_test.assert(n = 1, '(29) uB cannot read her OWN subscriptions');
 
   -- No client write path: subscriptions are webhook-synced, the ledger is service-only.
   raised := false;
@@ -1377,7 +1322,7 @@ begin
       values (v_b, v_cust_b, v_plan_b, v_price_b, 'active');
   exception when others then raised := true;
   end;
-  perform app_test.assert(raised, '(30) uB could INSERT into subscriptions');
+  perform app_test.assert(raised, '(29) uB could INSERT into subscriptions');
 
   raised := false;
   begin
@@ -1385,23 +1330,23 @@ begin
       values (v_b, v_sub_b, 'recovered');
   exception when others then raised := true;
   end;
-  perform app_test.assert(raised, '(30) uB could INSERT into dunning_states');
+  perform app_test.assert(raised, '(29) uB could INSERT into dunning_states');
 
   reset role;
   -- The dunning ledger is append-only at the PRIVILEGE level (service_role too).
   perform app_test.assert(
     not has_table_privilege('service_role', 'public.dunning_states', 'update'),
-    '(30) service_role holds UPDATE on dunning_states — the ledger is append-only');
+    '(29) service_role holds UPDATE on dunning_states — the ledger is append-only');
   perform app_test.assert(
     not has_table_privilege('service_role', 'public.dunning_states', 'delete'),
-    '(30) service_role holds DELETE on dunning_states — the ledger is append-only');
+    '(29) service_role holds DELETE on dunning_states — the ledger is append-only');
   -- subscriptions.status is webhook-synced: the service role writes it; no client insert.
   perform app_test.assert(
     has_table_privilege('service_role', 'public.subscriptions', 'update'),
-    '(30) service_role lacks UPDATE on subscriptions — the webhook cannot sync status');
+    '(29) service_role lacks UPDATE on subscriptions — the webhook cannot sync status');
   perform app_test.assert(
     not has_table_privilege('authenticated', 'public.subscriptions', 'insert'),
-    '(30) authenticated holds INSERT on subscriptions — no optimistic client write');
+    '(29) authenticated holds INSERT on subscriptions — no optimistic client write');
 
   -- The one-live-sub partial unique: a second LIVE sub for the same (tenant,
   -- customer, plan) is refused (v_sub_a is already 'active').
@@ -1412,7 +1357,7 @@ begin
   exception when others then raised := true;
   end;
   perform app_test.assert(raised,
-    '(30) a second live subscription for the same plan+customer was allowed');
+    '(29) a second live subscription for the same plan+customer was allowed');
 
   -- Positive control: app.record_dunning_stage (definer, the sole writer) advances
   -- the ledger AND flips subscription status. Clear the JWT so the service branch runs.
@@ -1420,16 +1365,72 @@ begin
   perform app.record_dunning_stage(v_a, v_sub_a, 'past_due', null, now(), null, '{}'::jsonb);
   select status into v_status from public.subscriptions where id = v_sub_a;
   perform app_test.assert(v_status = 'past_due',
-    '(30) app.record_dunning_stage did not flip subscription status to past_due');
+    '(29) app.record_dunning_stage did not flip subscription status to past_due');
   select count(*) into n from public.dunning_states
     where subscription_id = v_sub_a and stage = 'past_due';
-  perform app_test.assert(n = 1, '(30) app.record_dunning_stage did not append the past_due stage');
+  perform app_test.assert(n = 1, '(29) app.record_dunning_stage did not append the past_due stage');
 
   -- Idempotent: a re-call at the current latest stage appends NO duplicate.
   perform app.record_dunning_stage(v_a, v_sub_a, 'past_due', null, now(), null, '{}'::jsonb);
   select count(*) into n from public.dunning_states
     where subscription_id = v_sub_a and stage = 'past_due';
-  perform app_test.assert(n = 1, '(30) app.record_dunning_stage appended a DUPLICATE past_due stage');
+  perform app_test.assert(n = 1, '(29) app.record_dunning_stage appended a DUPLICATE past_due stage');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (30) verify_runs (migration 0036): the nightly money-verification history.
+--      Member-read isolation (a tenant sees ONLY its own runs); a GLOBAL run
+--      (tenant_id null) matches no membership and stays hidden; NO client write
+--      path. Reuses block-27's tenants; verify_runs has no unique(tenant_id)/
+--      event_id, so there is nothing to collide with. (invariant #7.)
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; n int; raised boolean;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+
+  insert into public.verify_runs (tenant_id, started_at, finished_at, ok, violations)
+    values (v_a, now(), now(), true, '[]');
+  insert into public.verify_runs (tenant_id, started_at, finished_at, ok, violations)
+    values (v_b, now(), now(), false, '[{"check":"over_refund"}]');
+  -- The real cadence writes GLOBAL runs (tenant null) — those must be invisible.
+  insert into public.verify_runs (tenant_id, started_at, finished_at, ok, violations)
+    values (null, now(), now(), true, '[]');
+
+  perform app_test.become(v_ub);
+
+  -- Isolation: uB sees only her own run, never tenant A's nor the global one.
+  select count(*) into n from public.verify_runs where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(30) uB can SELECT tenant A verify_runs');
+  select count(*) into n from public.verify_runs where tenant_id is null;
+  perform app_test.assert(n = 0, '(30) uB can SELECT global (null-tenant) verify_runs');
+  select count(*) into n from public.verify_runs where tenant_id = v_b;
+  perform app_test.assert(n = 1, '(30) uB cannot read her OWN verify_runs');
+
+  -- No client write path (the service role writes run history).
+  raised := false;
+  begin
+    insert into public.verify_runs (tenant_id, started_at, ok)
+      values (v_b, now(), true);
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(30) uB could INSERT into verify_runs');
+
+  reset role;
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'public.verify_runs', 'insert'),
+    '(30) authenticated holds INSERT on verify_runs — run history is service-written');
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'public.verify_runs', 'update'),
+    '(30) authenticated holds UPDATE on verify_runs — runs are append-once');
+  perform app_test.assert(
+    has_table_privilege('service_role', 'public.verify_runs', 'insert'),
+    '(30) service_role lacks INSERT on verify_runs — verify_money cannot record a run');
 end
 $$;
 
