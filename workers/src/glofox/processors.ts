@@ -26,6 +26,7 @@ import { BILLING_PROCESS_INBOX_KIND, runInbox } from "../billing/inbox.js";
 import { BILLING_PROCESS_OUTBOX_KIND, runOutbox, type StripeAdapter } from "../billing/outbox.js";
 import { BILLING_VERIFY_MONEY_KIND, runVerifyMoney } from "../billing/verify.js";
 import { BILLING_DUNNING_KIND, runDunning } from "../billing/dunning.js";
+import { NO_SHOW_SWEEP_KIND, WAITLIST_SWEEP_KIND } from "../booking/sweeps.js";
 import type { Env as StripeEnv } from "@kelo/stripe";
 
 export {
@@ -386,6 +387,27 @@ export function createGlofoxProcessors(
         BILLING_DUNNING_KIND,
         JSON.stringify({}),
         `${BILLING_DUNNING_KIND}:${dayBucket}`,
+      ]);
+
+      // Booking engine (phase 6 · unit 6.2). The waitlist sweep settles lapsed
+      // offers + cascade-promotes — a FREQUENT global pass (app scans all
+      // tenants), MINUTE-keyed so a re-fire within the same minute dedupes (like
+      // expire_holds). Global (tenant NULL): the RPC takes no tenant.
+      const minuteBucket = instant.toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
+      await ctx.pool.query(`select app.enqueue_job($1, $2, null, now(), 100, 5, $3)`, [
+        WAITLIST_SWEEP_KIND,
+        JSON.stringify({}),
+        `${WAITLIST_SWEEP_KIND}:${minuteBucket}`,
+      ]);
+
+      // The no-show sweep is a DAILY per-tenant money event (forfeit) — day-keyed
+      // and tenant-scoped so the frequent fan-out converges on ONE pass per
+      // tenant per day.
+      await ctx.pool.query(`select app.enqueue_job($1, $2, $3, now(), 100, 5, $4)`, [
+        NO_SHOW_SWEEP_KIND,
+        JSON.stringify({}),
+        tenantId,
+        `${NO_SHOW_SWEEP_KIND}:${tenantId}:${dayBucket}`,
       ]);
     },
   };
