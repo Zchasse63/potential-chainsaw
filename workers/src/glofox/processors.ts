@@ -24,6 +24,7 @@ import { PERSON_DELETE_KIND, processPersonDelete } from "../people/delete.js";
 import { PERSON_EXPORT_KIND, processPersonExport } from "../people/export.js";
 import { BILLING_PROCESS_INBOX_KIND, runInbox } from "../billing/inbox.js";
 import { BILLING_PROCESS_OUTBOX_KIND, runOutbox, type StripeAdapter } from "../billing/outbox.js";
+import { BILLING_VERIFY_MONEY_KIND, runVerifyMoney } from "../billing/verify.js";
 import type { Env as StripeEnv } from "@kelo/stripe";
 
 export {
@@ -32,6 +33,7 @@ export {
   PERSON_EXPORT_KIND,
   BILLING_PROCESS_INBOX_KIND,
   BILLING_PROCESS_OUTBOX_KIND,
+  BILLING_VERIFY_MONEY_KIND,
 };
 
 /**
@@ -183,6 +185,16 @@ export function createGlofoxProcessors(
     },
     [BILLING_PROCESS_OUTBOX_KIND]: async (_job, ctx) => {
       await runOutbox(ctx.pool, { env: deps.stripeEnv, makeClient: deps.stripeMakeClient });
+    },
+
+    /**
+     * Phase 5 · unit 5.5 — the NIGHTLY money-verification sweep (the phase-5
+     * gate proof). GLOBAL like the drains: one run scans every tenant's billing
+     * ledgers, records a verify_runs row, and opens deduped per-tenant alerts.
+     * READ-ONLY over payments/stripe_commands/stripe_events.
+     */
+    [BILLING_VERIFY_MONEY_KIND]: async (_job, ctx) => {
+      await runVerifyMoney(ctx.pool, { now });
     },
 
     [GLOFOX_SYNC_KINDS[0]]: syncProcessor(() => erase(membersSpec)),
@@ -342,6 +354,17 @@ export function createGlofoxProcessors(
           `${kind}:${hourBucket}`,
         ]);
       }
+
+      // verify_money (Phase 5 · unit 5.5) is the NIGHTLY cross-ledger gate proof
+      // — a DAY-scoped idempotency key (not the hourly bucket the drains use)
+      // keeps the frequent fan-out to ONE verification per day. Global (tenant
+      // NULL), like the drains; the dedicated nightly cadence lands with the
+      // schedule table (unit 1.7).
+      await ctx.pool.query(`select app.enqueue_job($1, $2, null, now(), 100, 5, $3)`, [
+        BILLING_VERIFY_MONEY_KIND,
+        JSON.stringify({}),
+        `${BILLING_VERIFY_MONEY_KIND}:${dayBucket}`,
+      ]);
     },
   };
 }
