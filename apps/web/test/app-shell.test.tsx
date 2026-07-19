@@ -32,7 +32,7 @@ vi.mock("@tanstack/react-query", () => ({
 afterEach(cleanup);
 
 describe("AppShell", () => {
-  it("shows Staff in the owner/manager rail", () => {
+  it("shows Staff and Waivers in the owner/manager rail", () => {
     access.role = "manager";
     render(
       <AppShell>
@@ -47,13 +47,15 @@ describe("AppShell", () => {
       "Import review",
       "Health",
       "◎Staff",
+      "§Waivers",
     ]);
     expect(screen.getByRole("link", { name: "Marketing" }).getAttribute("href")).toBe("/marketing");
     expect(screen.getByRole("link", { name: "Ask" }).getAttribute("href")).toBe("/ask");
     expect(screen.getByRole("link", { name: "Staff" }).getAttribute("href")).toBe("/staff");
+    expect(screen.getByRole("link", { name: "Waivers" }).getAttribute("href")).toBe("/waivers");
   });
 
-  it("removes Staff from front-desk and trainer navigation", () => {
+  it("removes Staff and Waivers from front-desk and trainer navigation", () => {
     access.role = "front_desk";
     render(
       <AppShell>
@@ -61,5 +63,6 @@ describe("AppShell", () => {
       </AppShell>,
     );
     expect(screen.queryByRole("link", { name: "Staff" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Waivers" })).toBeNull();
   });
 });

@@ -113,6 +113,32 @@ function StaffNavLink() {
   );
 }
 
+/** Waivers rail item — versioned waiver text + desk capture live here. Shown
+ * only to owner/manager (UX ruling 9: the nav item appears only when the
+ * viewer can act on it; front-desk desk capture is reached from a person). */
+function WaiversNavLink() {
+  const auth = useAuth();
+  const access = useQuery({
+    queryKey: ["auth", "me"],
+    enabled: auth.accessToken !== null,
+    queryFn: () => fetchEnvelope("/auth/me", auth.accessToken as string),
+    retry: false,
+  });
+  if (access.status !== "success") return null;
+  const tenants = (access.data as { data?: { tenants?: { role?: string }[] } }).data?.tenants ?? [];
+  if (!tenants.some((tenant) => tenant.role === "owner" || tenant.role === "manager")) return null;
+  return (
+    <li>
+      <Link to="/waivers" className={NAV_LINK_BASE} activeProps={{ className: NAV_LINK_ACTIVE }}>
+        <span aria-hidden="true" className="font-mono text-icon-inactive">
+          §
+        </span>
+        Waivers
+      </Link>
+    </li>
+  );
+}
+
 /**
  * Open-exception count badge (design guide §8 count badges), read from the
  * /health envelope's quarantine summary — no extra fetch. Quiet when the
@@ -176,9 +202,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             ? "Briefing archive"
             : pathname.startsWith("/staff")
               ? "Staff"
-              : pathname.startsWith("/health")
-                ? "Health"
-                : "Today";
+              : pathname.startsWith("/waivers")
+                ? "Waivers"
+                : pathname.startsWith("/health")
+                  ? "Health"
+                  : "Today";
   return (
     <div className="flex min-h-screen bg-surface-app">
       <aside className="flex w-rail shrink-0 flex-col border-r border-hairline bg-surface-card">
@@ -239,6 +267,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               </Link>
             </li>
             <StaffNavLink />
+            <WaiversNavLink />
           </ul>
         </nav>
       </aside>
