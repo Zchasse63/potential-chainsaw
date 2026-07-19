@@ -402,8 +402,6 @@ export function createGlofoxProcessors(
         `${BILLING_DUNNING_KIND}:${dayBucket}`,
       ]);
 
-      const minuteBucket = instant.toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
-
       // The hold-expiry sweep (unit 6.1) reclaims expired UN-frozen seat holds.
       // Holds have a 300s default TTL, so the hour key the other drains use is
       // far too coarse — MINUTE-scoped key. NOTE: the tick cadence (the single
