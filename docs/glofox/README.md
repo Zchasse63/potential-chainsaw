@@ -204,6 +204,11 @@ StripeCharge: { _id, id, transaction_status (PAID|ERROR|REFUNDED [LIVE]), transa
   (10), and **`book_class` (30) — a third value §5 didn't document** (drop-in/booking payments).
   The transaction classifier must handle all three + quarantine unknowns.
 - **`payment_method` values [LIVE]:** `credit_card`, `card`, `complimentary`, `cash`.
+  **Tender normalization (migration 0030):** `credit_card` and `card` are the SAME real-world card
+  tender under a Glofox legacy/current label split (owner-confirmed 2026-07-18). `public.tender_aliases`
+  maps `credit_card → card` so the revenue-by-tender report collapses them into one row; `cash` and
+  `complimentary` are correctly distinct (no alias). Net revenue totals are unaffected — only the
+  per-tender grouping consolidates. Add future equivalences by inserting into `tender_aliases`.
 - Recurring-member evidence chain confirmed end-to-end: `glofox_event=subscription_payment` +
   `stripe_subscription_id` + `plan_code` → catalog join [LIVE].
 - Stripe underneath is confirmed (`StripeCharge`, `stripe_subscription_id`) — but **account
