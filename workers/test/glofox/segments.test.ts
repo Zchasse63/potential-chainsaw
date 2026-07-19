@@ -91,7 +91,9 @@ describe("derive.segments processor", () => {
       GLOFOX_SYNC_ALL_KINDS.indexOf(DERIVE_RELATIONSHIPS_KIND) + 1,
     );
 
-    const orderedBatch = pool.calls.at(-1);
+    // Locate the ordered derivation batch by content — the global billing
+    // drains (unit 5.3) trail it, so it is no longer the last query.
+    const orderedBatch = callsMatching(pool.calls, "deletion_job")[0];
     expect(orderedBatch?.text).toMatch(/deletion_job[\s\S]+relationship_job[\s\S]+segment_job/);
     expect(orderedBatch?.values?.[4]).toBe(DERIVE_RELATIONSHIPS_KIND);
     expect(orderedBatch?.values?.[8]).toBe(DERIVE_SEGMENTS_KIND);

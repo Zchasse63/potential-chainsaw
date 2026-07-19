@@ -17,19 +17,22 @@ import { runBriefing } from "../briefing/generate.js";
 import type { FetchImpl } from "../briefing/synthesize.js";
 import { COMMS_SEND_KIND, createCommsSendProcessor } from "../comms/send.js";
 import type { Env, FetchImpl as CommsFetchImpl, MessageAdapter } from "@kelo/comms";
-import {
-  CAMPAIGNS_LIFECYCLE_KIND,
-  createLifecycleProcessor,
-} from "../campaigns/lifecycle.js";
-import {
-  CAMPAIGNS_ATTRIBUTE_KIND,
-  createAttributionProcessor,
-} from "../campaigns/attribution.js";
+import { CAMPAIGNS_LIFECYCLE_KIND, createLifecycleProcessor } from "../campaigns/lifecycle.js";
+import { CAMPAIGNS_ATTRIBUTE_KIND, createAttributionProcessor } from "../campaigns/attribution.js";
 import { RETENTION_SWEEP_KIND, runRetentionSweep } from "../retention/sweep.js";
 import { PERSON_DELETE_KIND, processPersonDelete } from "../people/delete.js";
 import { PERSON_EXPORT_KIND, processPersonExport } from "../people/export.js";
+import { BILLING_PROCESS_INBOX_KIND, runInbox } from "../billing/inbox.js";
+import { BILLING_PROCESS_OUTBOX_KIND, runOutbox, type StripeAdapter } from "../billing/outbox.js";
+import type { Env as StripeEnv } from "@kelo/stripe";
 
-export { RETENTION_SWEEP_KIND, PERSON_DELETE_KIND, PERSON_EXPORT_KIND };
+export {
+  RETENTION_SWEEP_KIND,
+  PERSON_DELETE_KIND,
+  PERSON_EXPORT_KIND,
+  BILLING_PROCESS_INBOX_KIND,
+  BILLING_PROCESS_OUTBOX_KIND,
+};
 
 /**
  * Phase 1 · unit 4 — the Glofox sync job processors. Each 'glofox.sync.*'
@@ -98,6 +101,10 @@ export interface GlofoxProcessorDeps {
   readonly commsSmsAdapter?: MessageAdapter;
   readonly campaignDraftFetchImpl?: typeof fetch;
   readonly campaignDraftEnv?: NodeJS.ProcessEnv;
+  /** Billing outbox: env the default StripeClient reads STRIPE_SECRET_KEY from. */
+  readonly stripeEnv?: StripeEnv;
+  /** Billing outbox: inject a Stripe adapter double (MockStripe) in tests. */
+  readonly stripeMakeClient?: (opts: { stripeAccountId: string }) => StripeAdapter;
 }
 
 function requireTenant(job: JobRow): string {
@@ -164,6 +171,20 @@ export function createGlofoxProcessors(
     },
     [PERSON_DELETE_KIND]: processPersonDelete,
     [PERSON_EXPORT_KIND]: processPersonExport,
+
+    /**
+     * Phase 5 · unit 5.3 — the billing spine drains. GLOBAL (no tenant on the
+     * job): stripe_events has no tenant_id, and the outbox scopes every mutation
+     * by the command row's own tenant_id. The webhook receiver is the AUTHORITY;
+     * these processors are the confirmation (inbox) + delivery (outbox) engines.
+     */
+    [BILLING_PROCESS_INBOX_KIND]: async (_job, ctx) => {
+      await runInbox(ctx.pool, { now });
+    },
+    [BILLING_PROCESS_OUTBOX_KIND]: async (_job, ctx) => {
+      await runOutbox(ctx.pool, { env: deps.stripeEnv, makeClient: deps.stripeMakeClient });
+    },
+
     [GLOFOX_SYNC_KINDS[0]]: syncProcessor(() => erase(membersSpec)),
     [GLOFOX_SYNC_KINDS[1]]: syncProcessor(() => erase(membershipsSpec)),
     [GLOFOX_SYNC_KINDS[2]]: syncProcessor(() => erase(eventsSpec)),
@@ -306,6 +327,21 @@ export function createGlofoxProcessors(
           `${RETENTION_SWEEP_KIND}:${tenantId}:${dayBucket}`,
         ],
       );
+
+      // Billing spine (Phase 5 · unit 5.3): the inbox + outbox drains are GLOBAL
+      // (stripe_events has no tenant_id; the outbox scopes per command row), so
+      // they enqueue with a tenant-INDEPENDENT hour key — every tenant's fan-out
+      // converges on ONE drain job per bucket (enqueue_job dedupes on
+      // (kind, idempotency_key)). Interim hookup on the existing frequent
+      // fan-out; the dedicated billing cadence lands with the schedule table
+      // (unit 1.7). Tenant is NULL — these processors require no tenant on the job.
+      for (const kind of [BILLING_PROCESS_INBOX_KIND, BILLING_PROCESS_OUTBOX_KIND]) {
+        await ctx.pool.query(`select app.enqueue_job($1, $2, null, now(), 100, 5, $3)`, [
+          kind,
+          JSON.stringify({}),
+          `${kind}:${hourBucket}`,
+        ]);
+      }
     },
   };
 }

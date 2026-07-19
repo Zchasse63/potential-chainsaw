@@ -9,6 +9,7 @@ import {
   type SuppressionReason,
   type TwilioParams,
 } from "@kelo/comms";
+import { verifyStripeSignature } from "@kelo/stripe";
 import { createServiceRoleClient, type KeloSupabaseClient } from "@kelo/db";
 import type { AppEnv } from "../types.js";
 
@@ -331,6 +332,62 @@ async function processPersisted(
   }
 }
 
+// --- Stripe (billing spine, Phase 5) -------------------------------------------
+// The receiver's ONLY job is to durably record the signature-verified event in
+// the stripe_events inbox (threat-model §6). It NEVER processes inline: the
+// 'stripe.process_inbox' worker consumes the TABLE, and the signed webhook — not
+// the HTTP request — is the confirmation authority that flips a payment's money
+// state. Deliberately kept to one INSERT so the 200 is fast and crash-safe.
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function asStr(value: unknown): string | null {
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+/** The inbox columns a Stripe event carries: its id, type, and (Connect) the
+ * connected account it was scoped to. Tenancy resolves later, in the processor,
+ * through stripe_account_id — the inbox has no tenant_id (migration 0033). */
+function stripeEventFields(payload: unknown): {
+  eventId: string | null;
+  type: string | null;
+  stripeAccountId: string | null;
+} {
+  const envelope = asRecord(payload);
+  return {
+    eventId: asStr(envelope?.["id"]),
+    type: asStr(envelope?.["type"]),
+    stripeAccountId: asStr(envelope?.["account"]),
+  };
+}
+
+async function insertStripeEvent(
+  client: KeloSupabaseClient,
+  fields: { eventId: string; type: string | null; stripeAccountId: string | null },
+  payload: unknown,
+): Promise<void> {
+  // on conflict(event_id) do nothing — Stripe delivers at least once, so a
+  // redelivery of an already-recorded event is a durable no-op (unique(event_id),
+  // migration 0033). ignoreDuplicates makes the upsert a pure insert-or-skip.
+  await run(
+    from(client, "stripe_events").upsert(
+      {
+        event_id: fields.eventId,
+        type: fields.type,
+        stripe_account_id: fields.stripeAccountId,
+        payload,
+        status: "received",
+      },
+      { onConflict: "event_id", ignoreDuplicates: true },
+    ),
+    "stripe inbox insert",
+  );
+}
+
 /** Public routes: no auth middleware. The provider signature is the auth. */
 export function registerWebhookRoutes(app: Hono<AppEnv>, deps: WebhookDeps = {}): void {
   const env = () => deps.webhookEnv ?? process.env;
@@ -384,6 +441,41 @@ export function registerWebhookRoutes(app: Hono<AppEnv>, deps: WebhookDeps = {})
     if (await insertInbox(service, "twilio", eventId, parsed.payload)) {
       await processPersisted(service, "twilio", eventId, mapTwilioEvent(parsed.payload), now());
     }
+    return c.json({ received: true });
+  });
+
+  app.post("/webhooks/stripe", async (c) => {
+    // Stripe signs `${t}.${rawBody}`; read the untouched bytes BEFORE any parse
+    // (reserialization would break the HMAC). The signature IS the auth here.
+    const rawBody = await c.req.text();
+    const secret = env()["STRIPE_WEBHOOK_SECRET"];
+    if (secret === undefined || secret === "") return c.text("webhook not configured", 503);
+    const signature = c.req.header("stripe-signature") ?? "";
+    // Inject the clock so staleness (replay beyond the 300s tolerance) is
+    // deterministically testable and matches the rest of the webhook surface.
+    const valid = await verifyStripeSignature(rawBody, signature, secret, {
+      nowSeconds: Math.floor(now().getTime() / 1000),
+    });
+    // Invalid OR stale → 401 with NO DB write. A forged/replayed event must
+    // never reach the inbox (threat-model §6: money, webhook forgery/replay).
+    if (!valid) return c.text("invalid signature", 401);
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(rawBody) as unknown;
+    } catch {
+      return c.text("invalid payload", 400);
+    }
+    const fields = stripeEventFields(payload);
+    if (fields.eventId === null) return c.text("missing event id", 400);
+
+    // Durably record ONLY, then 200 FAST. Processing happens off the request in
+    // the 'stripe.process_inbox' worker, which consumes this table.
+    await insertStripeEvent(
+      client(),
+      { eventId: fields.eventId, type: fields.type, stripeAccountId: fields.stripeAccountId },
+      payload,
+    );
     return c.json({ received: true });
   });
 }

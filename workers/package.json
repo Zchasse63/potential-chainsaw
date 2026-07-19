@@ -21,6 +21,7 @@
     "@kelo/comms": "workspace:*",
     "@kelo/db": "workspace:*",
     "@kelo/glofox": "workspace:*",
+    "@kelo/stripe": "workspace:*",
     "zod": "3.25.76"
   }
 }
