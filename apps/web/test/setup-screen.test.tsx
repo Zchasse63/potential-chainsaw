@@ -196,6 +196,39 @@ describe("SetupScreen — launch readiness", () => {
     expect(screen.getByTestId("launch-verdict").textContent).toContain("Ready to launch");
   });
 
+  it("reads the verdict from server stage.complete, not a client hard-and-fail re-derivation", () => {
+    // Review finding (7.1c): the verdict must read the server-owned
+    // stage.complete, never recompute the blocking policy. Construct the
+    // divergence: NO gate is hard-and-fail (a client rule of
+    // `gates.filter(g => g.hard && g.status === 'fail')` would yield [] and
+    // declare "ready"), yet a SOFT gate fails so the server marks its stage
+    // incomplete. The server verdict is NOT ready; the client must agree.
+    const softFailReadiness = {
+      gates: [
+        gate("resources_configured", true, "pass", { counts: { resources: 1 }, as_of: null }),
+        // soft (hard:false) gate in FAIL — invisible to a hard-and-fail rule.
+        gate("native_booking_exercised", false, "fail", {
+          counts: { bookings: 0 },
+          as_of: null,
+          detail: "synthetic: a soft gate the server treats as blocking",
+        }),
+      ],
+      stages: [
+        { key: "rooms_services", label: "Rooms & services", gate_keys: ["resources_configured"], complete: true },
+        {
+          key: "payments_waivers_launch",
+          label: "Payments, waivers & launch readiness",
+          gate_keys: ["native_booking_exercised"],
+          complete: false, // server: a failing gate (hard or not) blocks the stage
+        },
+      ],
+    };
+    renderSetup({}, softFailReadiness);
+    const verdict = screen.getByTestId("launch-verdict");
+    expect(verdict.textContent).toContain("Not ready to launch");
+    expect(verdict.textContent).not.toContain("Ready to launch — every hard launch gate passes");
+  });
+
   it("shows the acknowledge affordance ONLY for soft warn gates", () => {
     renderSetup();
     // Soft warn gate → the affordance exists.

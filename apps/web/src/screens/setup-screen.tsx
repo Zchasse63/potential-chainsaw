@@ -243,11 +243,18 @@ function LaunchReadiness({
     >
       {(data, meta) => {
         const gatesByKey = new Map(data.gates.map((gate) => [gate.key, gate]));
-        // Read the verdict FROM THE GATES exactly as the server defines
-        // blocking: a HARD gate in 'fail'. A hard gate in 'warn' (the
-        // documented single-operator posture) does not block.
-        const blocking = data.gates.filter((gate) => gate.hard && gate.status === "fail");
-        const ready = blocking.length === 0;
+        // The launch verdict reads the SERVER-OWNED completion, never a
+        // client re-derivation of the blocking policy: a stage is complete
+        // iff none of its gates is blocking (readiness.ts owns that rule via
+        // stage.complete). Recomputing "hard && fail" here would duplicate a
+        // policy the server owns and silently drift the day the server's
+        // hard/soft classification changes (a soft gate that starts failing
+        // would keep a false green). Every stage complete ⇒ ready to launch.
+        const ready = data.stages.every((stage) => stage.complete);
+        // The gates the SERVER treats as blocking are exactly those in 'fail'
+        // (readiness.ts isBlocking) — named here only to explain the verdict,
+        // not to compute it.
+        const blocking = data.gates.filter((gate) => gate.status === "fail");
         return (
           <section aria-label="Launch readiness" className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -281,11 +288,11 @@ function LaunchReadiness({
                 className="rounded-3 border border-danger-border bg-danger-tint p-4"
               >
                 <p className="text-body font-medium text-danger-on-tint">
-                  Not ready to launch — {blocking.length} hard {blocking.length === 1 ? "gate" : "gates"}{" "}
+                  Not ready to launch — {blocking.length} {blocking.length === 1 ? "gate" : "gates"}{" "}
                   failing: {blocking.map((gate) => GATE_LABELS[gate.key]).join(", ")}.
                 </p>
                 <p className="mt-1 text-body text-danger-on-tint">
-                  Hard gates must be resolved, not acknowledged.
+                  Failing gates must be resolved, not acknowledged.
                 </p>
               </div>
             )}
