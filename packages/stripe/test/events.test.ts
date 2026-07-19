@@ -93,6 +93,52 @@ describe("mapStripeEvent — classify the Phase-5 types", () => {
       attemptCount: 2,
     });
   });
+
+  it("carries current_period_end on customer.subscription.updated (status sync)", () => {
+    expect(
+      mapStripeEvent({
+        id: "evt_6",
+        type: "customer.subscription.updated",
+        data: { object: { id: "sub_1", status: "active", customer: "cus_1", current_period_end: 1_800_000_000 } },
+      }),
+    ).toEqual({
+      kind: "subscription_updated",
+      eventId: "evt_6",
+      subscriptionId: "sub_1",
+      status: "active",
+      customerId: "cus_1",
+      currentPeriodEnd: 1_800_000_000,
+    });
+  });
+
+  it("marks customer.subscription.deleted as a subscription_updated with deleted=true", () => {
+    const action = mapStripeEvent({
+      id: "evt_7",
+      type: "customer.subscription.deleted",
+      data: { object: { id: "sub_1", status: "canceled", customer: "cus_1" } },
+    });
+    expect(action).toMatchObject({
+      kind: "subscription_updated",
+      subscriptionId: "sub_1",
+      deleted: true,
+    });
+  });
+
+  it("classifies invoice.payment_succeeded (the recovery trigger)", () => {
+    expect(
+      mapStripeEvent({
+        id: "evt_8",
+        type: "invoice.payment_succeeded",
+        data: { object: { id: "in_2", subscription: "sub_1", customer: "cus_1" } },
+      }),
+    ).toEqual({
+      kind: "invoice_payment_succeeded",
+      eventId: "evt_8",
+      invoiceId: "in_2",
+      subscriptionId: "sub_1",
+      customerId: "cus_1",
+    });
+  });
 });
 
 describe("mapStripeEvent — widen-then-classify (quarantine-by-ignore, never throw)", () => {

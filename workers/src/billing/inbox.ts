@@ -1,5 +1,13 @@
 import { mapStripeEvent, type StripeEventAction } from "@kelo/stripe";
 import type { PooledQueryable } from "../glofox/types.js";
+import {
+  cancelDunning,
+  DEFAULT_GRACE_WINDOW_DAYS,
+  recoverDunning,
+  selectSubscriptionByStripeId,
+  startDunning,
+  syncSubscriptionStatus,
+} from "./dunning.js";
 
 /**
  * Phase 5 · unit 5.3 — THE STRIPE INBOX PROCESSOR (the confirmation engine;
@@ -37,12 +45,14 @@ const DEFAULT_BATCH = 50;
 const DEFAULT_MAX_ATTEMPTS = 5;
 
 export interface InboxDeps {
-  /** Injectable clock (processed_at). Defaults to now; never Date.now in-body. */
+  /** Injectable clock (processed_at + dunning grace anchor). Never Date.now in-body. */
   readonly now?: () => Date;
   /** Max events claimed per run. */
   readonly batch?: number;
   /** Attempts before a failing event is dead-lettered (default 5). */
   readonly maxAttempts?: number;
+  /** Dunning grace window in days (owner default 14). */
+  readonly graceWindowDays?: number;
 }
 
 /** How one event was resolved — returned for tests and processor logging. */
@@ -164,6 +174,8 @@ function refundTarget(
 async function applyTransition(
   pool: PooledQueryable,
   action: StripeEventAction,
+  now: Date,
+  graceWindowDays: number,
 ): Promise<string | null> {
   switch (action.kind) {
     case "payment_succeeded": {
@@ -217,8 +229,55 @@ async function applyTransition(
       await setPaymentStatus(pool, action.paymentIntentId, target, allowedPrior);
       return target;
     }
-    // Known-but-unhandled here (subscriptions/invoices land in a later unit) and
-    // truly unknown ('ignored') alike apply NO money transition.
+    // -- Subscriptions + dunning (unit 5.6) ---------------------------------
+    // Located by the globally-unique stripe_subscription_id. A subscription we
+    // do not track yet (creation is a later unit) is 'ignored', never dead-
+    // lettered. The inbox is the AUTHORITY: it is the only writer that syncs a
+    // subscription's status and that opens/closes a dunning cycle.
+    case "subscription_updated": {
+      const sub = await selectSubscriptionByStripeId(pool, action.subscriptionId);
+      if (sub === null) return null;
+      await syncSubscriptionStatus(pool, {
+        sub,
+        status: action.status,
+        currentPeriodEnd: action.currentPeriodEnd,
+        deleted: action.deleted,
+      });
+      // A Stripe-side cancellation closes any open dunning cycle (mirrored, never
+      // auto-cancelled).
+      if (action.deleted === true) {
+        await cancelDunning(pool, { sub, now });
+        return "subscription_cancelled";
+      }
+      return "subscription_synced";
+    }
+    case "invoice_payment_failed": {
+      // THE dunning trigger. Stripe owns the retry cadence; opening a grace cycle
+      // is idempotent across the retries' repeated failure events.
+      const sub =
+        action.subscriptionId === undefined
+          ? null
+          : await selectSubscriptionByStripeId(pool, action.subscriptionId);
+      if (sub === null) return null;
+      await startDunning(pool, {
+        sub,
+        now,
+        graceWindowDays,
+        detail: { invoice_id: action.invoiceId, attempt_count: action.attemptCount ?? null },
+      });
+      return "dunning_grace_started";
+    }
+    case "invoice_payment_succeeded": {
+      // Recovery: a succeeded invoice closes an open cycle back to active.
+      const sub =
+        action.subscriptionId === undefined
+          ? null
+          : await selectSubscriptionByStripeId(pool, action.subscriptionId);
+      if (sub === null) return null;
+      await recoverDunning(pool, { sub, now });
+      return "dunning_recovered";
+    }
+    // Truly unknown ('ignored') applies NO transition.
     default:
       return null;
   }
@@ -301,6 +360,7 @@ export async function runInbox(
   const now = deps.now ?? (() => new Date());
   const batch = deps.batch ?? DEFAULT_BATCH;
   const maxAttempts = deps.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+  const graceWindowDays = deps.graceWindowDays ?? DEFAULT_GRACE_WINDOW_DAYS;
   const events = await claimEvents(pool, batch);
   const outcomes: InboxOutcome[] = [];
 
@@ -308,7 +368,7 @@ export async function runInbox(
     const instant = now();
     try {
       const action = mapStripeEvent(event.payload);
-      const transition = await applyTransition(pool, action);
+      const transition = await applyTransition(pool, action, instant, graceWindowDays);
       const status = transition === null ? "ignored" : "processed";
       await markEvent(pool, event.id, status, null, instant);
       outcomes.push(

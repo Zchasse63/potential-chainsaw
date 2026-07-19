@@ -370,3 +370,56 @@ describe("POST /payments/:id/refund — refund a succeeded payment (webhook conf
     expect(fake.calls.some((c) => c.table === "create_refund")).toBe(false);
   });
 });
+
+const DUNNING_ROW = {
+  subscription_id: "37000000-0000-4000-8000-0000000000a1",
+  customer_id: CUSTOMER_ID,
+  person_id: "37000000-0000-4000-8000-0000000000b1",
+  person_name: "Dana Member",
+  plan_id: "37000000-0000-4000-8000-0000000000c1",
+  status: "past_due",
+  stage: "past_due",
+  grace_expires_at: NOW,
+  current_period_end: NOW,
+  occurred_at: NOW,
+};
+
+function dunningFake(role: string) {
+  return fakeUserClient(
+    {
+      tenant_users: () => ({ data: [{ tenant_id: TENANT_A, role }] }),
+      tenants: () => ({ data: [tenantRow({})] }),
+    },
+    { dunning_queue: () => ({ data: [DUNNING_ROW] }) },
+  );
+}
+
+function getReq() {
+  return { method: "GET", headers: { authorization: "Bearer t" } };
+}
+
+describe("GET /payments/dunning — the dunning queue (owner/manager)", () => {
+  for (const role of ["owner", "manager"] as const) {
+    it(`returns the dunning queue for ${role}`, async () => {
+      const fake = dunningFake(role);
+      const { app } = appFor(fake);
+      const res = await app.request("/api/v1/payments/dunning", getReq());
+      expect(res.status).toBe(200);
+      const payload = (await res.json()) as { data: { dunning: { stage: string }[] } };
+      expect(payload.data.dunning).toHaveLength(1);
+      expect(payload.data.dunning[0]?.stage).toBe("past_due");
+      const rpc = fake.calls.find((c) => c.table === "dunning_queue");
+      expect((rpc?.args[0] as Record<string, unknown>).p_tenant).toBe(TENANT_A);
+    });
+  }
+
+  for (const role of ["front_desk", "trainer"] as const) {
+    it(`403s ${role} before the query`, async () => {
+      const fake = dunningFake(role);
+      const { app } = appFor(fake);
+      const res = await app.request("/api/v1/payments/dunning", getReq());
+      expect(res.status).toBe(403);
+      expect(fake.calls.some((c) => c.table === "dunning_queue")).toBe(false);
+    });
+  }
+});

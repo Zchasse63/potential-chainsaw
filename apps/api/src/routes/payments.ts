@@ -4,6 +4,7 @@ import { IDEMPOTENCY_KEY_HEADER } from "@kelo/contracts";
 import { createServiceRoleClient, type KeloSupabaseClient } from "@kelo/db";
 import { validateStepUpGrant } from "../auth/stepup.js";
 import { fetchTenant } from "../data.js";
+import { fetchDunningQueue } from "../data-dunning.js";
 import {
   createPaymentIntent,
   createRefund,
@@ -91,6 +92,23 @@ export function registerPaymentRoutes(
     const { tenantId } = tenantOf(c);
     return c.json(c.var.ok({ payments: await fetchPayments(userClient, tenantId) }, native), 200);
   });
+
+  // -- the dunning queue (owner/manager; unit 5.8 web surface) ----------------
+  // Registered BEFORE /payments/:id so "dunning" is never parsed as an id.
+  app.get(
+    "/payments/dunning",
+    requireAuth(deps),
+    resolveTenant,
+    requireRole("owner", "manager"),
+    async (c) => {
+      const { userClient } = authOf(c);
+      const { tenantId } = tenantOf(c);
+      return c.json(
+        c.var.ok({ dunning: await fetchDunningQueue(userClient, tenantId) }, native),
+        200,
+      );
+    },
+  );
 
   app.get("/payments/:id", requireAuth(deps), resolveTenant, async (c) => {
     const { id } = parseParams(c, idParams);

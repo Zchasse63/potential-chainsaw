@@ -37,6 +37,10 @@ export type StripeEventAction =
       readonly subscriptionId: string;
       readonly status?: string;
       readonly customerId?: string;
+      /** Unix seconds; synced onto subscriptions.current_period_end. */
+      readonly currentPeriodEnd?: number;
+      /** True for customer.subscription.deleted — the inbox forces 'cancelled'. */
+      readonly deleted?: boolean;
     }
   | {
       readonly kind: "invoice_payment_failed";
@@ -45,6 +49,13 @@ export type StripeEventAction =
       readonly subscriptionId?: string;
       readonly customerId?: string;
       readonly attemptCount?: number;
+    }
+  | {
+      readonly kind: "invoice_payment_succeeded";
+      readonly eventId: string;
+      readonly invoiceId: string;
+      readonly subscriptionId?: string;
+      readonly customerId?: string;
     }
   | { readonly kind: "ignored"; readonly eventId?: string; readonly rawType: string };
 
@@ -117,7 +128,8 @@ export function mapStripeEvent(event: unknown): StripeEventAction {
         refunded: bool(object["refunded"]),
       };
     }
-    case "customer.subscription.updated": {
+    case "customer.subscription.updated":
+    case "customer.subscription.deleted": {
       const subscriptionId = str(object["id"]);
       if (subscriptionId === undefined) return ignored;
       return {
@@ -126,6 +138,10 @@ export function mapStripeEvent(event: unknown): StripeEventAction {
         subscriptionId,
         status: str(object["status"]),
         customerId: str(object["customer"]),
+        currentPeriodEnd: num(object["current_period_end"]),
+        // A deletion is the definitive cancellation signal regardless of the
+        // object's reported status.
+        deleted: rawType === "customer.subscription.deleted" ? true : undefined,
       };
     }
     case "invoice.payment_failed": {
@@ -138,6 +154,17 @@ export function mapStripeEvent(event: unknown): StripeEventAction {
         subscriptionId: str(object["subscription"]),
         customerId: str(object["customer"]),
         attemptCount: num(object["attempt_count"]),
+      };
+    }
+    case "invoice.payment_succeeded": {
+      const invoiceId = str(object["id"]);
+      if (invoiceId === undefined) return ignored;
+      return {
+        kind: "invoice_payment_succeeded",
+        eventId,
+        invoiceId,
+        subscriptionId: str(object["subscription"]),
+        customerId: str(object["customer"]),
       };
     }
     default:

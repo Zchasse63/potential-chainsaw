@@ -26,3 +26,19 @@ export {
   type OutboxOutcome,
   type StripeAdapter,
 } from "./billing/outbox.js";
+export {
+  BILLING_DUNNING_KIND,
+  runDunning,
+  nextTimedTransitions,
+  startDunning,
+  recoverDunning,
+  cancelDunning,
+  syncSubscriptionStatus,
+  mapSubscriptionStatus,
+  DEFAULT_GRACE_WINDOW_DAYS,
+  DEFAULT_REMINDER_AFTER_DAYS,
+  type DunningDeps,
+  type DunningOutcome,
+  type DunningStage,
+  type DunningState,
+} from "./billing/dunning.js";
