@@ -370,6 +370,15 @@ export class ChaosStore implements PooledQueryable {
       return { rows: [] };
     }
 
+    // POS gift-card issuance seam (unit 5.7): the harness has no POS orders, so
+    // the lookup behind a paid intent matches nothing and issuance never fires.
+    if (text.includes("from public.pos_orders o")) {
+      return { rows: [] };
+    }
+    if (text.includes("app.issue_order_gift_cards")) {
+      return { rows: [] };
+    }
+
     throw new Error(`ChaosStore: unrecognized query: ${text.slice(0, 120)}`);
   };
 }

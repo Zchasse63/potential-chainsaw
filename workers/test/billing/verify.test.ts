@@ -83,6 +83,22 @@ describe("verify_money · invariant breaches", () => {
     assertReadOnly(pool.calls);
   });
 
+  it("check 1 is TENDER-SCOPED (unit 5.7): a cash sale's null intent id is not a violation", async () => {
+    // The responder keys the terminal-paid probe on its FULL predicate — which
+    // now includes tender = 'stripe'. A cash payment (excluded by the SQL) would
+    // never reach this responder branch, so a clean spine stays ok. We assert the
+    // query text carries the tender scope so a regression that drops it fails.
+    const pool = createBillingPool(() => undefined);
+
+    const outcome = await runVerifyMoney(pool, { now: () => NOW });
+
+    expect(outcome.ok).toBe(true);
+    const probe = callsMatching(pool.calls, "stripe_payment_intent_id is null")[0];
+    expect(probe).toBeDefined();
+    expect(probe?.text).toContain("tender = 'stripe'");
+    assertReadOnly(pool.calls);
+  });
+
   it("flags an over-refund (critical): total refunded exceeds the amount", async () => {
     const pool = createBillingPool((text) => {
       if (text.includes("kind = 'create_refund'") && text.includes("having")) {
