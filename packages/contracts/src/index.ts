@@ -8,6 +8,7 @@ export * from "./envelope.js";
 export * from "./freshness.js";
 export * from "./api-error.js";
 export * from "./mutations.js";
+export * from "./member.js";
 export * from "./glofox/primitives.js";
 export * from "./glofox/envelopes.js";
 export * from "./glofox/members.js";

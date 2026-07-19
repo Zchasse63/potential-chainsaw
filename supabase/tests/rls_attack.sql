@@ -2220,6 +2220,153 @@ begin
 end
 $$;
 
+-- ---------------------------------------------------------------------------
+-- (35) ANONYMOUS MEMBER SCHEDULE (migration 0043): the public surface the
+--      member web app renders. Proves:
+--        * the RETURN SHAPE is exactly the 8-column allowlist (pg_proc catalog
+--          assertion — attendee/person data is structurally impossible to leak
+--          because no such column exists in the composite return type);
+--        * as the ANON role, public.member_schedule(A, window) returns A's
+--          PUBLISHED session while the DRAFT seeded inside the same window
+--          never appears (assertions are membership-based: blocks 32/33 seed
+--          their own published sessions in this shared transaction);
+--        * TENANT SCOPING — the same call with B returns only B's published
+--          session (A's never bleeds across);
+--        * availability is 0040's math — an attendee booking on A's published
+--          session shows up as a bare COUNT (capacity 2, one booking →
+--          available 1), never as an identity; credit_cost is the fixed 1;
+--        * privileges — anon holds EXECUTE on the function but NO direct table
+--          privilege that would bypass it (scheduled_sessions, bookings,
+--          booking_holds, people).
+--      Seeds its own A/B scheduling scaffold; reuses the seed tenants.
+--      (invariant #7: every new RPC gets a cross-tenant attack test.)
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid;
+  v_ot_a uuid; v_rs_a uuid; v_ot_b uuid; v_rs_b uuid;
+  v_sa_pub uuid; v_sa_draft uuid; v_sb_pub uuid; v_sb_draft uuid;
+  v_pa uuid;
+  v_cols text[];
+  n int;
+begin
+  reset role;
+  select val::uuid into v_a from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b from app_test.ctx where key = 'tenant_b';
+
+  -- --- Superuser seeds: one published + one draft session per tenant, and an
+  --     attendee booking on A's published session. ---------------------------
+  insert into public.offering_templates (tenant_id, name, duration_minutes)
+    values (v_a, 'Flow', 60) returning id into v_ot_a;
+  insert into public.resources (tenant_id, name) values (v_a, 'Studio A') returning id into v_rs_a;
+  insert into public.offering_templates (tenant_id, name, duration_minutes)
+    values (v_b, 'Heat', 45) returning id into v_ot_b;
+  insert into public.resources (tenant_id, name) values (v_b, 'Studio B') returning id into v_rs_b;
+
+  insert into public.scheduled_sessions
+    (tenant_id, offering_template_id, resource_id, starts_at, ends_at, capacity, status, published_at)
+    values (v_a, v_ot_a, v_rs_a, now() + interval '2 hours', now() + interval '3 hours', 2, 'published', now())
+    returning id into v_sa_pub;
+  insert into public.scheduled_sessions
+    (tenant_id, offering_template_id, resource_id, starts_at, ends_at, capacity, status)
+    values (v_a, v_ot_a, v_rs_a, now() + interval '4 hours', now() + interval '5 hours', 2, 'draft')
+    returning id into v_sa_draft;
+  insert into public.scheduled_sessions
+    (tenant_id, offering_template_id, resource_id, starts_at, ends_at, capacity, status, published_at)
+    values (v_b, v_ot_b, v_rs_b, now() + interval '2 hours', now() + interval '3 hours', 4, 'published', now())
+    returning id into v_sb_pub;
+  insert into public.scheduled_sessions
+    (tenant_id, offering_template_id, resource_id, starts_at, ends_at, capacity, status)
+    values (v_b, v_ot_b, v_rs_b, now() + interval '4 hours', now() + interval '5 hours', 4, 'draft')
+    returning id into v_sb_draft;
+
+  insert into public.people (tenant_id, first_name, source)
+    values (v_a, 'MA', 'native') returning id into v_pa;
+  insert into public.bookings (tenant_id, session_id, person_id, status, booked_via, idempotency_key)
+    values (v_a, v_sa_pub, v_pa, 'booked', 'desk', 'seed-35-a');
+
+  -- --- THE ALLOWLIST: the composite return type carries EXACTLY the 8 public
+  --     columns, in contract order — no person/attendee column can exist. ----
+  select array_agg(a.attname order by a.attnum) into v_cols
+  from pg_proc p
+  join pg_type t on t.oid = p.prorettype
+  join pg_attribute a on a.attrelid = t.typrelid and a.attnum > 0
+  where p.pronamespace = 'public'::regnamespace and p.proname = 'member_schedule';
+  perform app_test.assert(
+    v_cols = array['session_id', 'offering_name', 'starts_at', 'ends_at',
+                   'capacity', 'available', 'readiness_ok', 'credit_cost']::text[],
+    '(35) member_schedule return type drifted off the 8-column public allowlist');
+
+  -- --- As the ANON role: the intended public caller. ------------------------
+  -- NOTE: earlier blocks (32/33) seeded their own published sessions in both
+  -- tenants inside this same transaction, so assertions are MEMBERSHIP-based
+  -- (this block's sessions present, its drafts absent), never exact counts.
+  set local role anon;
+
+  -- Tenant A: this block's published session appears; its DRAFT (inside the
+  -- same window) never does — only the status filter excludes it.
+  perform app_test.assert(
+    exists (select 1 from public.member_schedule(v_a, now() - interval '1 day', now() + interval '30 days')
+            where session_id = v_sa_pub),
+    '(35) anon cannot see tenant A''s published session');
+  perform app_test.assert(
+    not exists (select 1 from public.member_schedule(v_a, now() - interval '1 day', now() + interval '30 days')
+                where session_id = v_sa_draft),
+    '(35) anon can see a DRAFT session — the published filter is broken');
+
+  -- Tenant scoping: B's call yields B's published session but never A's (nor
+  -- B's own draft); A's call never yields B's.
+  perform app_test.assert(
+    exists (select 1 from public.member_schedule(v_b, now() - interval '1 day', now() + interval '30 days')
+            where session_id = v_sb_pub),
+    '(35) anon cannot see tenant B''s published session');
+  perform app_test.assert(
+    not exists (select 1 from public.member_schedule(v_b, now() - interval '1 day', now() + interval '30 days')
+                where session_id = v_sb_draft),
+    '(35) anon can see tenant B''s DRAFT session');
+  perform app_test.assert(
+    not exists (select 1 from public.member_schedule(v_b, now() - interval '1 day', now() + interval '30 days')
+                where session_id = v_sa_pub),
+    '(35) tenant A''s session leaked into tenant B''s schedule');
+  perform app_test.assert(
+    not exists (select 1 from public.member_schedule(v_a, now() - interval '1 day', now() + interval '30 days')
+                where session_id = v_sb_pub),
+    '(35) tenant B''s session leaked into tenant A''s schedule');
+
+  -- The attendee booking surfaces ONLY as availability math: capacity 2 with
+  -- one active booking → available 1. credit_cost is the fixed v1 one.
+  select available into n
+  from public.member_schedule(v_a, now() - interval '1 day', now() + interval '30 days')
+  where session_id = v_sa_pub;
+  perform app_test.assert(n = 1, '(35) availability math drifted from 0040 (expected 1 free seat)');
+  perform app_test.assert(
+    (select credit_cost
+     from public.member_schedule(v_a, now() - interval '1 day', now() + interval '30 days')
+     where session_id = v_sa_pub) = 1,
+    '(35) credit_cost is not the fixed v1 one-credit cost');
+
+  reset role;
+
+  -- --- Privileges: anon holds EXECUTE on the function but NO direct table
+  --     privilege that would bypass the locked return shape. -----------------
+  perform app_test.assert(
+    has_function_privilege('anon', 'public.member_schedule(uuid, timestamptz, timestamptz)', 'execute'),
+    '(35) anon lacks EXECUTE on member_schedule — the public surface is closed');
+  perform app_test.assert(
+    not has_table_privilege('anon', 'public.scheduled_sessions', 'select'),
+    '(35) anon can SELECT scheduled_sessions directly, bypassing member_schedule');
+  perform app_test.assert(
+    not has_table_privilege('anon', 'public.bookings', 'select'),
+    '(35) anon can SELECT bookings directly, bypassing member_schedule');
+  perform app_test.assert(
+    not has_table_privilege('anon', 'public.booking_holds', 'select'),
+    '(35) anon can SELECT booking_holds directly, bypassing member_schedule');
+  perform app_test.assert(
+    not has_table_privilege('anon', 'public.people', 'select'),
+    '(35) anon can SELECT people directly, bypassing member_schedule');
+end
+$$;
+
 do $$
 declare
   n int;
