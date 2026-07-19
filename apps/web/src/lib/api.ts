@@ -101,8 +101,11 @@ export async function postEnvelope(
 }
 
 /**
- * PATCH a mutation. Same idempotency-key discipline as postEnvelope — the API
- * 422s without the header — used for in-place catalog edits.
+ * PATCH a mutation. Same money-action discipline as postEnvelope: every
+ * mutation carries a client-generated Idempotency-Key (the API enforces
+ * requireIdempotencyKey, 422ing without it), and there is NO optimistic
+ * success — the caller reflects the change only after the confirmed envelope
+ * returns. Used for in-place catalog + authoring edits.
  */
 export async function patchEnvelope(
   path: string,
