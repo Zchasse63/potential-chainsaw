@@ -99,3 +99,22 @@ export async function postEnvelope(
     body: JSON.stringify(body),
   });
 }
+
+/**
+ * PATCH a mutation. Same idempotency-key discipline as postEnvelope — the API
+ * 422s without the header — used for in-place catalog edits.
+ */
+export async function patchEnvelope(
+  path: string,
+  accessToken: string,
+  body: unknown,
+): Promise<unknown> {
+  return requestEnvelope(path, accessToken, {
+    method: "PATCH",
+    headers: {
+      "content-type": "application/json",
+      [IDEMPOTENCY_KEY_HEADER]: crypto.randomUUID(),
+    },
+    body: JSON.stringify(body),
+  });
+}

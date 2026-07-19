@@ -46,14 +46,16 @@ describe("AppShell", () => {
       "Ask",
       "Import review",
       "Health",
+      "Retail",
       "◎Staff",
     ]);
     expect(screen.getByRole("link", { name: "Marketing" }).getAttribute("href")).toBe("/marketing");
     expect(screen.getByRole("link", { name: "Ask" }).getAttribute("href")).toBe("/ask");
+    expect(screen.getByRole("link", { name: "Retail" }).getAttribute("href")).toBe("/retail");
     expect(screen.getByRole("link", { name: "Staff" }).getAttribute("href")).toBe("/staff");
   });
 
-  it("removes Staff from front-desk and trainer navigation", () => {
+  it("removes Staff and Retail from front-desk and trainer navigation", () => {
     access.role = "front_desk";
     render(
       <AppShell>
@@ -61,5 +63,6 @@ describe("AppShell", () => {
       </AppShell>,
     );
     expect(screen.queryByRole("link", { name: "Staff" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Retail" })).toBeNull();
   });
 });

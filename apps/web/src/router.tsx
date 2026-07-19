@@ -10,6 +10,7 @@ import { ImportRoute } from "./routes/import.jsx";
 import { TodayRoute } from "./routes/today.jsx";
 import { ScheduleRoute } from "./routes/schedule.jsx";
 import { MarketingRoute } from "./routes/marketing.jsx";
+import { RetailRoute } from "./routes/retail.jsx";
 import { StaffRoute } from "./routes/staff.jsx";
 
 /**
@@ -85,6 +86,12 @@ const briefingArchiveRoute = createRoute({
   component: BriefingArchiveRoute,
 });
 
+const retailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/retail",
+  component: RetailRoute,
+});
+
 const staffRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/staff",
@@ -99,6 +106,7 @@ const routeTree = rootRoute.addChildren([
   briefingArchiveRoute,
   healthRoute,
   importRoute,
+  retailRoute,
   staffRoute,
 ]);
 
