@@ -95,6 +95,16 @@ export class ChaosStore implements PooledQueryable {
 
   readonly #accounts = new Map<string, string>();
 
+  /** tenantId -> (customerId -> stripe_customer_id | null). The outbox resolves
+   * a create_payment_intent command's customer_id to its Stripe id (F2). */
+  readonly #customers = new Map<string, Map<string, string | null>>();
+
+  addCustomer(tenantId: string, customerId: string, stripeCustomerId: string | null): void {
+    const byId = this.#customers.get(tenantId) ?? new Map<string, string | null>();
+    byId.set(customerId, stripeCustomerId);
+    this.#customers.set(tenantId, byId);
+  }
+
   addPayment(row: {
     id: string;
     tenantId: string;
@@ -233,12 +243,32 @@ export class ChaosStore implements PooledQueryable {
       return { rows: account === undefined ? [] : [{ stripe_account_id: account }] };
     }
 
+    // Outbox (F2) resolve the customer's Stripe id for a create_payment_intent.
+    if (text.includes("select stripe_customer_id from public.customers")) {
+      const [tenantId, customerId] = v as [string, string];
+      const stripe = this.#customers.get(tenantId)?.get(customerId);
+      return { rows: stripe === undefined ? [] : [{ stripe_customer_id: stripe }] };
+    }
+
+    // Outbox (F2) resolve the payment's Stripe intent id for a create_refund.
+    if (text.includes("select stripe_payment_intent_id from public.payments")) {
+      const [tenantId, paymentId] = v as [string, string];
+      const p = this.payments.find((row) => row.tenant_id === tenantId && row.id === paymentId);
+      return { rows: p === undefined ? [] : [{ stripe_payment_intent_id: p.stripe_payment_intent_id }] };
+    }
+
     // --- UPDATEs -------------------------------------------------------------
-    // Inbox setPaymentStatus: guarded transition (status = any($allowed)).
+    // Inbox setPaymentStatus: guarded transition (status = any($allowed)). The
+    // real UPDATE ... RETURNING id makes the 0-row no-op observable, so the
+    // store returns the matched row iff the guard matched (drives the F1
+    // ahead/behind classification in applyGuardedTransition for real).
     if (includesAll(text, "update public.payments", "set status = $1", "stripe_payment_intent_id = $2")) {
       const [target, intentId, allowed] = v as [string, string, readonly string[]];
       const p = this.paymentByIntent(intentId);
-      if (p && allowed.includes(p.status)) p.status = target;
+      if (p && allowed.includes(p.status)) {
+        p.status = target;
+        return { rows: [{ id: p.id }] };
+      }
       return { rows: [] };
     }
 

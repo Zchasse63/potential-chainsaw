@@ -1,3 +1,4 @@
+import { nextAllowedSendAt } from "@kelo/comms";
 import type { PooledQueryable } from "../glofox/types.js";
 
 /**
@@ -147,14 +148,25 @@ export interface SyncSubscriptionArgs {
   readonly currentPeriodEnd?: number;
   /** customer.subscription.deleted forces the terminal 'cancelled'. */
   readonly deleted?: boolean;
+  /**
+   * The Stripe EVENT's `created` (unix seconds) — the EVENT-TIME MONOTONICITY
+   * clock (F6). A status change applies ONLY when this is newer than the last
+   * applied event (subscriptions.last_event_at); an older/out-of-order webhook
+   * is a benign no-op, so a delayed event can never regress a PAID/CANCELLED
+   * member back into an earlier state. Undefined (no created) applies as before.
+   */
+  readonly eventCreatedAt?: number;
 }
 
 /**
  * Sync subscriptions.status + current_period_end from a Stripe subscription
- * event. MONOTONIC on the terminal 'cancelled' (a cancelled subscription is
- * never revived by a stale update); an unknown Stripe status leaves the status
- * untouched while still syncing current_period_end. The service role owns this
- * write — the webhook is the authority (invariant #5).
+ * event. MONOTONIC in TWO ways: on the terminal 'cancelled' (a cancelled
+ * subscription is never revived by a stale update), AND on EVENT TIME — the
+ * whole update is gated on eventCreatedAt > last_event_at, and last_event_at is
+ * advanced in the SAME guarded UPDATE, so unordered/delayed webhooks cannot
+ * regress status (F6). An unknown Stripe status leaves the status untouched
+ * while still syncing current_period_end. The service role owns this write —
+ * the webhook is the authority (invariant #5).
  */
 export async function syncSubscriptionStatus(
   pool: PooledQueryable,
@@ -165,6 +177,10 @@ export async function syncSubscriptionStatus(
     typeof args.currentPeriodEnd === "number" && Number.isFinite(args.currentPeriodEnd)
       ? new Date(args.currentPeriodEnd * 1_000).toISOString()
       : null;
+  const createdAt =
+    typeof args.eventCreatedAt === "number" && Number.isFinite(args.eventCreatedAt)
+      ? args.eventCreatedAt
+      : null;
 
   await pool.query(
     `update public.subscriptions s
@@ -173,9 +189,13 @@ export async function syncSubscriptionStatus(
                     when s.status = 'cancelled' then s.status
                     else $3::text
                   end,
-         current_period_end = coalesce($4::timestamptz, s.current_period_end)
-     where s.id = $1 and s.tenant_id = $2`,
-    [args.sub.id, args.sub.tenantId, target, periodEnd],
+         current_period_end = coalesce($4::timestamptz, s.current_period_end),
+         last_event_at = coalesce(to_timestamp($5::double precision), s.last_event_at)
+     where s.id = $1 and s.tenant_id = $2
+       and ($5::double precision is null
+            or s.last_event_at is null
+            or s.last_event_at < to_timestamp($5::double precision))`,
+    [args.sub.id, args.sub.tenantId, target, periodEnd, createdAt],
   );
 }
 
@@ -197,6 +217,59 @@ export async function selectLatestStage(
   return row === undefined ? null : asStage(row["stage"]);
 }
 
+/** The stages whose SQL writer ALSO enqueues a member-facing dunning comms row
+ * (app.record_dunning_stage; kind transactional_quiet). Only these need the
+ * quiet-hours-aware run_at deferral (F5). */
+const COMMS_BEARING_STAGES: readonly DunningStage[] = ["grace_started", "reminder_sent"];
+
+/** The studio send window used to defer a dunning comms job's run_at (F5). */
+interface SendContext {
+  readonly timezone: string;
+  readonly quietStart: string;
+  readonly quietEnd: string;
+}
+
+function quietSetting(settings: Record<string, unknown> | null, key: "start" | "end"): string {
+  const fallback = key === "start" ? "21:00" : "09:00";
+  if (settings === null) return fallback;
+  const direct = settings[`quiet_${key}`];
+  if (typeof direct === "string") return direct;
+  const quietHours = settings["quiet_hours"];
+  if (typeof quietHours === "object" && quietHours !== null) {
+    const nested = (quietHours as Record<string, unknown>)[key];
+    if (typeof nested === "string") return nested;
+  }
+  return fallback;
+}
+
+/** Resolve the tenant's studio timezone (first location, UTC fallback) + quiet
+ * window from tenants.settings — the SAME inputs the send processor's at-send
+ * policy re-check uses, so the deferred run_at lands in an actually-allowed
+ * window rather than being terminally skipped there (F5). */
+async function resolveSendContext(pool: PooledQueryable, tenantId: string): Promise<SendContext> {
+  const result = await pool.query(
+    `select
+       coalesce((
+         select l.timezone from public.locations l
+         where l.tenant_id = $1
+         order by l.created_at, l.id
+         limit 1
+       ), 'UTC') as timezone,
+       t.settings as settings
+     from public.tenants t
+     where t.id = $1`,
+    [tenantId],
+  );
+  const row = asRecord(result.rows[0]);
+  const timezone = typeof row?.["timezone"] === "string" ? row["timezone"] : "UTC";
+  const settings = asRecord(row?.["settings"]) ?? null;
+  return {
+    timezone,
+    quietStart: quietSetting(settings, "start"),
+    quietEnd: quietSetting(settings, "end"),
+  };
+}
+
 export interface RecordStageArgs {
   readonly tenantId: string;
   readonly subscriptionId: string;
@@ -207,11 +280,23 @@ export interface RecordStageArgs {
   readonly detail?: Record<string, unknown>;
 }
 
-/** Append one transition through the single SQL writer. Idempotent in-body (a
- * re-call at the current stage is a no-op). */
+/**
+ * Append one transition through the single SQL writer. Idempotent in-body (a
+ * re-call at the current stage is a no-op). For the two COMMS-BEARING stages,
+ * the send job's run_at is deferred to the next ALLOWED studio-local time so a
+ * quiet-hours-blocked reminder is DELIVERED LATER instead of being terminally
+ * skipped and lost (F5). The stage transition and the comms enqueue happen
+ * together inside record_dunning_stage's single transaction — if the enqueue
+ * raises, the stage does NOT advance and the next daily pass retries.
+ */
 export async function recordStage(pool: PooledQueryable, args: RecordStageArgs): Promise<void> {
+  let runAt = args.now;
+  if (COMMS_BEARING_STAGES.includes(args.stage)) {
+    const ctx = await resolveSendContext(pool, args.tenantId);
+    runAt = nextAllowedSendAt(args.now, ctx.timezone, ctx.quietStart, ctx.quietEnd);
+  }
   await pool.query(
-    `select app.record_dunning_stage($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+    `select app.record_dunning_stage($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`,
     [
       args.tenantId,
       args.subscriptionId,
@@ -220,6 +305,7 @@ export async function recordStage(pool: PooledQueryable, args: RecordStageArgs):
       args.now.toISOString(),
       args.graceExpiresAt ? args.graceExpiresAt.toISOString() : null,
       JSON.stringify(args.detail ?? {}),
+      runAt.toISOString(),
     ],
   );
 }
@@ -228,9 +314,32 @@ function isOpen(stage: DunningStage | null): boolean {
   return stage !== null && OPEN_STAGES.includes(stage);
 }
 
+/**
+ * The TENANT-CONFIGURED dunning grace window (F7): tenants.settings.
+ * 'dunning_grace_days', default 14. The same tenant-setting discipline the
+ * recurring_member derivation / revenue dictionary already apply — the grace
+ * window is a per-tenant policy, never a hardcoded 14. Resolved once, wherever
+ * grace_expires_at / stage boundaries are computed.
+ */
+export async function resolveDunningGraceDays(
+  pool: PooledQueryable,
+  tenantId: string,
+): Promise<number> {
+  const result = await pool.query(
+    `select coalesce(nullif(t.settings ->> 'dunning_grace_days', '')::int, $2) as grace_days
+     from public.tenants t
+     where t.id = $1`,
+    [tenantId, DEFAULT_GRACE_WINDOW_DAYS],
+  );
+  const row = asRecord(result.rows[0]);
+  const n = Number(row?.["grace_days"]);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_GRACE_WINDOW_DAYS;
+}
+
 export interface StartDunningArgs {
   readonly sub: SubscriptionRef;
   readonly now: Date;
+  /** Explicit override; when omitted the tenant's configured grace is read (F7). */
   readonly graceWindowDays?: number;
   readonly paymentId?: string | null;
   readonly detail?: Record<string, unknown>;
@@ -240,11 +349,14 @@ export interface StartDunningArgs {
  * EVENT-DRIVEN start (invoice.payment_failed). Opens a grace cycle ONCE: Stripe
  * fires a payment_failed for every retry, so a subscription already in an open
  * cycle is left untouched (idempotent). Returns true when a cycle was started.
+ * The grace window is the tenant's configured value (F7) unless overridden.
  */
 export async function startDunning(pool: PooledQueryable, args: StartDunningArgs): Promise<boolean> {
   const latest = await selectLatestStage(pool, args.sub.tenantId, args.sub.id);
   if (isOpen(latest)) return false;
-  const graceExpiresAt = addDays(args.now, args.graceWindowDays ?? DEFAULT_GRACE_WINDOW_DAYS);
+  const graceWindowDays =
+    args.graceWindowDays ?? (await resolveDunningGraceDays(pool, args.sub.tenantId));
+  const graceExpiresAt = addDays(args.now, graceWindowDays);
   await recordStage(pool, {
     tenantId: args.sub.tenantId,
     subscriptionId: args.sub.id,

@@ -32,6 +32,11 @@ create table public.subscriptions (
                          check (status in ('incomplete', 'active', 'past_due', 'paused', 'cancelled')),
   current_period_end     timestamptz,
   grace_expires_at       timestamptz,
+  -- EVENT-TIME MONOTONICITY (F6): the `created` of the most recent Stripe
+  -- subscription event applied to status. The inbox applies a status change
+  -- ONLY when the incoming event is newer, so an unordered/delayed webhook can
+  -- never regress a PAID/CANCELLED member back into an earlier state.
+  last_event_at          timestamptz,
   created_at             timestamptz not null default now(),
   updated_at             timestamptz not null default now(),
   -- Composite FKs keep the customer/plan tenant-consistent (0033 style).
@@ -109,7 +114,12 @@ create or replace function app.record_dunning_stage(
   p_payment          uuid default null,
   p_now              timestamptz default now(),
   p_grace_expires_at timestamptz default null,
-  p_detail           jsonb default '{}'::jsonb
+  p_detail           jsonb default '{}'::jsonb,
+  -- QUIET-HOURS-AWARE SEND TIME (F5): the run_at for the dunning comms.send job.
+  -- Computed studio-local by the worker (dunning.ts) so a quiet-hours-blocked
+  -- reminder is DELIVERED LATER instead of being terminally skipped and lost.
+  -- Defaults to now() (immediate) for non-comms callers / backward compatibility.
+  p_run_at           timestamptz default now()
 )
 returns void
 language plpgsql
@@ -209,9 +219,13 @@ begin
            nullif(v_subject, ''), left(v_body, 200), v_address, 'queued')
         returning id into v_log_id;
 
+        -- run_at is the quiet-hours-aware send time (F5): a reminder computed at
+        -- 02:00 studio-local defers to 09:00 the same day rather than being
+        -- enqueued at now() and terminally skipped as quiet_hours by the send
+        -- processor. The at-send-time policy re-check stays authoritative.
         perform app.enqueue_job(
           'comms.send', jsonb_build_object('comms_log_id', v_log_id),
-          p_tenant, now(), 100, 5, 'comms.send:' || v_log_id::text
+          p_tenant, coalesce(p_run_at, now()), 100, 5, 'comms.send:' || v_log_id::text
         );
       end if;
     end if;
@@ -219,7 +233,7 @@ begin
 end;
 $$;
 
-comment on function app.record_dunning_stage(uuid, uuid, text, uuid, timestamptz, timestamptz, jsonb) is
+comment on function app.record_dunning_stage(uuid, uuid, text, uuid, timestamptz, timestamptz, jsonb, timestamptz) is
   'The ONLY writer of a dunning transition. Appends the ledger row, applies the matching subscription side-effect (grace window / past_due / recovered→active / cancelled), and enqueues the dunning comms for grace_started/reminder_sent. Idempotent: a re-call at the current latest stage is a no-op. Definer-owned; the worker (service role) is the sole caller.';
 
 -- The dunning QUEUE read (owner/manager surface, unit 5.8): subscriptions in an
@@ -308,9 +322,9 @@ revoke update, delete on public.dunning_states from anon, authenticated, service
 
 -- record_dunning_stage mutates money/subscription state — service role only,
 -- never an interactive client.
-revoke all on function app.record_dunning_stage(uuid, uuid, text, uuid, timestamptz, timestamptz, jsonb)
+revoke all on function app.record_dunning_stage(uuid, uuid, text, uuid, timestamptz, timestamptz, jsonb, timestamptz)
   from public;
-grant execute on function app.record_dunning_stage(uuid, uuid, text, uuid, timestamptz, timestamptz, jsonb)
+grant execute on function app.record_dunning_stage(uuid, uuid, text, uuid, timestamptz, timestamptz, jsonb, timestamptz)
   to service_role;
 
 revoke all on function public.dunning_queue(uuid) from public;

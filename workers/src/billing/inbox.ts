@@ -2,7 +2,6 @@ import { mapStripeEvent, type StripeEventAction } from "@kelo/stripe";
 import type { PooledQueryable } from "../glofox/types.js";
 import {
   cancelDunning,
-  DEFAULT_GRACE_WINDOW_DAYS,
   recoverDunning,
   selectSubscriptionByStripeId,
   startDunning,
@@ -51,7 +50,11 @@ export interface InboxDeps {
   readonly batch?: number;
   /** Attempts before a failing event is dead-lettered (default 5). */
   readonly maxAttempts?: number;
-  /** Dunning grace window in days (owner default 14). */
+  /**
+   * Explicit dunning grace-window override in days (tests). When omitted, the
+   * grace window is read PER-TENANT from tenants.settings.dunning_grace_days
+   * (default 14) inside startDunning — never a hardcoded value (F7).
+   */
   readonly graceWindowDays?: number;
 }
 
@@ -133,22 +136,93 @@ async function selectPayment(
 }
 
 /**
+ * THE MONOTONIC MONEY-STATE ORDER — defined in exactly ONE place. A payment's
+ * status only ever advances along this axis; the webhook confirmation authority
+ * (invariant #5/#6) never walks it backwards.
+ *
+ *   requires_payment < processing < failed < succeeded
+ *                    < partially_refunded < refunded
+ *
+ * `failed` sits BELOW `succeeded` on purpose (retry semantics): a PaymentIntent
+ * may go failed→succeeded on a later card retry, so a `succeeded` event must be
+ * able to advance a `failed` payment — while a late/duplicate `failed` event can
+ * never regress a payment that has already reached `succeeded` (or beyond). That
+ * asymmetry is exactly "current status is AHEAD of the target ⇒ benign no-op".
+ */
+const MONEY_STATE_ORDER: readonly string[] = [
+  "requires_payment",
+  "processing",
+  "failed",
+  "succeeded",
+  "partially_refunded",
+  "refunded",
+];
+
+/** Rank on the monotonic axis; an unrecognised status is -1 (treated as behind
+ * everything, so it can never be classified as a benign forward no-op). */
+function moneyRank(status: string): number {
+  return MONEY_STATE_ORDER.indexOf(status);
+}
+
+/**
  * Flip the payment to `target`, but ONLY from an allowed prior state — a
  * terminal money state is never regressed. Located by the globally-unique
  * stripe_payment_intent_id; setting the same status again is a safe no-op.
+ * Returns true iff a row actually matched the guard (RETURNING makes a 0-row
+ * no-op observable so the caller can distinguish "already ahead" from "not yet
+ * caught up" — the lost-early-refund guard, F1).
  */
 async function setPaymentStatus(
   pool: PooledQueryable,
   paymentIntentId: string,
   target: string,
   allowedPrior: readonly string[],
-): Promise<void> {
-  await pool.query(
+): Promise<boolean> {
+  const result = await pool.query(
     `update public.payments
      set status = $1
      where stripe_payment_intent_id = $2
-       and status = any($3::text[])`,
+       and status = any($3::text[])
+     returning id`,
     [target, paymentIntentId, allowedPrior],
+  );
+  return result.rows.length > 0;
+}
+
+/**
+ * Apply a guarded money transition and classify a 0-row no-op (F1). When the
+ * guarded UPDATE matches nothing, the current status is either:
+ *   - MONOTONICALLY AHEAD of the target (e.g. already 'refunded' when a partial
+ *     refund arrives, or 'succeeded' when a stale 'failed' arrives) → a benign,
+ *     idempotent no-op; nothing to do.
+ *   - BEHIND the target (e.g. still 'requires_payment'/'processing' when a
+ *     refund arrives before payment_intent.succeeded has landed) → the confirming
+ *     event has not been applied yet, so we THROW: the inbox keeps the event
+ *     'received' and a later drain lands it after succeeded arrives (and the
+ *     bounded-retry path dead-letters + alerts if it never does). Without this,
+ *     the refund would be silently marked 'processed' and permanently lost.
+ */
+async function applyGuardedTransition(
+  pool: PooledQueryable,
+  paymentIntentId: string,
+  target: string,
+  allowedPrior: readonly string[],
+): Promise<void> {
+  const matched = await setPaymentStatus(pool, paymentIntentId, target, allowedPrior);
+  if (matched) return;
+
+  const current = await selectPayment(pool, paymentIntentId);
+  if (current === null) {
+    throw new Error(`payment for payment_intent ${paymentIntentId} vanished mid-transition`);
+  }
+  const currentRank = moneyRank(current.status);
+  const targetRank = moneyRank(target);
+  // Ahead-or-equal ⇒ the money state already covers this event (idempotent).
+  if (currentRank >= targetRank && currentRank !== -1) return;
+  // Behind ⇒ the confirming event has not landed; retry until it does.
+  throw new Error(
+    `payment ${paymentIntentId} is behind target '${target}' (currently '${current.status}') — ` +
+      `the confirming event has not been applied yet; retrying`,
   );
 }
 
@@ -175,7 +249,7 @@ async function applyTransition(
   pool: PooledQueryable,
   action: StripeEventAction,
   now: Date,
-  graceWindowDays: number,
+  graceWindowDays: number | undefined,
 ): Promise<string | null> {
   switch (action.kind) {
     case "payment_succeeded": {
@@ -185,7 +259,7 @@ async function applyTransition(
       }
       // A PaymentIntent may legitimately go failed→succeeded on a retry, so
       // 'failed' is an allowed prior; a refunded payment is never un-refunded.
-      await setPaymentStatus(pool, action.paymentIntentId, "succeeded", [
+      await applyGuardedTransition(pool, action.paymentIntentId, "succeeded", [
         "requires_payment",
         "processing",
         "failed",
@@ -199,8 +273,9 @@ async function applyTransition(
         throw new Error(`no payment for payment_intent ${action.paymentIntentId}`);
       }
       // Never regress a succeeded/refunded payment to failed (out-of-order
-      // delivery), but a repeated failure is an idempotent no-op.
-      await setPaymentStatus(pool, action.paymentIntentId, "failed", [
+      // delivery — the monotonic guard classifies that as a benign no-op), but a
+      // repeated failure from an allowed prior is an idempotent match.
+      await applyGuardedTransition(pool, action.paymentIntentId, "failed", [
         "requires_payment",
         "processing",
         "failed",
@@ -222,11 +297,17 @@ async function applyTransition(
       // the allowed prior states depend on the target: a full refund may apply
       // from succeeded/partial/refunded (idempotent); a partial refund may apply
       // only from succeeded/partial — NEVER from an already-full refund.
+      //
+      // F1: applyGuardedTransition also catches the OTHER ordering hazard — a
+      // refund that arrives BEFORE payment_intent.succeeded. The payment is then
+      // still requires_payment/processing (behind the target), the guard matches
+      // 0 rows, and rather than silently marking the event 'processed' (losing
+      // the refund) we THROW so it retries and lands after succeeded arrives.
       const allowedPrior =
         target === "refunded"
           ? ["succeeded", "partially_refunded", "refunded"]
           : ["succeeded", "partially_refunded"];
-      await setPaymentStatus(pool, action.paymentIntentId, target, allowedPrior);
+      await applyGuardedTransition(pool, action.paymentIntentId, target, allowedPrior);
       return target;
     }
     // -- Subscriptions + dunning (unit 5.6) ---------------------------------
@@ -237,11 +318,15 @@ async function applyTransition(
     case "subscription_updated": {
       const sub = await selectSubscriptionByStripeId(pool, action.subscriptionId);
       if (sub === null) return null;
+      // F6: the Stripe event's `created` is the monotonicity clock — an older,
+      // out-of-order update is applied as a benign no-op (guarded in the SQL),
+      // so a delayed webhook can never regress a PAID/CANCELLED member.
       await syncSubscriptionStatus(pool, {
         sub,
         status: action.status,
         currentPeriodEnd: action.currentPeriodEnd,
         deleted: action.deleted,
+        eventCreatedAt: action.eventCreatedAt,
       });
       // A Stripe-side cancellation closes any open dunning cycle (mirrored, never
       // auto-cancelled).
@@ -360,7 +445,8 @@ export async function runInbox(
   const now = deps.now ?? (() => new Date());
   const batch = deps.batch ?? DEFAULT_BATCH;
   const maxAttempts = deps.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-  const graceWindowDays = deps.graceWindowDays ?? DEFAULT_GRACE_WINDOW_DAYS;
+  // Undefined ⇒ startDunning resolves the grace window per-tenant (F7).
+  const graceWindowDays = deps.graceWindowDays;
   const events = await claimEvents(pool, batch);
   const outcomes: InboxOutcome[] = [];
 

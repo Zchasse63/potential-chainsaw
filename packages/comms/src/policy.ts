@@ -68,6 +68,33 @@ export function isQuietHours(
 }
 
 /**
+ * The next instant a quiet-hours-blocked message becomes sendable, in the
+ * STUDIO timezone. Returns `now` unchanged when now is already outside quiet
+ * hours; otherwise the first minute at/after quietEnd (the window's close),
+ * handling a window that wraps midnight (the default 21:00→09:00).
+ *
+ * Used to DEFER a dunning comms job's run_at instead of enqueuing it at now()
+ * only to have the send processor terminally skip it as quiet_hours (F5 — the
+ * reminder would otherwise be lost). The send-time policy re-check stays
+ * authoritative: a suppression added meanwhile still blocks at send time.
+ *
+ * Wall-clock minutes are added as real minutes (the offset is treated as
+ * constant across the sub-day window); no Math.random, `now` is injected.
+ */
+export function nextAllowedSendAt(
+  now: Date,
+  timezone: string,
+  quietStart = "21:00",
+  quietEnd = "09:00",
+): Date {
+  if (!isQuietHours(now, timezone, quietStart, quietEnd)) return now;
+  const end = parseClock(quietEnd, "quietEnd");
+  const local = studioMinute(now, timezone);
+  const minutesUntilEnd = local < end ? end - local : 1440 - local + end;
+  return new Date(now.getTime() + minutesUntilEnd * 60_000);
+}
+
+/**
  * Final send-time policy.
  *
  * Suppression:

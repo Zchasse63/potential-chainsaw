@@ -16,12 +16,18 @@ import { ChaosStore, type DeliverEventInput } from "./chaos-store.js";
  * a seeded PRNG drives every shuffle, and the inbox clock is a fixed instant —
  * no wall clock, no Math.random.
  *
- * NOTE ON THE OUTBOX COMMAND SHAPE (scenario 4): the outbox processor dispatches
- * on command.kind === 'payment_intent' with payload {amount, currency}; the
- * harness seeds exactly that contract so the REAL delivery+link path runs. (The
- * create_payment_intent RPC in migration 0034 currently emits a different kind
- * and payload — flagged separately; verify_money's stuck-command check is the
- * production signal for that gap. It does not affect this gate.)
+ * OUTBOX COMMAND SHAPE (scenario 4): the harness seeds the REAL RPC contract
+ * migration 0034 emits — kind 'create_payment_intent' with payload
+ * {amount_cents, currency, customer_id} — and the outbox resolves the customer's
+ * stripe_customer_id from public.customers, exactly as production does (F2). A
+ * drift-tripwire test (outbox-rpc-contract.test.ts) parses 0034 and asserts the
+ * outbox's expected kinds/keys match, so the two sides can never diverge again.
+ *
+ * REFUND ORDERING (scenario 2): the full event set is permuted, INCLUDING
+ * refund-before-succeeded orderings. An early refund cannot land while the
+ * payment is still requires_payment/processing, so it RETRIES across drains
+ * (F1 — never silently marked 'processed' and lost) and converges once
+ * succeeded arrives. Every permutation reaches the canonical final 'refunded'.
  */
 
 const NOW = new Date("2026-07-19T00:00:00.000Z");
@@ -147,29 +153,43 @@ describe("chaos · dupes — unique(event_id) dedupe makes the net effect identi
   });
 });
 
-// --- SCENARIO 2: full permutation of the refund events -------------------------
+// --- SCENARIO 2: FULL permutation of ALL THREE events (incl. refund-first) -----
 
-describe("chaos · reorder — the monotonic guard keeps the final state 'refunded'", () => {
-  const refundOrders = permutations(["p", "f"] as const);
+describe("chaos · reorder — every ordering of {succeeded, partial, full} converges to 'refunded'", () => {
+  // The whole event set is permuted, including orderings where a refund is
+  // DELIVERED before succeeded. Such a refund cannot land on a
+  // requires_payment/processing payment: the guarded UPDATE matches 0 rows and
+  // the inbox THROWS → the event stays 'received' and RETRIES on a later drain
+  // (F1 — the refund is never silently marked 'processed' and lost). Draining
+  // repeatedly must converge every permutation to the canonical final state.
+  const orders = permutations(["s", "p", "f"] as const);
 
-  for (const order of refundOrders) {
-    it(`succeeded then refunds in order [${order.join(", ")}] → refunded`, async () => {
+  for (const order of orders) {
+    it(`delivery order [${order.join(", ")}] → refunded, every event processed`, async () => {
       const intentId = "pi_reorder";
       const store = storeWithLinkedPayment(intentId);
-      const partial = refundEvent(intentId, "r_p", false, 2000);
-      const full = refundEvent(intentId, "r_f", true, AMOUNT);
-      const byKey = { p: partial, f: full } as const;
+      const byKey = {
+        s: succeededEvent(intentId, "r_s"),
+        p: refundEvent(intentId, "r_p", false, 2000),
+        f: refundEvent(intentId, "r_f", true, AMOUNT),
+      } as const;
 
-      // Succeeded must precede the refunds (the payment must be succeeded to
-      // refund); the refund events themselves arrive in the permuted order.
-      store.deliverEvent(succeededEvent(intentId, "r_s"));
       for (const key of order) store.deliverEvent(byKey[key]);
 
-      await drainInbox(store);
+      // Re-drain until the inbox reaches a fixed point (a refund-before-succeeded
+      // retries once, then lands after succeeded is applied). Bounded well under
+      // the dead-letter attempt cap.
+      for (let pass = 0; pass < 5; pass += 1) {
+        await drainInbox(store);
+        if (store.events.every((e) => e.status !== "received")) break;
+      }
 
-      // Whether the full refund lands before or after the partial, 'refunded'
-      // is terminal and never regresses to 'partially_refunded'.
+      // Final-state invariant: 'refunded' regardless of the delivery schedule,
+      // and no event stranded — all three converged to 'processed'.
       expect(store.paymentByIntent(intentId)?.status).toBe("refunded");
+      for (const key of order) {
+        expect(store.eventByEventId(byKey[key].eventId)?.status).toBe("processed");
+      }
     });
   }
 });
@@ -209,13 +229,18 @@ describe("chaos · delay — bounded-retry heals once the outbox links the payme
 
     const store = new ChaosStore();
     store.addAccount(TENANT, ACCOUNT);
-    // The RPC has recorded the intent: a pending command + an UNLINKED payment.
+    // A customer with a Stripe id on file (F2: the outbox resolves customer_id →
+    // stripe_customer_id from public.customers).
+    store.addCustomer(TENANT, "cust_1", "cus_stripe_1");
+    // The RPC (migration 0034) has recorded the intent with its REAL contract: a
+    // pending create_payment_intent command {amount_cents, currency, customer_id}
+    // + an UNLINKED payment. This is the exact shape 0034 emits (F2).
     store.addCommand({
       id: "c1",
       tenantId: TENANT,
-      kind: "payment_intent",
+      kind: "create_payment_intent",
       idempotencyKey: "idem-1",
-      payload: { amount: AMOUNT, currency: "usd" },
+      payload: { amount_cents: AMOUNT, currency: "usd", customer_id: "cust_1" },
     });
     store.addPayment({
       id: "pay_1",

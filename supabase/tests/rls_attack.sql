@@ -1426,11 +1426,24 @@ begin
     not has_table_privilege('authenticated', 'public.verify_runs', 'insert'),
     '(30) authenticated holds INSERT on verify_runs — run history is service-written');
   perform app_test.assert(
-    not has_table_privilege('authenticated', 'public.verify_runs', 'update'),
-    '(30) authenticated holds UPDATE on verify_runs — runs are append-once');
-  perform app_test.assert(
     has_table_privilege('service_role', 'public.verify_runs', 'insert'),
     '(30) service_role lacks INSERT on verify_runs — verify_money cannot record a run');
+
+  -- APPEND-ONCE (F4, invariant #6): a completed run is a fact, never edited —
+  -- UPDATE and DELETE are revoked from EVERY role INCLUDING service_role (the
+  -- repo ledger pattern; block 26 also lists verify_runs — keep consistent).
+  declare
+    role_name text;
+  begin
+    foreach role_name in array array['anon', 'authenticated', 'service_role'] loop
+      perform app_test.assert(
+        not has_table_privilege(role_name, 'public.verify_runs', 'update'),
+        format('(30) verify_runs grants UPDATE to %s — runs are append-once', role_name));
+      perform app_test.assert(
+        not has_table_privilege(role_name, 'public.verify_runs', 'delete'),
+        format('(30) verify_runs grants DELETE to %s — runs are append-once', role_name));
+    end loop;
+  end;
 end
 $$;
 

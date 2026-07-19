@@ -64,9 +64,10 @@ describe("migration 0037 — subscriptions + dunning schema", () => {
     expect(migration).toMatch(/security definer/);
     // Idempotency backstop: a same-stage re-call is a no-op.
     expect(migration).toContain("if v_latest is not distinct from p_stage then");
-    // Service-role only — never an interactive client.
+    // Service-role only — never an interactive client. The trailing timestamptz
+    // is p_run_at: the quiet-hours-aware comms send time (F5).
     expect(migration).toContain(
-      "grant execute on function app.record_dunning_stage(uuid, uuid, text, uuid, timestamptz, timestamptz, jsonb)\n  to service_role",
+      "grant execute on function app.record_dunning_stage(uuid, uuid, text, uuid, timestamptz, timestamptz, jsonb, timestamptz)\n  to service_role",
     );
     expect(migration).not.toMatch(
       /grant execute on function app\.record_dunning_stage[^;]*authenticated/,
