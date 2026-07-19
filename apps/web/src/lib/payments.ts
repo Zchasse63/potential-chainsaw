@@ -19,8 +19,9 @@ export type PaymentStatus =
   | "refunded"
   | "partially_refunded";
 
-/** Server-derived tender — the browser renders it, never guesses it. */
-export type Tender = "cash" | "stripe";
+/** Server-authoritative tender (public.payments.tender, migration 0039) — the
+ *  browser renders it verbatim, never guesses it. */
+export type Tender = "cash" | "stripe" | "gift_card";
 
 export interface Payment {
   id: string;
@@ -95,12 +96,15 @@ const STEP_UP_GRANT_HEADER = "X-Step-Up-Grant";
  * POST /payments/:id/refund. Above the threshold the caller supplies a
  * grantToken, sent as X-Step-Up-Grant; the server RE-VERIFIES it (client
  * assertion is never trusted). Returns the accepted-but-pending refund command,
- * never a flipped payment status.
+ * never a flipped payment status. `idempotencyKey` is the ONE key for this
+ * refund intent, reused across retries so a timeout-after-commit + retry cannot
+ * issue a second refund command.
  */
 export async function requestRefund(
   accessToken: string,
   paymentId: string,
   input: RefundInput,
+  idempotencyKey: string,
 ): Promise<RefundAccepted> {
   const headers =
     input.grantToken !== undefined && input.grantToken !== ""
@@ -111,6 +115,7 @@ export async function requestRefund(
     accessToken,
     { amount_cents: input.amountCents, reason: input.reason },
     headers,
+    idempotencyKey,
   );
   const inspection = inspectEnvelope<{ refund: RefundAccepted }>(response);
   if (!inspection.ok) {

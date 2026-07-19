@@ -20,14 +20,16 @@ export function PosRoute() {
   return (
     <PosScreen
       catalogQuery={catalogQuery}
-      onCheckout={async (request) => {
-        const result = await checkout(accessToken as string, request);
+      onCheckout={async (request, idempotencyKey) => {
+        const result = await checkout(accessToken as string, request, idempotencyKey);
         // A completed sale can change sellable stock/gift-card state — refresh
         // the catalog from the server rather than mutating it locally.
         await queryClient.invalidateQueries({ queryKey: ["pos", "catalog"] });
         return result;
       }}
-      onRedeem={(code) => redeemGiftCard(accessToken as string, code)}
+      onRedeem={(code, amountCents, idempotencyKey) =>
+        redeemGiftCard(accessToken as string, code, amountCents, idempotencyKey)
+      }
     />
   );
 }

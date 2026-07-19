@@ -48,12 +48,17 @@ export function PaymentsRoute() {
       paymentsQuery={paymentsQuery}
       dunningQuery={dunningQuery}
       refundThresholdCents={refundThresholdCents}
-      onRefund={async (paymentId, input) => {
-        const accepted = await requestRefund(accessToken as string, paymentId, {
-          amountCents: input.amountCents,
-          reason: input.reason,
-          grantToken: input.grantToken,
-        });
+      onRefund={async (paymentId, input, idempotencyKey) => {
+        const accepted = await requestRefund(
+          accessToken as string,
+          paymentId,
+          {
+            amountCents: input.amountCents,
+            reason: input.reason,
+            grantToken: input.grantToken,
+          },
+          idempotencyKey,
+        );
         // Re-read so the confirmed status (flipped by the webhook, never here)
         // is reflected; no optimistic mutation of the list.
         await queryClient.invalidateQueries({ queryKey: ["payments", "list"] });

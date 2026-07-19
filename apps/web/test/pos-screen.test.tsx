@@ -25,11 +25,17 @@ const CATALOG = {
   drop_in_plans: [{ id: "plan-1", name: "Single class", amount_cents: 2500, currency: "usd" }],
 };
 
+const CHECKOUT_OK = {
+  payment_id: "pay-1",
+  order_id: "ord-1",
+  gift_card_codes: [{ card_id: "gc-issued-1", code: "ABCD-EFGH-JKMN-PQRS" }],
+};
+
 function renderPos(overrides: Partial<PosScreenProps> = {}) {
-  const onCheckout = vi
+  const onCheckout = vi.fn().mockResolvedValue(CHECKOUT_OK);
+  const onRedeem = vi
     .fn()
-    .mockResolvedValue({ payment_id: "pay-1", order_id: "ord-1", gift_card_codes: ["ABCD-EFGH-JKMN-PQRS"] });
-  const onRedeem = vi.fn().mockResolvedValue({ gift_card_id: "gc-issued-1", balance_cents: 4200 });
+    .mockResolvedValue({ gift_card_id: "gc-issued-1", redeemed_cents: 800, balance_cents: 4200 });
   const props: PosScreenProps = {
     catalogQuery: success(CATALOG),
     onCheckout,
@@ -49,7 +55,9 @@ describe("PosScreen", () => {
     );
   });
 
-  it("checks out with SERVER-PRICED line refs only — never a client price — and carries a member", async () => {
+  // W1 regression: the posted line field is ref_id (the API zod schema's field),
+  // NOT ref — a body with `ref` 422s server-side on every cash sale.
+  it("checks out with SERVER-PRICED line refs only (ref_id, never a client price) and carries a member", async () => {
     const { onCheckout } = renderPos();
     fireEvent.click(screen.getByRole("button", { name: /Recovery towel/ }));
     fireEvent.click(screen.getByRole("button", { name: /Single class/ }));
@@ -59,22 +67,54 @@ describe("PosScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: "Take cash payment" }));
 
     await waitFor(() => expect(onCheckout).toHaveBeenCalledTimes(1));
-    const request = onCheckout.mock.calls[0]?.[0] as {
-      lines: Record<string, unknown>[];
-    };
+    const request = onCheckout.mock.calls[0]?.[0] as { lines: Record<string, unknown>[] };
     expect(request).toEqual({
       person_id: "person-42",
       tender: "cash",
       lines: [
-        { kind: "retail", ref: "ret-1", qty: 1 },
-        { kind: "drop_in", ref: "plan-1", qty: 1 },
+        { kind: "retail", ref_id: "ret-1", qty: 1 },
+        { kind: "drop_in", ref_id: "plan-1", qty: 1 },
       ],
     });
-    // No line carries a price — prices belong to the server.
+    // Each posted line carries ref_id (the API contract) and no client price.
     for (const line of request.lines) {
+      expect(line).toHaveProperty("ref_id");
+      expect(line).not.toHaveProperty("ref");
       expect(line).not.toHaveProperty("price_cents");
       expect(line).not.toHaveProperty("unitCents");
     }
+    // A per-intent idempotency key rides the second argument.
+    expect(typeof onCheckout.mock.calls[0]?.[1]).toBe("string");
+  });
+
+  // W2 regression: the confirm step offers a gift-card tender that posts
+  // tender:'gift_card' + the raw code (server settles + raises on over-redeem).
+  it("settles a sale on a gift card with tender='gift_card' + the card code", async () => {
+    const { onCheckout } = renderPos();
+    fireEvent.click(screen.getByRole("button", { name: /Recovery towel/ }));
+    fireEvent.click(screen.getByTestId("pos-tender-gift_card"));
+    fireEvent.change(document.querySelector("#pos-gift-card-code") as HTMLInputElement, {
+      target: { value: "GIFT-1111-2222-3333" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Settle on gift card" }));
+
+    await waitFor(() => expect(onCheckout).toHaveBeenCalledTimes(1));
+    expect(onCheckout.mock.calls[0]?.[0]).toEqual({
+      person_id: null,
+      tender: "gift_card",
+      gift_card_code: "GIFT-1111-2222-3333",
+      lines: [{ kind: "retail", ref_id: "ret-1", qty: 1 }],
+    });
+  });
+
+  it("blocks a gift-card settlement until a code is entered", () => {
+    const { onCheckout } = renderPos();
+    fireEvent.click(screen.getByRole("button", { name: /Recovery towel/ }));
+    fireEvent.click(screen.getByTestId("pos-tender-gift_card"));
+    const button = screen.getByRole("button", { name: "Settle on gift card" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+    expect(onCheckout).not.toHaveBeenCalled();
   });
 
   it("reveals the one-time gift-card code exactly once with a shown-once warning", async () => {
@@ -88,14 +128,61 @@ describe("PosScreen", () => {
     );
   });
 
-  it("redeems a gift card and shows the new balance", async () => {
+  // W3 regression: a failed-then-retried checkout REUSES its idempotency key
+  // (no double charge); a new cart after success mints a DIFFERENT one.
+  it("reuses ONE idempotency key across a failed-then-retried sale and rotates it for the next", async () => {
+    const onCheckout = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("gateway timeout"))
+      .mockResolvedValue(CHECKOUT_OK);
+    renderPos({ onCheckout });
+
+    // Intent 1: fails, then the operator retries the SAME sale.
+    fireEvent.click(screen.getByRole("button", { name: /Recovery towel/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Take cash payment" }));
+    await waitFor(() => expect(onCheckout).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Take cash payment" }));
+    await waitFor(() => expect(onCheckout).toHaveBeenCalledTimes(2));
+
+    const key1 = onCheckout.mock.calls[0]?.[1] as string;
+    const key2 = onCheckout.mock.calls[1]?.[1] as string;
+    expect(key1).toBe(key2); // the retry replays — it never rings a second order
+
+    // Intent 2: a new sale after the confirmed success mints a fresh key.
+    fireEvent.click(screen.getByRole("button", { name: /Recovery towel/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Take cash payment" }));
+    await waitFor(() => expect(onCheckout).toHaveBeenCalledTimes(3));
+    const key3 = onCheckout.mock.calls[2]?.[1] as string;
+    expect(key3).not.toBe(key2);
+  });
+
+  // W2 regression: redeem posts the amount and its per-intent key; the result
+  // shows the redeemed amount and the new balance.
+  it("redeems a gift card for a specific amount and shows the redeemed amount + new balance", async () => {
     const { onRedeem } = renderPos();
     fireEvent.change(document.querySelector("#redeem-code") as HTMLInputElement, {
       target: { value: "WXYZ-1234-5678-ABCD" },
     });
+    fireEvent.change(document.querySelector("#redeem-amount") as HTMLInputElement, {
+      target: { value: "8" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Redeem" }));
 
-    await waitFor(() => expect(onRedeem).toHaveBeenCalledWith("WXYZ-1234-5678-ABCD"));
-    expect(await screen.findByText(/new balance \$42\.00/)).toBeDefined();
+    await waitFor(() =>
+      expect(onRedeem).toHaveBeenCalledWith("WXYZ-1234-5678-ABCD", 800, expect.any(String)),
+    );
+    expect(await screen.findByText(/Redeemed \$8\.00/)).toBeDefined();
+    expect(screen.getByText(/new balance \$42\.00/)).toBeDefined();
+  });
+
+  it("blocks a redemption until both a code and a positive amount are entered", () => {
+    const { onRedeem } = renderPos();
+    fireEvent.change(document.querySelector("#redeem-code") as HTMLInputElement, {
+      target: { value: "WXYZ-1234-5678-ABCD" },
+    });
+    const button = screen.getByRole("button", { name: "Redeem" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+    expect(onRedeem).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Button } from "../components/button.jsx";
 import { DataBoundary, type BoundaryQuery } from "../components/data-boundary.jsx";
 import { EmptyState } from "../components/empty-state.jsx";
@@ -33,7 +33,7 @@ export interface PaymentsScreenProps {
   /** The tenant's refund step-up threshold (cents) — above it the PIN ceremony
    *  is required. Sourced from the /payments envelope, never a client default. */
   refundThresholdCents: number;
-  onRefund: (paymentId: string, input: RefundSubmit) => Promise<RefundAccepted>;
+  onRefund: (paymentId: string, input: RefundSubmit, idempotencyKey: string) => Promise<RefundAccepted>;
   onVerifyStepUp: (pin: string, context: string) => Promise<StepUpGrantResult>;
 }
 
@@ -63,7 +63,7 @@ function RefundPanel({
 }: {
   payment: Payment;
   refundThresholdCents: number;
-  onRefund: (paymentId: string, input: RefundSubmit) => Promise<RefundAccepted>;
+  onRefund: (paymentId: string, input: RefundSubmit, idempotencyKey: string) => Promise<RefundAccepted>;
   onVerifyStepUp: (pin: string, context: string) => Promise<StepUpGrantResult>;
 }) {
   const [amount, setAmount] = useState("");
@@ -72,6 +72,11 @@ function RefundPanel({
   const [error, setError] = useState<string | null>(null);
   const [accepted, setAccepted] = useState<RefundAccepted | null>(null);
   const [stepUpOpen, setStepUpOpen] = useState(false);
+  // ONE Idempotency-Key for THIS refund intent — minted on the first post and
+  // REUSED across retries (including the step-up re-attempt) so a
+  // timeout-after-commit + retry replays rather than issuing a second refund.
+  // Rotated only on a confirmed acceptance.
+  const intentKey = useRef<string | null>(null);
 
   const cents = dollarsToCents(amount);
   const overRemaining = cents !== null && cents > payment.amount_cents;
@@ -80,18 +85,26 @@ function RefundPanel({
 
   async function post(grantToken?: string) {
     if (cents === null) return;
+    if (intentKey.current === null) intentKey.current = crypto.randomUUID();
     setPending(true);
     setError(null);
     try {
-      const result = await onRefund(payment.id, {
-        amountCents: cents,
-        reason: reason.trim() === "" ? null : reason.trim(),
-        grantToken,
-      });
+      const result = await onRefund(
+        payment.id,
+        {
+          amountCents: cents,
+          reason: reason.trim() === "" ? null : reason.trim(),
+          grantToken,
+        },
+        intentKey.current,
+      );
+      // Confirmed acceptance — rotate the key and clear the form.
+      intentKey.current = null;
       setAccepted(result);
       setAmount("");
       setReason("");
     } catch (caught) {
+      // Keep the key so a retry of THIS refund reuses it (no double refund).
       setError(caught instanceof Error ? caught.message : "The refund wasn't accepted.");
     } finally {
       setPending(false);
@@ -208,7 +221,7 @@ function PaymentDetail({
 }: {
   payment: Payment;
   refundThresholdCents: number;
-  onRefund: (paymentId: string, input: RefundSubmit) => Promise<RefundAccepted>;
+  onRefund: (paymentId: string, input: RefundSubmit, idempotencyKey: string) => Promise<RefundAccepted>;
   onVerifyStepUp: (pin: string, context: string) => Promise<StepUpGrantResult>;
 }) {
   return (
@@ -244,7 +257,11 @@ function PaymentDetail({
         </div>
       </dl>
 
-      {REFUNDABLE.has(payment.status) ? (
+      {!REFUNDABLE.has(payment.status) ? (
+        <p className="text-body text-ink-muted">
+          A refund is available only once the payment is webhook-confirmed as succeeded.
+        </p>
+      ) : payment.tender === "stripe" ? (
         <RefundPanel
           payment={payment}
           refundThresholdCents={refundThresholdCents}
@@ -252,8 +269,12 @@ function PaymentDetail({
           onVerifyStepUp={onVerifyStepUp}
         />
       ) : (
-        <p className="text-body text-ink-muted">
-          A refund is available only once the payment is webhook-confirmed as succeeded.
+        // Cash/gift-card settlements never went through Stripe, so the Stripe
+        // refund ceremony (create_refund command → webhook confirmation) can
+        // never resolve for them. An honest note stands in until the drawer
+        // refund path ships.
+        <p className="text-body text-ink-muted" data-testid="non-stripe-refund-note">
+          Cash/gift-card settlements are refunded at the drawer — recorded in a later unit.
         </p>
       )}
     </div>
