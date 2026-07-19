@@ -1,0 +1,24 @@
+/* Kelo — tenant brand layer · DEFAULT (the Kelo house brand)
+   The layer-1→2 remap seam for the member surface (plan-ux §5 member-theme;
+   plan-member-app §6.3). A tenant brand is a VALIDATED TOKEN SUBSET — logo
+   tokens, action color, surfaces, type — never arbitrary tenant CSS. Every
+   value here is validated in CI against validateTenantBrandTokens (Zod, in
+   packages/contracts) plus the WCAG AA contrast check
+   (packages/ui/test/brands.test.ts is the gate for this file).
+
+   The default brand is the identity mapping onto the Kelo system tokens: no
+   logo asset (text-lockup fallback per member-theme), house slate action,
+   house surfaces and type. A tenant remap substitutes raw validated values
+   for the var(--kelo-*) aliases below — components never change.
+
+   NEXT (owner gate P8-1): the-sauna-guys.css — the first real tenant remap.
+   Do NOT add it before the gate clears. */
+:root {
+  --kelo-tenant-action: var(--kelo-brand-600);
+  --kelo-tenant-action-fg: var(--kelo-text-on-brand);
+  --kelo-tenant-surface-app: var(--kelo-surface-app);
+  --kelo-tenant-surface-card: var(--kelo-surface-card);
+  --kelo-tenant-text-primary: var(--kelo-text-primary);
+  --kelo-tenant-text-secondary: var(--kelo-text-secondary);
+  --kelo-tenant-display-font: var(--kelo-font-display);
+}

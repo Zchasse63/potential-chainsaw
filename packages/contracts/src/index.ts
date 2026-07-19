@@ -3,6 +3,7 @@
  * (CLAUDE.md: nothing declares a shape twice). Every Glofox schema cites the
  * pinned sample it was derived from via a `// sample:` header comment.
  */
+export * from "./brand.js";
 export * from "./envelope.js";
 export * from "./mutations.js";
 export * from "./glofox/primitives.js";

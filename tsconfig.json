@@ -10,6 +10,8 @@
     { "path": "packages/db" },
     { "path": "packages/glofox" },
     { "path": "packages/glofox/tsconfig.test.json" },
+    { "path": "packages/ui" },
+    { "path": "packages/ui/tsconfig.test.json" },
     { "path": "apps/api" },
     { "path": "apps/web" },
     { "path": "workers" },

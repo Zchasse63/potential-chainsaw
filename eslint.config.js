@@ -112,4 +112,29 @@ export default tseslint.config(
       ],
     },
   },
+  // The Tailwind theme mapping (raw hex → semantic var(--kelo-*)) moved OUT of
+  // apps/web/tailwind.config.js and into packages/ui/tailwind-preset.ts (Wave
+  // 8.1a). plan-member-app §6.2 promises "raw hex / arbitrary values stay
+  // lint-blocked", so the ban must follow the code: a hardcoded hex in the
+  // shared preset would otherwise ship to BOTH web apps unlinted. Scope the
+  // colour/arbitrary-value selectors (not the apps/web-only Supabase ones) to
+  // the ui package that now owns the token seam.
+  {
+    files: ["packages/ui/**/*.{ts,tsx,js,jsx,mts,mjs,cts,cjs}"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "Literal[value=/#(?:[0-9a-fA-F]{3,8})\\b/]",
+          message:
+            "Raw hex colors are banned in packages/ui — the token seam maps semantics to var(--kelo-*); hex belongs only in tokens.css.",
+        },
+        {
+          selector: "TemplateElement[value.raw=/#(?:[0-9a-fA-F]{3,8})\\b/]",
+          message:
+            "Raw hex colors are banned in packages/ui — the token seam maps semantics to var(--kelo-*); hex belongs only in tokens.css.",
+        },
+      ],
+    },
+  },
 );

@@ -6,6 +6,6 @@ pnpm-lock.yaml
 plans/
 docs/
 supabase/
-# Vendored copy of docs/design/tokens.css — must stay byte-identical to the
-# canonical file (see its header comment); formatting it is drift.
-apps/web/src/styles/tokens.css
+# Canonical design tokens — formatting would churn the byte-level contract the
+# drift guards (packages/ui/test) assert against.
+packages/ui/tokens/tokens.css
