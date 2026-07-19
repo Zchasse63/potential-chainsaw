@@ -13,6 +13,7 @@ import {
   holdSession,
   joinWaitlist,
   releaseHold,
+  searchPeople,
 } from "../lib/bookings.js";
 import { BookScreen } from "../screens/book-screen.jsx";
 import { FrontDeskScreen } from "../screens/front-desk-screen.jsx";
@@ -85,6 +86,7 @@ export function BookRoute() {
       {view === "book" ? (
         <BookScreen
           availabilityQuery={availabilityQuery}
+          onSearchPeople={(q, limit) => searchPeople(token, q, limit)}
           statusQueryFor={(personId) =>
             useWaiverStatusQuery(accessToken, personId)
           }

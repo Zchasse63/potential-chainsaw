@@ -98,6 +98,27 @@ export interface WaitlistJoinResult {
   position: number;
 }
 
+/** GET /people/search row (apps/api data.ts personSearchRowSchema). A staff-only
+ *  surface, so the contact context (email + phone) is returned unmasked to let
+ *  the operator disambiguate two members with the same name. `source` marks a
+ *  row imported from Glofox vs created natively. */
+export interface PersonSearchRow {
+  id: string;
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  phone_e164: string | null;
+  source: "native" | "glofox";
+}
+
+/** GET /people/search → { people, truncated }. `truncated` says more rows
+ *  matched than the limit returned — the desk shows a refine-your-search hint
+ *  rather than implying the list is complete. */
+export interface PeopleSearchData {
+  people: PersonSearchRow[];
+  truncated: boolean;
+}
+
 /** POST /bookings/:id/check-in → { check_in: { status } }. */
 export interface CheckInResult {
   status: "checked_in";
@@ -191,6 +212,24 @@ export async function fetchAvailability(
 /** GET /sessions/:id/roster — bookings + ordered waitlist for the desk. */
 export async function fetchRoster(accessToken: string, sessionId: string): Promise<unknown> {
   return fetchEnvelope(`/sessions/${encodeURIComponent(sessionId)}/roster`, accessToken);
+}
+
+/**
+ * GET /people/search?q&limit — the Quick Book person typeahead (plan-ux §3C).
+ * A read, so it returns the RAW envelope for the caller to render through
+ * DataBoundary (provenance-or-nothing), mirroring fetchAvailability. The route
+ * enforces q≥2 chars and limit≤20; the caller debounces and gates on 2+ trimmed
+ * chars so an empty/1-char query never fires. `limit` is omitted when undefined
+ * so the server default (10) applies.
+ */
+export async function searchPeople(
+  accessToken: string,
+  q: string,
+  limit?: number,
+): Promise<unknown> {
+  const params = new URLSearchParams({ q });
+  if (limit !== undefined) params.set("limit", String(limit));
+  return fetchEnvelope(`/people/search?${params.toString()}`, accessToken);
 }
 
 // -- mutations (server-confirmed; explicit per-intent keys) -------------------

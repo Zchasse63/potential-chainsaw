@@ -15,6 +15,8 @@ import {
   type Hold,
   type IntentKey,
   type JoinWaitlistInput,
+  type PeopleSearchData,
+  type PersonSearchRow,
   type WaitlistJoinResult,
 } from "../lib/bookings.js";
 import type { WaiverStatusData } from "../lib/waivers.js";
@@ -46,6 +48,10 @@ export type BookTender = "credit" | "comp";
 export interface BookScreenProps {
   /** GET /sessions/availability for the picker window (route owns from/to). */
   availabilityQuery: BoundaryQuery;
+  /** GET /people/search?q&limit — the Quick Book person typeahead. Returns the
+   *  RAW envelope; the gate renders it through DataBoundary. Injected so the
+   *  whole funnel stays unit-testable without a network. */
+  onSearchPeople: (q: string, limit?: number) => Promise<unknown>;
   /** GET /waivers/status/:personId — the person summary + waiver gate. */
   statusQueryFor: (personId: string | null) => BoundaryQuery;
   /** POST /bookings/hold. */
@@ -64,6 +70,10 @@ export interface BookScreenProps {
   holdTtlSeconds?: number;
   /** Injectable clock for the countdown (tests pass a fixed now). */
   now?: () => number;
+  /** Person-search debounce (default 250ms; tests drop it to fire instantly). */
+  searchDebounceMs?: number;
+  /** Max search results requested (default 10 = the server default). */
+  searchLimit?: number;
 }
 
 const INPUT_CLASS =
@@ -87,33 +97,100 @@ function slotClock(iso: string): string {
 }
 
 // -- person gate --------------------------------------------------------------
-// There is no people-directory/search endpoint on the live contract, so the
-// desk identifies a person by id — the same honest pattern the shipped waivers
-// desk capture uses. DEFERRED: person search-or-create + duplicate warning
-// (plan-ux §3C) waits on a people-directory read endpoint.
+// The desk identifies a person through the /people/search typeahead (plan-ux
+// §3C): type 2+ chars of a name / email / phone, pick a result, and the same
+// person-summary + waiver gate that the by-id path fed still runs unchanged. A
+// small "enter id directly" fallback stays for operators pasting an id copied
+// from another screen (the previous behaviour).
+//
+// STILL DEFERRED: person CREATE (search-or-CREATE + duplicate warning, plan-ux
+// §3C) waits on a people write endpoint — the zero-results empty state says so
+// rather than offering a create affordance that would 404. Do not wire a create
+// button here until that endpoint exists.
 
-function PersonGate({
-  onLoad,
-  onClear,
-  activePersonId,
+const MIN_SEARCH_CHARS = 2;
+const DEFAULT_SEARCH_DEBOUNCE_MS = 250;
+
+/** Display name for a result row, degrading to the contact fields then the id so
+ *  a name-less imported record is still selectable and never renders blank. */
+function personDisplayName(row: PersonSearchRow): string {
+  const name = [row.first_name, row.last_name].filter((part) => part !== null && part !== "").join(" ").trim();
+  if (name !== "") return name;
+  return row.email ?? row.phone_e164 ?? row.id;
+}
+
+/** Contact context to disambiguate same-named members — email + phone are fine
+ *  on this staff-only surface (the API role-gates the search to desk-and-up). */
+function personContact(row: PersonSearchRow): string {
+  return [row.email, row.phone_e164].filter((part) => part !== null && part !== "").join(" · ");
+}
+
+function PersonResultList({
+  people,
+  truncated,
+  onSelect,
 }: {
-  onLoad: (personId: string) => void;
-  onClear: () => void;
-  activePersonId: string | null;
+  people: PersonSearchRow[];
+  truncated: boolean;
+  onSelect: (row: PersonSearchRow) => void;
 }) {
+  return (
+    <div className="space-y-2">
+      <ul className="space-y-1" aria-label="Member search results">
+        {people.map((row) => {
+          const contact = personContact(row);
+          return (
+            <li key={row.id}>
+              <button
+                type="button"
+                data-testid={`person-result-${row.id}`}
+                onClick={() => onSelect(row)}
+                className="flex w-full items-center justify-between gap-3 rounded-2 border border-hairline bg-surface-card px-3 py-2 text-left hover:bg-neutral-050"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-body font-medium text-ink">
+                    {personDisplayName(row)}
+                  </span>
+                  {contact !== "" && (
+                    <span className="block truncate text-chrome text-ink-muted">{contact}</span>
+                  )}
+                </span>
+                {row.source === "glofox" && (
+                  <span className={`shrink-0 ${HINT_CLASS}`}>imported</span>
+                )}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {truncated && (
+        <p data-testid="person-search-truncated" className={HINT_CLASS}>
+          More members match — refine your search to narrow the list.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Small always-available fallback: paste a person id from another screen. Kept
+ *  intentionally secondary to the search above it. */
+function IdEntryFallback({ onLoad }: { onLoad: (personId: string) => void }) {
   const [value, setValue] = useState("");
   return (
     <form
-      className="space-y-3 rounded-3 border border-hairline bg-surface-card p-4"
+      className="flex items-end gap-2 border-t border-hairline pt-3"
       onSubmit={(event) => {
         event.preventDefault();
         const trimmed = value.trim();
-        if (trimmed !== "") onLoad(trimmed);
+        if (trimmed !== "") {
+          onLoad(trimmed);
+          setValue("");
+        }
       }}
     >
-      <div>
+      <div className="min-w-0 flex-1">
         <label className={LABEL_CLASS} htmlFor="book-person">
-          Member <span className={HINT_CLASS}>person id</span>
+          Or enter a <span className={HINT_CLASS}>person id</span> directly
         </label>
         <input
           id="book-person"
@@ -124,24 +201,148 @@ function PersonGate({
           autoComplete="off"
         />
       </div>
-      <div className="flex items-center gap-2">
-        <Button type="submit" disabled={value.trim() === ""}>
-          Load member
-        </Button>
-        {activePersonId !== null && (
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => {
-              setValue("");
-              onClear();
-            }}
-          >
-            Change member
-          </Button>
-        )}
-      </div>
+      <Button type="submit" variant="secondary" disabled={value.trim() === ""}>
+        Load member
+      </Button>
     </form>
+  );
+}
+
+function PersonGate({
+  onSearch,
+  onSelect,
+  onLoad,
+  onClear,
+  activePersonId,
+  debounceMs,
+  searchLimit,
+}: {
+  onSearch: (q: string, limit?: number) => Promise<unknown>;
+  onSelect: (row: PersonSearchRow) => void;
+  onLoad: (personId: string) => void;
+  onClear: () => void;
+  activePersonId: string | null;
+  debounceMs: number;
+  searchLimit?: number;
+}) {
+  const [value, setValue] = useState("");
+  const [search, setSearch] = useState<{
+    status: "idle" | "pending" | "success" | "error";
+    data?: unknown;
+    error?: unknown;
+  }>({ status: "idle" });
+  // Monotonic request sequence: a response is applied ONLY if it belongs to the
+  // most recently fired query, so a slow earlier response can never overwrite a
+  // newer query's results (stale-response guard).
+  const seq = useRef(0);
+  const lastQuery = useRef("");
+
+  const runSearch = (q: string) => {
+    const mySeq = ++seq.current;
+    lastQuery.current = q;
+    setSearch({ status: "pending" });
+    onSearch(q, searchLimit).then(
+      (data) => {
+        if (mySeq === seq.current) setSearch({ status: "success", data });
+      },
+      (error: unknown) => {
+        if (mySeq === seq.current) setSearch({ status: "error", error });
+      },
+    );
+  };
+
+  const trimmed = value.trim();
+  const ready = trimmed.length >= MIN_SEARCH_CHARS;
+
+  // Debounce keystrokes; fire only at 2+ trimmed chars. A shorter/empty query
+  // cancels any in-flight sequence (bump seq) and clears the panel — no fetch.
+  useEffect(() => {
+    if (!ready) {
+      seq.current += 1;
+      setSearch({ status: "idle" });
+      return;
+    }
+    const timer = setTimeout(() => runSearch(trimmed), debounceMs);
+    return () => clearTimeout(timer);
+    // runSearch reads only refs + props; re-run on query / timing change.
+  }, [trimmed, ready, debounceMs, searchLimit]);
+
+  if (activePersonId !== null) {
+    return (
+      <div className="flex items-center justify-between gap-3 rounded-3 border border-hairline bg-surface-card p-4">
+        <div className="min-w-0">
+          <p className={HINT_CLASS}>Member loaded</p>
+          <p className="truncate font-mono text-body text-ink">{activePersonId}</p>
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => {
+            setValue("");
+            setSearch({ status: "idle" });
+            onClear();
+          }}
+        >
+          Change member
+        </Button>
+      </div>
+    );
+  }
+
+  const searchBoundaryQuery: BoundaryQuery = {
+    status: search.status === "idle" ? "pending" : search.status,
+    data: search.data,
+    error: search.error,
+    isRefetching: false,
+    refetch: () => runSearch(lastQuery.current),
+  };
+
+  return (
+    <div className="space-y-3 rounded-3 border border-hairline bg-surface-card p-4">
+      <div>
+        <label className={LABEL_CLASS} htmlFor="book-person-search">
+          Find member <span className={HINT_CLASS}>name · email · phone</span>
+        </label>
+        <input
+          id="book-person-search"
+          className={INPUT_CLASS}
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          placeholder="Start typing a name, email, or phone…"
+          autoComplete="off"
+          role="searchbox"
+          aria-label="Find member"
+        />
+      </div>
+
+      {trimmed.length > 0 && !ready && (
+        <p data-testid="person-search-hint" className={HINT_CLASS}>
+          Keep typing — search starts at {MIN_SEARCH_CHARS} characters.
+        </p>
+      )}
+
+      {ready && (
+        <DataBoundary<PeopleSearchData>
+          name="book-person-search"
+          query={searchBoundaryQuery}
+          skeleton={<Skeleton className="h-24 w-full rounded-2" />}
+          errorConsequence="The member search didn't run — no one was loaded and no seat was held."
+          isEmpty={(data) => data.people.length === 0}
+          emptyState={
+            <EmptyState
+              title="No members match that search."
+              body="This is a real empty result, not a sync gap. Check the spelling, or try an email or phone. Creating a new member here isn't available yet (plan-ux §3C — deferred until a people write endpoint ships); add them in your management system first, then search again."
+            />
+          }
+        >
+          {(data) => (
+            <PersonResultList people={data.people} truncated={data.truncated} onSelect={onSelect} />
+          )}
+        </DataBoundary>
+      )}
+
+      <IdEntryFallback onLoad={onLoad} />
+    </div>
   );
 }
 
@@ -450,6 +651,7 @@ interface HeldSlot {
 
 export function BookScreen({
   availabilityQuery,
+  onSearchPeople,
   statusQueryFor,
   onHold,
   onFreeze,
@@ -459,6 +661,8 @@ export function BookScreen({
   onCheckIn,
   holdTtlSeconds = 300,
   now = () => Date.now(),
+  searchDebounceMs = DEFAULT_SEARCH_DEBOUNCE_MS,
+  searchLimit,
 }: BookScreenProps) {
   const [activePersonId, setActivePersonId] = useState<string | null>(null);
   const [held, setHeld] = useState<HeldSlot | null>(null);
@@ -662,7 +866,15 @@ export function BookScreen({
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Left: identify + summary + slots */}
         <section aria-label="Member and slots" className="space-y-4">
-          <PersonGate onLoad={loadPerson} onClear={clearPerson} activePersonId={activePersonId} />
+          <PersonGate
+            onSearch={onSearchPeople}
+            onSelect={(row) => loadPerson(row.id)}
+            onLoad={loadPerson}
+            onClear={clearPerson}
+            activePersonId={activePersonId}
+            debounceMs={searchDebounceMs}
+            searchLimit={searchLimit}
+          />
 
           {activePersonId !== null && (
             <DataBoundary<WaiverStatusData>
