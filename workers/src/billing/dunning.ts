@@ -182,6 +182,15 @@ export async function syncSubscriptionStatus(
       ? args.eventCreatedAt
       : null;
 
+  // EVENT-TIME MONOTONICITY (F6) with a terminal-cancellation carve-out: Stripe
+  // `created` has ONE-SECOND granularity, and an immediate cancellation emits
+  // subscription.updated + subscription.deleted in the SAME second. A strict
+  // `<` gate would make the deleted event a permanent no-op when updated lands
+  // first — the subscription would stay 'active' forever (no later event ever
+  // comes) and the one-live-sub index would block resubscribing. Cancellation
+  // is already monotone via the status CASE ('cancelled' never regresses), so
+  // the terminal target uses `<=` while non-terminal transitions keep `<`.
+  const isTerminal = target === "cancelled";
   await pool.query(
     `update public.subscriptions s
      set status = case
@@ -194,8 +203,11 @@ export async function syncSubscriptionStatus(
      where s.id = $1 and s.tenant_id = $2
        and ($5::double precision is null
             or s.last_event_at is null
-            or s.last_event_at < to_timestamp($5::double precision))`,
-    [args.sub.id, args.sub.tenantId, target, periodEnd, createdAt],
+            or (case when $6::boolean
+                  then s.last_event_at <= to_timestamp($5::double precision)
+                  else s.last_event_at < to_timestamp($5::double precision)
+                end))`,
+    [args.sub.id, args.sub.tenantId, target, periodEnd, createdAt, isTerminal],
   );
 }
 
@@ -325,8 +337,15 @@ export async function resolveDunningGraceDays(
   pool: PooledQueryable,
   tenantId: string,
 ): Promise<number> {
+  // Digit-guarded cast: a malformed setting value ('two weeks', '14d') must
+  // fall back to the default, never raise — a raise here would send the
+  // invoice.payment_failed event down the retry→dead-letter path.
   const result = await pool.query(
-    `select coalesce(nullif(t.settings ->> 'dunning_grace_days', '')::int, $2) as grace_days
+    `select coalesce(
+              case when t.settings ->> 'dunning_grace_days' ~ '^[0-9]{1,4}$'
+                   then (t.settings ->> 'dunning_grace_days')::int
+              end,
+              $2) as grace_days
      from public.tenants t
      where t.id = $1`,
     [tenantId, DEFAULT_GRACE_WINDOW_DAYS],

@@ -78,8 +78,12 @@ export function isQuietHours(
  * reminder would otherwise be lost). The send-time policy re-check stays
  * authoritative: a suppression added meanwhile still blocks at send time.
  *
- * Wall-clock minutes are added as real minutes (the offset is treated as
- * constant across the sub-day window); no Math.random, `now` is injected.
+ * Wall-clock minutes are added as real minutes, THEN the candidate is
+ * re-checked against the studio clock and nudged forward until it truly sits
+ * outside quiet hours (bounded). Without the re-check, a DST fall-back night
+ * makes a 21:00→09:00 deferral land at 08:00 studio-local — still quiet — and
+ * the send processor's terminal quiet-hours skip would silently lose the
+ * message one night a year. No Math.random, `now` is injected.
  */
 export function nextAllowedSendAt(
   now: Date,
@@ -87,11 +91,17 @@ export function nextAllowedSendAt(
   quietStart = "21:00",
   quietEnd = "09:00",
 ): Date {
-  if (!isQuietHours(now, timezone, quietStart, quietEnd)) return now;
-  const end = parseClock(quietEnd, "quietEnd");
-  const local = studioMinute(now, timezone);
-  const minutesUntilEnd = local < end ? end - local : 1440 - local + end;
-  return new Date(now.getTime() + minutesUntilEnd * 60_000);
+  let candidate = now;
+  // ≤4 iterations: constant-offset stepping is off by at most the DST shift
+  // (1h) per crossing; each pass converges on the true studio-local quietEnd.
+  for (let i = 0; i < 4; i += 1) {
+    if (!isQuietHours(candidate, timezone, quietStart, quietEnd)) return candidate;
+    const end = parseClock(quietEnd, "quietEnd");
+    const local = studioMinute(candidate, timezone);
+    const minutesUntilEnd = local < end ? end - local : 1440 - local + end;
+    candidate = new Date(candidate.getTime() + minutesUntilEnd * 60_000);
+  }
+  return candidate;
 }
 
 /**
