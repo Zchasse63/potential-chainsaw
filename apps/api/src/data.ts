@@ -1393,3 +1393,132 @@ export async function fetchDataExport(
     row.status === "ready" && row.expires_at !== null && Date.parse(row.expires_at) <= Date.now();
   return isExpired ? { ...row, status: "expired", artifact: null } : row;
 }
+
+// -- people search (unit 6.5 — Quick Book desk typeahead, plan-ux §3C) --------
+
+/**
+ * The desk-search read shape. ONLY the fields the Quick Book picker renders are
+ * selected — no ledger, consent, or pipeline PII leaks into the typeahead.
+ * phone_e164 is the canonical US identity (migration 0023), the column a
+ * digits-only query matches.
+ */
+export const personSearchRowSchema = z.object({
+  id: z.string().uuid(),
+  first_name: z.string().nullable(),
+  last_name: z.string().nullable(),
+  email: z.string().nullable(),
+  phone_e164: z.string().nullable(),
+  source: z.enum(["native", "glofox"]),
+});
+export type PersonSearchRow = z.infer<typeof personSearchRowSchema>;
+
+const PERSON_SEARCH_COLUMNS = "id, first_name, last_name, email, phone_e164, source";
+
+/**
+ * Upper bound on rows pulled from PostgREST before JS relevance-ranking. At the
+ * design scale (~300 people/tenant) a q≥2 match set is far smaller than this;
+ * the cap is only a safety ceiling, and any fetch that reaches it is reported
+ * `truncated` (rows.length > limit is always true once the cap ≥ limit is hit).
+ */
+const PERSON_SEARCH_SCAN_CAP = 100;
+
+/**
+ * Strip PostgREST `or()`/`ilike` metacharacters so a crafted `q` cannot inject
+ * extra filter conditions or turn into a match-everything wildcard. `,` `(` `)`
+ * delimit or-conditions; `*`/`%` are ilike wildcards; `\`/`"` quote-escape.
+ */
+function sanitizeIlikeTerm(value: string): string {
+  return value.replace(/[,()*%\\"]/g, "");
+}
+
+export interface PeopleSearchResult {
+  people: PersonSearchRow[];
+  truncated: boolean;
+}
+
+/** Relevance tier (lower = better): 0 exact, 1 prefix/suffix, 2 substring, 3 none. */
+function personSearchRank(row: PersonSearchRow, qLower: string, digits: string | null): number {
+  let best = 3;
+  for (const field of [row.first_name, row.last_name, row.email]) {
+    if (field === null) continue;
+    const value = field.toLowerCase();
+    if (value === qLower) best = Math.min(best, 0);
+    else if (value.startsWith(qLower)) best = Math.min(best, 1);
+    else if (value.includes(qLower)) best = Math.min(best, 2);
+  }
+  if (digits !== null && row.phone_e164 !== null) {
+    // A trailing match is the "dialed the last N digits" case operators expect.
+    if (row.phone_e164.endsWith(digits)) best = Math.min(best, 1);
+    else if (row.phone_e164.includes(digits)) best = Math.min(best, 2);
+  }
+  return best;
+}
+
+/** Stable secondary ordering for equal-relevance rows (deterministic paging). */
+function comparePeopleForSearch(a: PersonSearchRow, b: PersonSearchRow): number {
+  return (
+    (a.last_name ?? "").localeCompare(b.last_name ?? "") ||
+    (a.first_name ?? "").localeCompare(b.first_name ?? "") ||
+    a.id.localeCompare(b.id)
+  );
+}
+
+/**
+ * Quick Book desk search (plan-ux §3C). Reads through the USER client so RLS
+ * scopes every row to the caller's tenant — there is NO service-role read path
+ * here; a cross-tenant person is structurally invisible.
+ *
+ * DESIGN CHOICE (no new SQL / no migration): at this scale (~300 people/tenant)
+ * one PostgREST `or(...)` of `ilike` filters is enough — name substring on
+ * first/last, email prefix, and (for a digits-only / E.164-fragment input) a
+ * phone_e164 substring, backed by the existing tenant-scoped indexes. A ranking
+ * SQL function would be premature; rows are relevance-ranked in JS (exact →
+ * prefix → substring) and capped at `limit`. `truncated` says more rows matched
+ * than were returned.
+ */
+export async function searchPeople(
+  client: KeloSupabaseClient,
+  tenantId: string,
+  opts: { q: string; limit: number },
+): Promise<PeopleSearchResult> {
+  const q = opts.q.trim();
+  const term = sanitizeIlikeTerm(q);
+  const digits = q.replace(/\D/g, "");
+  // A phone-style query carries no letters (a raw number / E.164 fragment) and
+  // enough digits to be selective; it matches the canonical phone_e164 column.
+  const phoneEligible = !/[a-z]/i.test(q) && digits.length >= 2;
+
+  const conditions: string[] = [];
+  if (term.length >= 2) {
+    conditions.push(
+      `first_name.ilike.*${term}*`,
+      `last_name.ilike.*${term}*`,
+      `email.ilike.${term}*`,
+    );
+  }
+  if (phoneEligible) {
+    conditions.push(`phone_e164.ilike.*${digits}*`);
+  }
+  // Punctuation-only input that sanitizes away would otherwise become a
+  // match-everything wildcard — refuse to enumerate the tenant's directory.
+  if (conditions.length === 0) return { people: [], truncated: false };
+
+  const data = await run(
+    from(client, "people")
+      .select(PERSON_SEARCH_COLUMNS)
+      .eq("tenant_id", tenantId)
+      .or(conditions.join(","))
+      .order("last_name", { ascending: true })
+      .limit(PERSON_SEARCH_SCAN_CAP),
+    "searchPeople",
+  );
+  const rows = parseInternal(z.array(personSearchRowSchema), data ?? [], "searchPeople");
+
+  const qLower = q.toLowerCase();
+  const ranked = [...rows]
+    .map((row) => ({ row, rank: personSearchRank(row, qLower, phoneEligible ? digits : null) }))
+    .sort((a, b) => a.rank - b.rank || comparePeopleForSearch(a.row, b.row))
+    .map((entry) => entry.row);
+
+  return { people: ranked.slice(0, opts.limit), truncated: ranked.length > opts.limit };
+}
