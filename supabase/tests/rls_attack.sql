@@ -993,7 +993,7 @@ begin
     'credit_ledger', 'gift_card_ledger', 'waiver_signatures', 'audit_events',
     'communication_consents', 'step_up_events', 'person_relationship_log',
     'briefing_feedback', 'campaign_attributions', 'person_deletions',
-    'ask_misses', 'schedule_publish_log'
+    'ask_misses', 'schedule_publish_log', 'plan_prices'
   ] loop
     foreach role_name in array array['anon', 'authenticated', 'service_role'] loop
       perform app_test.assert(
@@ -1004,6 +1004,144 @@ begin
         format('(26) append-only public.%s grants DELETE to %s', t, role_name));
     end loop;
   end loop;
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (27) BILLING CORE (migration 0033): the money spine. Member-read isolation +
+--      NO client write path across stripe_accounts/plans/plan_prices/customers/
+--      stripe_commands/payments/idempotency_keys; the stripe_events inbox is
+--      deny-all; plan_prices is append-only even for the owning tenant's owner,
+--      and superseded_at moves ONLY through the definer. Seed one row per tenant
+--      (as superuser); uB sees only her own and can forge nothing.
+--      (invariant #7: every new table gets a cross-tenant attack test.)
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; v_pb uuid;
+  v_plan_a uuid; v_plan_b uuid; v_price_b uuid; v_cust_b uuid; v_cmd_b uuid;
+  v_ts timestamptz; n int; raised boolean;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+  select id into v_pb from public.people where tenant_id = v_b limit 1;
+
+  insert into public.stripe_accounts (tenant_id) values (v_a);
+  insert into public.stripe_accounts (tenant_id) values (v_b);
+  insert into public.plans (tenant_id, kelo_type, name) values (v_a, 'recurring', 'Plan A')
+    returning id into v_plan_a;
+  insert into public.plans (tenant_id, kelo_type, name) values (v_b, 'recurring', 'Plan B')
+    returning id into v_plan_b;
+  insert into public.plan_prices (tenant_id, plan_id, amount_cents, interval)
+    values (v_a, v_plan_a, 9900, 'month');
+  insert into public.plan_prices (tenant_id, plan_id, amount_cents, interval)
+    values (v_b, v_plan_b, 9900, 'month') returning id into v_price_b;
+  insert into public.customers (tenant_id, person_id) values (v_b, v_pb)
+    returning id into v_cust_b;
+  insert into public.stripe_commands (tenant_id, kind, idempotency_key)
+    values (v_a, 'create_payment_intent', 'a-1');
+  insert into public.stripe_commands (tenant_id, kind, idempotency_key)
+    values (v_b, 'create_payment_intent', 'b-1') returning id into v_cmd_b;
+  insert into public.payments (tenant_id, customer_id, amount_cents, status, command_id)
+    values (v_a, null, 9900, 'processing', null);
+  insert into public.payments (tenant_id, customer_id, amount_cents, status, command_id)
+    values (v_b, v_cust_b, 9900, 'processing', v_cmd_b);
+  insert into public.idempotency_keys (tenant_id, key, request_hash)
+    values (v_a, 'req-a', 'hash-a');
+  insert into public.idempotency_keys (tenant_id, key, request_hash)
+    values (v_b, 'req-b', 'hash-b');
+  insert into public.stripe_events (event_id, type, payload)
+    values ('evt_seed_b', 'payment_intent.succeeded', '{}');
+
+  perform app_test.become(v_ub);
+
+  -- Member-read isolation: zero of A's rows, exactly her own.
+  select count(*) into n from public.stripe_accounts where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(27) uB can SELECT tenant A stripe_accounts');
+  select count(*) into n from public.plans where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(27) uB can SELECT tenant A plans');
+  select count(*) into n from public.plan_prices where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(27) uB can SELECT tenant A plan_prices');
+  select count(*) into n from public.customers where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(27) uB can SELECT tenant A customers');
+  select count(*) into n from public.stripe_commands where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(27) uB can SELECT tenant A stripe_commands');
+  select count(*) into n from public.payments where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(27) uB can SELECT tenant A payments');
+  select count(*) into n from public.idempotency_keys where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(27) uB can SELECT tenant A idempotency_keys');
+  select count(*) into n from public.payments where tenant_id = v_b;
+  perform app_test.assert(n = 1, '(27) uB cannot read her OWN payments');
+
+  -- The webhook inbox is deny-all: even own-tenant probing yields nothing.
+  n := 0; raised := false;
+  begin
+    select count(*) into n from public.stripe_events;
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised or n = 0, '(27) uB can read public.stripe_events');
+
+  -- No client write path for money, even for her OWN tenant.
+  raised := false;
+  begin
+    insert into public.payments (tenant_id, amount_cents, status)
+      values (v_b, 100, 'succeeded');
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(27) uB could INSERT into payments');
+
+  raised := false;
+  begin
+    insert into public.stripe_commands (tenant_id, kind, idempotency_key)
+      values (v_b, 'create_refund', 'forged');
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(27) uB could INSERT into stripe_commands');
+
+  raised := false;
+  begin
+    insert into public.plan_prices (tenant_id, plan_id, amount_cents)
+      values (v_b, v_plan_b, 1);
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(27) uB could INSERT into plan_prices');
+
+  -- Price history is append-only even for the owning tenant's owner.
+  raised := false;
+  begin
+    update public.plan_prices set amount_cents = 1 where tenant_id = v_b;
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(27) uB could UPDATE plan_prices — prices must be immutable');
+
+  reset role;
+  -- plan_prices is append-only at the PRIVILEGE level (service_role included);
+  -- superseded_at moves only through the definer app.supersede_plan_price.
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'public.plan_prices', 'update'),
+    '(27) service_role holds UPDATE on plan_prices — the definer is the only writer');
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'public.plan_prices', 'delete'),
+    '(27) service_role holds DELETE on plan_prices — price history is append-only');
+  -- payments carries a webhook-flipped status — the service role writes it, but
+  -- no client role may INSERT money (no optimistic UI for money).
+  perform app_test.assert(
+    has_table_privilege('service_role', 'public.payments', 'update'),
+    '(27) service_role lacks UPDATE on payments — the webhook cannot confirm');
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'public.payments', 'insert'),
+    '(27) authenticated holds INSERT on payments — money has no optimistic client write');
+
+  -- Positive control: the definer closes a price phase (superseded_at set)
+  -- without any client UPDATE grant. Clear the JWT so the service-role branch
+  -- runs (auth.uid() null → no interactive role check).
+  perform set_config('request.jwt.claims', 'null', true);
+  perform app.supersede_plan_price(v_b, v_price_b);
+  select superseded_at into v_ts from public.plan_prices where id = v_price_b;
+  perform app_test.assert(v_ts is not null,
+    '(27) app.supersede_plan_price did not set superseded_at');
 end
 $$;
 
