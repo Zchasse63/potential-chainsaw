@@ -218,6 +218,22 @@ function WaiversNavLink() {
   );
 }
 
+/** Setup rail item — launch readiness + the authority matrix. Owner/manager
+ *  only (UX ruling 9; the /readiness + /authority APIs gate the same roles). */
+function SetupNavLink() {
+  if (!useIsOwnerOrManager()) return null;
+  return (
+    <li>
+      <Link to="/setup" className={NAV_LINK_BASE} activeProps={{ className: NAV_LINK_ACTIVE }}>
+        <span aria-hidden="true" className="font-mono text-icon-inactive">
+          ⚑
+        </span>
+        Setup
+      </Link>
+    </li>
+  );
+}
+
 /**
  * Open-exception count badge (design guide §8 count badges), read from the
  * /health envelope's quarantine summary — no extra fetch. Quiet when the
@@ -289,7 +305,9 @@ export function AppShell({ children }: { children: ReactNode }) {
                   ? "Payments"
                   : pathname.startsWith("/staff")
                     ? "Staff"
-                    : pathname.startsWith("/waivers")
+                    : pathname.startsWith("/setup")
+                      ? "Setup"
+                      : pathname.startsWith("/waivers")
                       ? "Waivers"
                       : pathname.startsWith("/health")
                         ? "Health"
@@ -359,6 +377,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <PaymentsNavLink />
             <StaffNavLink />
             <WaiversNavLink />
+            <SetupNavLink />
           </ul>
         </nav>
       </aside>
