@@ -5,6 +5,8 @@
     { "path": "packages/contracts/tsconfig.test.json" },
     { "path": "packages/comms" },
     { "path": "packages/comms/tsconfig.test.json" },
+    { "path": "packages/stripe" },
+    { "path": "packages/stripe/tsconfig.test.json" },
     { "path": "packages/db" },
     { "path": "packages/glofox" },
     { "path": "packages/glofox/tsconfig.test.json" },
