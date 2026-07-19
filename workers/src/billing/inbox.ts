@@ -31,18 +31,24 @@ export const BILLING_PROCESS_INBOX_KIND = "stripe.process_inbox";
 
 /** Default max events drained per run — the inbox is low-volume. */
 const DEFAULT_BATCH = 50;
+/** Inbox failures RETRY (event stays 'received') up to this many attempts —
+ * a payment not-yet-linked by the outbox self-heals on a later drain — then
+ * DEAD-LETTER to 'error' + a critical alert. Mirrors the outbox's bound. */
+const DEFAULT_MAX_ATTEMPTS = 5;
 
 export interface InboxDeps {
   /** Injectable clock (processed_at). Defaults to now; never Date.now in-body. */
   readonly now?: () => Date;
   /** Max events claimed per run. */
   readonly batch?: number;
+  /** Attempts before a failing event is dead-lettered (default 5). */
+  readonly maxAttempts?: number;
 }
 
 /** How one event was resolved — returned for tests and processor logging. */
 export interface InboxOutcome {
   readonly eventId: string;
-  readonly status: "processed" | "ignored" | "error";
+  readonly status: "processed" | "ignored" | "error" | "retrying";
   /** The money transition applied (present only when a payment was touched). */
   readonly transition?: string;
 }
@@ -51,6 +57,8 @@ interface ClaimedEvent {
   readonly id: string;
   readonly eventId: string;
   readonly payload: unknown;
+  readonly attempts: number;
+  readonly accountId: string | null;
 }
 
 interface PaymentRef {
@@ -71,7 +79,7 @@ function asNumber(value: unknown): number | null {
 
 async function claimEvents(pool: PooledQueryable, batch: number): Promise<ClaimedEvent[]> {
   const result = await pool.query(
-    `select id, event_id, payload
+    `select id, event_id, payload, attempts, stripe_account_id
      from public.stripe_events
      where status = 'received'
      order by received_at asc
@@ -80,9 +88,21 @@ async function claimEvents(pool: PooledQueryable, batch: number): Promise<Claime
   );
   const events: ClaimedEvent[] = [];
   for (const row of result.rows) {
-    const parsed = row as { id?: unknown; event_id?: unknown; payload?: unknown };
+    const parsed = row as {
+      id?: unknown;
+      event_id?: unknown;
+      payload?: unknown;
+      attempts?: unknown;
+      stripe_account_id?: unknown;
+    };
     if (typeof parsed.id !== "string" || typeof parsed.event_id !== "string") continue;
-    events.push({ id: parsed.id, eventId: parsed.event_id, payload: parsed.payload });
+    events.push({
+      id: parsed.id,
+      eventId: parsed.event_id,
+      payload: parsed.payload,
+      attempts: asNumber(parsed.attempts) ?? 0,
+      accountId: typeof parsed.stripe_account_id === "string" ? parsed.stripe_account_id : null,
+    });
   }
   return events;
 }
@@ -184,13 +204,17 @@ async function applyTransition(
         throw new Error(`no payment for payment_intent ${action.paymentIntentId}`);
       }
       const target = refundTarget(payment, action);
-      // A refund only applies to a captured (succeeded) payment; a further
-      // refund on an already-refunded payment stays idempotent.
-      await setPaymentStatus(pool, action.paymentIntentId, target, [
-        "succeeded",
-        "partially_refunded",
-        "refunded",
-      ]);
+      // Refunds are MONOTONIC — a full 'refunded' is terminal and must never
+      // regress to 'partially_refunded' when Stripe delivers a partial-refund
+      // event AFTER the completing one (webhook ordering is not guaranteed). So
+      // the allowed prior states depend on the target: a full refund may apply
+      // from succeeded/partial/refunded (idempotent); a partial refund may apply
+      // only from succeeded/partial — NEVER from an already-full refund.
+      const allowedPrior =
+        target === "refunded"
+          ? ["succeeded", "partially_refunded", "refunded"]
+          : ["succeeded", "partially_refunded"];
+      await setPaymentStatus(pool, action.paymentIntentId, target, allowedPrior);
       return target;
     }
     // Known-but-unhandled here (subscriptions/invoices land in a later unit) and
@@ -216,6 +240,57 @@ async function markEvent(
 }
 
 /**
+ * A per-event failure is RETRYABLE — the referenced payment may simply not be
+ * linked yet by the outbox (self-healing on a later drain). Keep the event
+ * 'received' and bump attempts until the bound, THEN dead-letter to 'error' +
+ * a critical alert so a genuinely-stranded money event is operator-visible
+ * (the release rule's production-visible health signal). Returns the terminal
+ * inbox status for this drain: 'error' if dead-lettered, else 'retrying'.
+ */
+async function handleEventFailure(
+  pool: PooledQueryable,
+  event: ClaimedEvent,
+  message: string,
+  now: Date,
+  maxAttempts: number,
+): Promise<"error" | "retrying"> {
+  const attempts = event.attempts + 1;
+  if (attempts < maxAttempts) {
+    await pool.query(
+      `update public.stripe_events
+       set attempts = $1, error = $2
+       where id = $3 and status = 'received'`,
+      [attempts, message, event.id],
+    );
+    return "retrying";
+  }
+  await pool.query(
+    `update public.stripe_events
+     set status = 'error', attempts = $1, error = $2, processed_at = $3
+     where id = $4`,
+    [attempts, message, now.toISOString(), event.id],
+  );
+  // Dead-letter alert, tenant-resolved via the connected account (best-effort:
+  // a real money event always carries an account that maps to a tenant). The
+  // partial unique index dedupes per open alert.
+  await pool.query(
+    `insert into public.alerts (tenant_id, kind, severity, title, body, dedupe_key, context)
+     select sa.tenant_id, 'stripe_event_failed', 'critical', $2, $3, $4, $5
+     from public.stripe_accounts sa
+     where sa.stripe_account_id = $1
+     on conflict (tenant_id, kind, dedupe_key) where status = 'open' do nothing`,
+    [
+      event.accountId,
+      `Stripe event dead-lettered after ${attempts} attempts`,
+      message,
+      event.eventId,
+      JSON.stringify({ event_id: event.eventId, attempts }),
+    ],
+  );
+  return "error";
+}
+
+/**
  * Drain the stripe_events inbox. NEVER throws for a per-event failure — the
  * 'error' row IS the failure surface (one bad event must not blind the others).
  */
@@ -225,6 +300,7 @@ export async function runInbox(
 ): Promise<InboxOutcome[]> {
   const now = deps.now ?? (() => new Date());
   const batch = deps.batch ?? DEFAULT_BATCH;
+  const maxAttempts = deps.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const events = await claimEvents(pool, batch);
   const outcomes: InboxOutcome[] = [];
 
@@ -242,8 +318,8 @@ export async function runInbox(
       );
     } catch (err) {
       const message = (err instanceof Error ? err.message : "unknown inbox error").slice(0, 1_000);
-      await markEvent(pool, event.id, "error", message, instant);
-      outcomes.push({ eventId: event.eventId, status: "error" });
+      const status = await handleEventFailure(pool, event, message, instant, maxAttempts);
+      outcomes.push({ eventId: event.eventId, status });
     }
   }
 

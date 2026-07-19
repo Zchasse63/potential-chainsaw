@@ -208,9 +208,15 @@ begin
 
   -- The payment must exist for this tenant and be SUCCEEDED. Only a captured
   -- charge can be refunded; requires_payment/processing/failed cannot.
+  -- FOR UPDATE locks the payment row so concurrent create_refund calls on the
+  -- SAME payment SERIALIZE: the second waits until the first commits its refund
+  -- command, then recomputes the refunded sum below and sees the reduced
+  -- ceiling — closing the over-refund TOCTOU race (two partials that each pass
+  -- the check but together exceed the original).
   select status, amount_cents into v_status, v_amount
   from public.payments
-  where tenant_id = p_tenant and id = p_payment;
+  where tenant_id = p_tenant and id = p_payment
+  for update;
   if not found then
     raise exception 'payment not found for tenant' using errcode = 'P0002';
   end if;

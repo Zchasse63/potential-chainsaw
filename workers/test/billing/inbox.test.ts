@@ -12,8 +12,19 @@ import { callsMatching, createBillingPool, type QueryCall } from "./helpers.js";
 const NOW = new Date("2026-07-18T12:00:00.000Z");
 
 /** A stripe_events row as claimed (id, event_id, payload). */
-function eventRow(id: string, eventId: string, payload: unknown) {
-  return { id, event_id: eventId, payload };
+function eventRow(
+  id: string,
+  eventId: string,
+  payload: unknown,
+  opts: { attempts?: number; accountId?: string | null } = {},
+) {
+  return {
+    id,
+    event_id: eventId,
+    payload,
+    attempts: opts.attempts ?? 0,
+    stripe_account_id: opts.accountId ?? null,
+  };
 }
 
 function paymentEvent(eventId: string, intentId: string, type: string): unknown {
@@ -159,23 +170,28 @@ describe("charge.refunded — full vs partial by amount", () => {
     });
   }
 
-  it("a full refund maps to 'refunded'", async () => {
+  it("a full refund maps to 'refunded' (idempotent from an already-refunded prior)", async () => {
     const pool = poolFor(refundEvent(true, 5000));
     const outcomes = await runInbox(pool, { now: () => NOW });
     expect(outcomes[0]).toEqual({ eventId: "evt_r", status: "processed", transition: "refunded" });
-    expect(paymentUpdate(callsMatching(pool.calls, "update public.payments")[0]!).target).toBe(
-      "refunded",
-    );
+    const update = paymentUpdate(callsMatching(pool.calls, "update public.payments")[0]!);
+    expect(update.target).toBe("refunded");
+    // A full refund is idempotent — replaying it from 'refunded' is a no-op.
+    expect(update.allowedPrior).toContain("refunded");
   });
 
-  it("a partial refund maps to 'partially_refunded'", async () => {
+  it("a partial refund maps to 'partially_refunded' and NEVER regresses a full refund", async () => {
     const pool = poolFor(refundEvent(false, 2000));
     const outcomes = await runInbox(pool, { now: () => NOW });
     expect(outcomes[0]?.transition).toBe("partially_refunded");
     const update = paymentUpdate(callsMatching(pool.calls, "update public.payments")[0]!);
     expect(update.target).toBe("partially_refunded");
-    // A refund only applies to a captured payment.
     expect(update.allowedPrior).toContain("succeeded");
+    // THE MONOTONIC GUARD (review fix): a late partial-refund event must NOT be
+    // allowed to regress an already-'refunded' payment when Stripe delivers the
+    // completing event first. 'refunded' is terminal and absent from the
+    // allowed priors for a partial target.
+    expect(update.allowedPrior).not.toContain("refunded");
   });
 });
 
@@ -231,23 +247,62 @@ describe("error isolation — one bad event never blinds the others", () => {
     const outcomes = await runInbox(pool, { now: () => NOW });
 
     expect(outcomes).toHaveLength(2);
-    expect(outcomes[0]).toMatchObject({ eventId: "evt_miss", status: "error" });
+    // A missing payment is TRANSIENT (the outbox may not have linked it yet) —
+    // the first attempt RETRIES (event stays 'received'), it does NOT dead-letter.
+    expect(outcomes[0]).toMatchObject({ eventId: "evt_miss", status: "retrying" });
     expect(outcomes[1]).toEqual({
       eventId: "evt_ok",
       status: "processed",
       transition: "succeeded",
     });
 
-    const finalize = callsMatching(pool.calls, "update public.stripe_events").map(eventUpdate);
-    const errorRow = finalize.find((f) => f.id === "e1");
-    expect(errorRow?.status).toBe("error");
-    expect(String(errorRow?.error)).toContain("no payment for payment_intent pi_missing");
-    expect(finalize.find((f) => f.id === "e2")?.status).toBe("processed");
+    // e1's update bumped attempts + recorded the error but did NOT set status.
+    const retryUpdate = callsMatching(
+      pool.calls,
+      "update public.stripe_events\n       set attempts",
+    ).find((call) => (call.values ?? [])[2] === "e1");
+    expect(retryUpdate).toBeDefined();
+    expect((retryUpdate?.values ?? [])[0]).toBe(1); // attempts → 1
+    expect(String((retryUpdate?.values ?? [])[1])).toContain("no payment for payment_intent pi_missing");
+    // No dead-letter alert on the first attempt.
+    expect(callsMatching(pool.calls, "insert into public.alerts")).toHaveLength(0);
 
-    // The second event's money transition still ran.
+    // The second event's money transition still ran (error isolation preserved).
     const okUpdate = callsMatching(pool.calls, "update public.payments").find(
       (call) => (call.values ?? [])[1] === "pi_ok",
     );
     expect(okUpdate).toBeDefined();
+  });
+
+  it("dead-letters to 'error' + a critical alert after the max attempts", async () => {
+    const pool = createBillingPool((text) => {
+      if (text.includes("from public.stripe_events")) {
+        return {
+          rows: [
+            // Already retried 4×; this 5th failure hits maxAttempts (default 5).
+            eventRow("e9", "evt_dead", paymentEvent("evt_dead", "pi_gone", "payment_intent.succeeded"), {
+              attempts: 4,
+              accountId: "acct_123",
+            }),
+          ],
+        };
+      }
+      // pi_gone → still no payment row (truly stranded).
+      return undefined;
+    });
+
+    const outcomes = await runInbox(pool, { now: () => NOW });
+
+    expect(outcomes[0]).toMatchObject({ eventId: "evt_dead", status: "error" });
+    // Terminal 'error' set on the event.
+    const deadUpdate = callsMatching(pool.calls, "set status = 'error'").find(
+      (call) => (call.values ?? [])[3] === "e9",
+    );
+    expect(deadUpdate).toBeDefined();
+    expect((deadUpdate?.values ?? [])[0]).toBe(5); // attempts → 5
+    // A critical operator alert is raised (tenant resolved via the account).
+    const alert = callsMatching(pool.calls, "insert into public.alerts")[0];
+    expect(alert).toBeDefined();
+    expect((alert?.values ?? [])[0]).toBe("acct_123"); // resolved via stripe_accounts
   });
 });

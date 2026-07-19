@@ -63,6 +63,10 @@ describe("migration 0034 — payment-intent + refund RPCs", () => {
     // The succeeded precondition + refundable ceiling.
     expect(body).toContain("only a succeeded payment can be refunded");
     expect(body).toContain("refund exceeds refundable amount");
+    // The over-refund TOCTOU fix (review): the payment row is locked FOR UPDATE
+    // so concurrent refunds on the same payment serialize and recompute the
+    // ceiling — two partials cannot together exceed the original.
+    expect(body).toMatch(/from public\.payments\s+where tenant_id = p_tenant and id = p_payment\s+for update/);
     // The invariant, proven at the text level: no payment status write anywhere
     // in the refund RPC (the webhook/inbox flips it).
     expect(body).not.toMatch(/update\s+public\.payments/);
