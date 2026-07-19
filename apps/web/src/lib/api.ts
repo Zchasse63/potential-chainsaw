@@ -99,3 +99,25 @@ export async function postEnvelope(
     body: JSON.stringify(body),
   });
 }
+
+/**
+ * PATCH a mutation. Same money-action discipline as postEnvelope: every
+ * mutation carries a client-generated Idempotency-Key (the PATCH authoring
+ * routes in apps/api enforce requireIdempotencyKey), and there is NO optimistic
+ * success — the caller reflects the change only after the confirmed envelope
+ * returns.
+ */
+export async function patchEnvelope(
+  path: string,
+  accessToken: string,
+  body: unknown,
+): Promise<unknown> {
+  return requestEnvelope(path, accessToken, {
+    method: "PATCH",
+    headers: {
+      "content-type": "application/json",
+      [IDEMPOTENCY_KEY_HEADER]: crypto.randomUUID(),
+    },
+    body: JSON.stringify(body),
+  });
+}
