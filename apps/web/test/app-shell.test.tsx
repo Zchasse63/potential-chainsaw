@@ -52,6 +52,7 @@ describe("AppShell", () => {
       "$Payments",
       "◎Staff",
       "§Waivers",
+      "⚑Setup",
     ]);
     expect(screen.getByRole("link", { name: "Marketing" }).getAttribute("href")).toBe("/marketing");
     expect(screen.getByRole("link", { name: "Ask" }).getAttribute("href")).toBe("/ask");
@@ -60,6 +61,7 @@ describe("AppShell", () => {
     expect(screen.getByRole("link", { name: "Payments" }).getAttribute("href")).toBe("/payments");
     expect(screen.getByRole("link", { name: "Staff" }).getAttribute("href")).toBe("/staff");
     expect(screen.getByRole("link", { name: "Waivers" }).getAttribute("href")).toBe("/waivers");
+    expect(screen.getByRole("link", { name: "Setup" }).getAttribute("href")).toBe("/setup");
   });
 
   it("gives front-desk the POS till but not Payments, Staff, Retail, or Waivers", () => {
@@ -75,5 +77,6 @@ describe("AppShell", () => {
     expect(screen.queryByRole("link", { name: "Staff" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Retail" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Waivers" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Setup" })).toBeNull();
   });
 });
