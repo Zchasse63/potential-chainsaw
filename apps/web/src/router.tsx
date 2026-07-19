@@ -10,6 +10,8 @@ import { ImportRoute } from "./routes/import.jsx";
 import { TodayRoute } from "./routes/today.jsx";
 import { ScheduleRoute } from "./routes/schedule.jsx";
 import { MarketingRoute } from "./routes/marketing.jsx";
+import { PaymentsRoute } from "./routes/payments.jsx";
+import { PosRoute } from "./routes/pos.jsx";
 import { RetailRoute } from "./routes/retail.jsx";
 import { StaffRoute } from "./routes/staff.jsx";
 import { WaiversRoute } from "./routes/waivers.jsx";
@@ -93,6 +95,18 @@ const retailRoute = createRoute({
   component: RetailRoute,
 });
 
+const posRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/pos",
+  component: PosRoute,
+});
+
+const paymentsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/payments",
+  component: PaymentsRoute,
+});
+
 const staffRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/staff",
@@ -114,6 +128,8 @@ const routeTree = rootRoute.addChildren([
   healthRoute,
   importRoute,
   retailRoute,
+  posRoute,
+  paymentsRoute,
   staffRoute,
   waiversRoute,
 ]);

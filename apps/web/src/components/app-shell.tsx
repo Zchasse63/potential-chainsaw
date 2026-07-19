@@ -123,7 +123,7 @@ function RetailNavIcon() {
   );
 }
 
-function useIsOwnerOrManager(): boolean {
+function useHasAnyRole(...roles: string[]): boolean {
   const auth = useAuth();
   const access = useQuery({
     queryKey: ["auth", "me"],
@@ -133,7 +133,11 @@ function useIsOwnerOrManager(): boolean {
   });
   if (access.status !== "success") return false;
   const tenants = (access.data as { data?: { tenants?: { role?: string }[] } }).data?.tenants ?? [];
-  return tenants.some((tenant) => tenant.role === "owner" || tenant.role === "manager");
+  return tenants.some((tenant) => tenant.role !== undefined && roles.includes(tenant.role));
+}
+
+function useIsOwnerOrManager(): boolean {
+  return useHasAnyRole("owner", "manager");
 }
 
 /** Retail is owner/manager only (UX ruling 9: a nav item appears with its feature). */
@@ -144,6 +148,38 @@ function RetailNavLink() {
       <Link to="/retail" className={NAV_LINK_BASE} activeProps={{ className: NAV_LINK_ACTIVE }}>
         <RetailNavIcon />
         Retail
+      </Link>
+    </li>
+  );
+}
+
+/** POS rail item — the cash till. Owner/manager/front_desk (UX ruling 9 +
+ * unit 5.8: front-desk sees the POS screen but not Payments). */
+function PosNavLink() {
+  if (!useHasAnyRole("owner", "manager", "front_desk")) return null;
+  return (
+    <li>
+      <Link to="/pos" className={NAV_LINK_BASE} activeProps={{ className: NAV_LINK_ACTIVE }}>
+        <span aria-hidden="true" className="font-mono text-icon-inactive">
+          ◧
+        </span>
+        Point of sale
+      </Link>
+    </li>
+  );
+}
+
+/** Payments rail item — charges, refunds, and the dunning queue. Owner/manager
+ * only; front-desk takes cash at the POS but does not see the money surface. */
+function PaymentsNavLink() {
+  if (!useIsOwnerOrManager()) return null;
+  return (
+    <li>
+      <Link to="/payments" className={NAV_LINK_BASE} activeProps={{ className: NAV_LINK_ACTIVE }}>
+        <span aria-hidden="true" className="font-mono text-icon-inactive">
+          $
+        </span>
+        Payments
       </Link>
     </li>
   );
@@ -229,13 +265,17 @@ export function AppShell({ children }: { children: ReactNode }) {
             ? "Briefing archive"
             : pathname.startsWith("/retail")
               ? "Retail"
-              : pathname.startsWith("/staff")
-                ? "Staff"
-                : pathname.startsWith("/waivers")
-                  ? "Waivers"
-                : pathname.startsWith("/health")
-                  ? "Health"
-                  : "Today";
+              : pathname.startsWith("/pos")
+                ? "Point of sale"
+                : pathname.startsWith("/payments")
+                  ? "Payments"
+                  : pathname.startsWith("/staff")
+                    ? "Staff"
+                    : pathname.startsWith("/waivers")
+                      ? "Waivers"
+                      : pathname.startsWith("/health")
+                        ? "Health"
+                        : "Today";
   return (
     <div className="flex min-h-screen bg-surface-app">
       <aside className="flex w-rail shrink-0 flex-col border-r border-hairline bg-surface-card">
@@ -296,6 +336,8 @@ export function AppShell({ children }: { children: ReactNode }) {
               </Link>
             </li>
             <RetailNavLink />
+            <PosNavLink />
+            <PaymentsNavLink />
             <StaffNavLink />
             <WaiversNavLink />
           </ul>
