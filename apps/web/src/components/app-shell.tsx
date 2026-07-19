@@ -113,6 +113,38 @@ function StaffNavLink() {
   );
 }
 
+function RetailNavIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-4 w-4 text-icon-inactive">
+      <path d="M3 5.5 4 3h8l1 2.5" />
+      <path d="M2.5 5.5h11V12a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 12V5.5Z" />
+      <path d="M6 8.5h4" />
+    </svg>
+  );
+}
+
+/** Retail is owner/manager only (UX ruling 9: a nav item appears with its feature). */
+function RetailNavLink() {
+  const auth = useAuth();
+  const access = useQuery({
+    queryKey: ["auth", "me"],
+    enabled: auth.accessToken !== null,
+    queryFn: () => fetchEnvelope("/auth/me", auth.accessToken as string),
+    retry: false,
+  });
+  if (access.status !== "success") return null;
+  const tenants = (access.data as { data?: { tenants?: { role?: string }[] } }).data?.tenants ?? [];
+  if (!tenants.some((tenant) => tenant.role === "owner" || tenant.role === "manager")) return null;
+  return (
+    <li>
+      <Link to="/retail" className={NAV_LINK_BASE} activeProps={{ className: NAV_LINK_ACTIVE }}>
+        <RetailNavIcon />
+        Retail
+      </Link>
+    </li>
+  );
+}
+
 /**
  * Open-exception count badge (design guide §8 count badges), read from the
  * /health envelope's quarantine summary — no extra fetch. Quiet when the
@@ -174,11 +206,13 @@ export function AppShell({ children }: { children: ReactNode }) {
           ? "Schedule"
           : pathname.startsWith("/briefing/archive")
             ? "Briefing archive"
-            : pathname.startsWith("/staff")
-              ? "Staff"
-              : pathname.startsWith("/health")
-                ? "Health"
-                : "Today";
+            : pathname.startsWith("/retail")
+              ? "Retail"
+              : pathname.startsWith("/staff")
+                ? "Staff"
+                : pathname.startsWith("/health")
+                  ? "Health"
+                  : "Today";
   return (
     <div className="flex min-h-screen bg-surface-app">
       <aside className="flex w-rail shrink-0 flex-col border-r border-hairline bg-surface-card">
@@ -238,6 +272,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 Health
               </Link>
             </li>
+            <RetailNavLink />
             <StaffNavLink />
           </ul>
         </nav>
