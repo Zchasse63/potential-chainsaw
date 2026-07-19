@@ -2,47 +2,53 @@
 --
 -- This migration builds ON unit 6.1's native booking engine (migration 0040:
 -- booking_holds, bookings, app.hold_session / app.book_session / app.cancel_booking /
--- app.session_availability). 6.1 may not be merged into this worktree yet — 0041
--- applies AFTER 0040, so every reference below resolves at apply time even though
--- it does not resolve here. The 6.1 contract this unit codes against (record it so
--- a merge can reconcile any drift; the availability shape is load-bearing):
+-- public.session_availability). 0041 applies AFTER 0040. The 6.1 contract this unit
+-- codes against — RECONCILED to 0040's ACTUAL shapes (the crashed run drafted 0041
+-- against an imagined contract; the availability signature, book_session shape, and
+-- booking_holds columns were all wrong and are corrected here — the 5.3/5.4 drift
+-- lesson made durable). The load-bearing facts:
 --
---   public.bookings
+--   public.bookings (0040)
 --     (id, tenant_id, session_id → public.scheduled_sessions, person_id,
---      booked_by_person_id, status text — the machine MUST include 'booked',
---      'checked_in', 'cancelled', 'no_show' (this unit drives the last three);
---      via/channel, payment_kind, idempotency_key, policy_version, hold_id,
---      created_at, updated_at, unique(tenant_id, id)).
---     This unit DEFENSIVELY `add column if not exists` for checked_in_at /
---     no_show_at / detail so it never depends on 6.1 having named them — if 6.1
---     already declared them the adds are no-ops.
+--      status text in ('booked','cancelled','checked_in','no_show') — this unit
+--      drives the last three; booked_via text in
+--      ('desk','member_web','member_ios','member_android','import'),
+--      credit_entry_id, hold_id uuid, idempotency_key, detail jsonb, checked_in_at,
+--      created_at, updated_at, unique(tenant_id, id), unique(tenant_id, idempotency_key)).
+--     0040 already declares checked_in_at + detail; this unit DEFENSIVELY
+--     `add column if not exists` no_show_at (+ the other two as no-ops).
 --
---   public.booking_holds
+--   public.booking_holds (0040)
 --     (id, tenant_id, session_id, person_id, expires_at timestamptz,
---      status text in ('active','consumed','released','expired') default 'active',
---      purpose text, idempotency_key text, created_at). session_availability
---      counts an 'active' hold whose expires_at is in the future as consuming a seat.
+--      frozen boolean default false, created_at; unique(tenant_id, session_id,
+--      person_id); unique(tenant_id, id)). Holds are EPHEMERAL — there is NO status
+--      column: a hold is DELETED to release/consume it. Availability counts a hold
+--      as consuming a seat while (frozen OR expires_at > now). The waitlist offer
+--      reserves its seat with a normal 0040 hold whose expires_at IS the offer
+--      window; releasing an offer DELETES the hold.
 --
---   app.session_availability(p_tenant uuid, p_session uuid, p_now timestamptz)
---       returns int  — capacity − active bookings − active holds, readiness-aware.
---       0 means FULL. Waitlisting is legal ONLY when this is 0.
+--   app.open_seats(p_tenant, p_session, p_now) returns int  — DEFINED BELOW (0040
+--      exposes only public.session_availability(tenant, from, to) over a RANGE,
+--      which is the wrong shape for a single-session guard). capacity − active
+--      bookings − live holds; <= 0 means FULL. Waitlisting is legal ONLY when full.
 --
---   app.book_session(p_tenant uuid, p_session uuid, p_person uuid,
---       p_booked_by uuid, p_actor uuid, p_idempotency_key text,
---       p_hold uuid default null, p_via text default 'front_desk') returns uuid
+--   app.book_session(p_tenant, p_person, p_session, p_actor, p_idempotency_key,
+--       p_via, p_hold default null, p_use_credit default true) returns JSONB
+--       {booking_id, credit_entry_id?, replayed?}
 --       — enforces the booking-time WAIVER block (via public.current_waiver_status),
 --       capacity/exclusion (DB-enforced no-oversell), debits the append-only
---       credit_ledger, CONSUMES p_hold when supplied. Idempotent on
---       (tenant, idempotency_key). This unit's promotion-accept path books through
---       it, so the waiver is enforced there — joining a waitlist never is.
+--       credit_ledger, CONSUMES (deletes) p_hold when supplied. Idempotent on
+--       (tenant, idempotency_key). p_via MUST be one of 0040's channels ('desk',
+--       'member_*','import') — 'front_desk' is NOT valid there. This unit's
+--       promotion-accept path books through it, so the waiver is enforced there —
+--       joining a waitlist never is.
 --
---   app.cancel_booking(p_tenant, p_booking, p_actor, p_idempotency_key)
+--   app.cancel_booking(p_tenant, p_booking, p_actor, p_idempotency_key, p_now)
 --       — frees a seat by setting bookings.status = 'cancelled'. The waitlist
---       promotion runs off THAT transition (see the trigger below), so this unit
---       does NOT rewrite cancel_booking's body — copying an unavailable body would
---       manufacture drift. If 6.1's cancel additionally calls app.promote_waitlist
---       in its tail (guarded on pg_proc), the availability guard inside
---       promote_waitlist makes the double invocation an idempotent no-op.
+--       promotion runs off THAT transition (the AFTER UPDATE trigger below), so this
+--       unit does NOT rewrite cancel_booking's body — copying it would manufacture
+--       exactly the drift we keep catching. promote_waitlist is availability-guarded,
+--       so it stays an idempotent no-op even if a future cancel tail also calls it.
 --
 -- INVARIANTS honored: every mutation is a definer RPC that re-verifies tenancy
 -- in-body with an idempotency key; RLS + policy on the new tenant table; the
@@ -56,6 +62,43 @@
 alter table public.bookings add column if not exists checked_in_at timestamptz;
 alter table public.bookings add column if not exists no_show_at    timestamptz;
 alter table public.bookings add column if not exists detail         jsonb not null default '{}'::jsonb;
+
+-- ===========================================================================
+-- 0b) app.open_seats — single-session availability guard (0040 exposes only the
+--     RANGE-shaped public.session_availability(tenant, from, to); this unit needs
+--     a scalar seat count for ONE session under a caller-held session lock). It
+--     mirrors 0040's exact capacity math: active bookings (booked|checked_in) plus
+--     LIVE holds (frozen OR unexpired) subtracted from capacity. <= 0 means FULL.
+--     Internal — the definer callers below run as the owner; no client grant.
+-- ===========================================================================
+create or replace function app.open_seats(
+  p_tenant  uuid,
+  p_session uuid,
+  p_now     timestamptz
+)
+returns int
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select s.capacity
+    - coalesce((
+        select count(*) from public.bookings b
+        where b.tenant_id = p_tenant and b.session_id = p_session
+          and b.status in ('booked', 'checked_in')
+      ), 0)
+    - coalesce((
+        select count(*) from public.booking_holds h
+        where h.tenant_id = p_tenant and h.session_id = p_session
+          and (h.frozen or h.expires_at > p_now)
+      ), 0)
+  from public.scheduled_sessions s
+  where s.tenant_id = p_tenant and s.id = p_session;
+$$;
+
+comment on function app.open_seats(uuid, uuid, timestamptz) is
+  'Scalar seat availability for ONE session (0040 only ships the range-shaped public.session_availability). capacity − active bookings − live holds; <= 0 is FULL. Used by app.join_waitlist (full-required) and app.promote_waitlist (seat-open guard). Internal; the definer callers own it.';
 
 -- ===========================================================================
 -- 1) waitlist_entries — FIFO queue per session.
@@ -163,8 +206,8 @@ begin
   end if;
 
   -- Waitlisting an OPEN session is a defect — the seat should be BOOKED, not queued.
-  v_avail := app.session_availability(p_tenant, p_session, now());
-  if v_avail <> 0 then
+  v_avail := app.open_seats(p_tenant, p_session, now());
+  if v_avail > 0 then
     raise exception 'session is not full — book the open seat instead of waitlisting'
       using errcode = '22023';
   end if;
@@ -229,7 +272,7 @@ begin
   -- No open seat ⇒ nothing to offer. This is the idempotency guard: an offer
   -- hold created by an earlier invocation consumes availability, so a repeat
   -- call (e.g. cancel tail + trigger) offers nobody.
-  if app.session_availability(p_tenant, p_session, p_now) <= 0 then
+  if app.open_seats(p_tenant, p_session, p_now) <= 0 then
     return null;
   end if;
 
@@ -246,16 +289,17 @@ begin
 
   v_expires := p_now + make_interval(mins => p_offer_window_minutes);
 
-  -- The offer HOLD reserves the seat (6.1 availability counts active holds).
-  -- Inserted directly — the sweep that promotes the next waiter runs headless
-  -- (no JWT), and app.hold_session enforces auth.uid() = actor which no service
-  -- context can satisfy. This definer already re-verified tenancy, honoring the
-  -- same server-hold invariant. TTL = the offer window.
-  insert into public.booking_holds
-    (tenant_id, session_id, person_id, expires_at, status, purpose, idempotency_key)
-  values
-    (p_tenant, p_session, v_entry.person_id, v_expires, 'active', 'waitlist_offer',
-     'waitlist_offer:' || v_entry.id::text)
+  -- The offer HOLD reserves the seat (0040 availability counts a hold while
+  -- frozen OR unexpired). Inserted directly — the sweep that promotes the next
+  -- waiter runs headless (no JWT), and app.hold_session enforces auth.uid() =
+  -- actor which no service context can satisfy. This definer already re-verified
+  -- tenancy, honoring the same server-hold invariant. expires_at IS the offer
+  -- window. 0040's one-live-hold-per-(session,person) unique is upserted (a fresh
+  -- offer resets any stale hold for this person; frozen is cleared).
+  insert into public.booking_holds (tenant_id, session_id, person_id, expires_at, frozen)
+  values (p_tenant, p_session, v_entry.person_id, v_expires, false)
+  on conflict (tenant_id, session_id, person_id)
+  do update set expires_at = excluded.expires_at, frozen = false
   returning id into v_hold_id;
 
   update public.waitlist_entries we
@@ -330,7 +374,7 @@ create or replace function app.accept_waitlist_offer(
   p_entry           uuid,
   p_actor           uuid,
   p_idempotency_key text,
-  p_via             text default 'front_desk'
+  p_via             text default 'desk'
 )
 returns uuid
 language plpgsql
@@ -340,6 +384,7 @@ as $$
 declare
   v_entry   public.waitlist_entries;
   v_booking uuid;
+  v_result  jsonb;
 begin
   if (select auth.uid()) is null or (select auth.uid()) <> p_actor then
     raise exception 'accept actor must be the authenticated user' using errcode = '42501';
@@ -371,12 +416,18 @@ begin
     raise exception 'the offer window has expired' using errcode = '22023';
   end if;
 
-  -- Book through 6.1's RPC — waiver, capacity/exclusion, credit debit, and hold
-  -- consumption all live there. The person books for themselves (booked_by = person).
-  v_booking := app.book_session(
-    p_tenant, v_entry.session_id, v_entry.person_id, v_entry.person_id,
-    p_actor, p_idempotency_key, v_entry.hold_id, p_via
+  -- Book through 6.1's RPC (0040 shape: p_tenant, p_person, p_session, p_actor,
+  -- p_idempotency_key, p_via, p_hold, p_use_credit → JSONB). Waiver, capacity/
+  -- exclusion, the credit debit, and hold consumption (delete) all live there. The
+  -- person books for themselves; the offer hold is passed so book_session bypasses
+  -- the capacity re-count (the seat was reserved) and consumes it. p_via must be a
+  -- 0040 channel — the SQL wrapper defaults 'desk'; book_session rejects anything
+  -- else with 22023, surfaced to the caller unchanged.
+  v_result := app.book_session(
+    p_tenant, v_entry.person_id, v_entry.session_id, p_actor,
+    p_idempotency_key, p_via, v_entry.hold_id, true
   );
+  v_booking := (v_result ->> 'booking_id')::uuid;
 
   update public.waitlist_entries we
   set status = 'promoted'
@@ -426,11 +477,12 @@ begin
     raise exception 'waitlist entry has no live offer to decline' using errcode = '22023';
   end if;
 
-  -- Release the offer hold (frees the seat) and mark the entry declined.
+  -- Release the offer hold (frees the seat) and mark the entry declined. 0040
+  -- holds are ephemeral — releasing DELETES the hold (there is no status column),
+  -- which immediately restores availability for the cascade below.
   if v_entry.hold_id is not null then
-    update public.booking_holds bh
-    set status = 'released'
-    where bh.tenant_id = p_tenant and bh.id = v_entry.hold_id and bh.status = 'active';
+    delete from public.booking_holds bh
+    where bh.tenant_id = p_tenant and bh.id = v_entry.hold_id;
   end if;
 
   update public.waitlist_entries we
@@ -459,36 +511,33 @@ declare
   v_guard   int := 0;
 begin
   loop
-    -- Next lapsed offer, OR a declined entry whose hold was left active (a
-    -- defensive mop-up for a decline that could not cascade in its own txn).
+    -- Next lapsed offer, FIFO within each session. A newly promoted entry gets an
+    -- offer_expires_at in the FUTURE (p_now + window) so it is never re-selected
+    -- in the same pass — the loop terminates without the guard, which is only a
+    -- belt-and-suspenders bound against a pathological data state.
     select we.* into v_entry
     from public.waitlist_entries we
-    where (
-        (we.status = 'offered' and we.offer_expires_at is not null and we.offer_expires_at <= p_now)
-        or (we.status = 'declined' and we.hold_id is not null
-            and exists (select 1 from public.booking_holds bh
-                        where bh.id = we.hold_id and bh.status = 'active'))
-      )
+    where we.status = 'offered'
+      and we.offer_expires_at is not null
+      and we.offer_expires_at <= p_now
     order by we.tenant_id, we.session_id, we.position
     limit 1
     for update skip locked;
     exit when not found;
 
-    -- Bound the cascade so a pathological data state cannot spin forever.
     v_guard := v_guard + 1;
     exit when v_guard > 10000;
 
+    -- Release the lapsed hold (0040 holds are ephemeral — DELETE frees the seat)
+    -- and mark the offer expired.
     if v_entry.hold_id is not null then
-      update public.booking_holds bh
-      set status = case when bh.status = 'active' then 'expired' else bh.status end
+      delete from public.booking_holds bh
       where bh.tenant_id = v_entry.tenant_id and bh.id = v_entry.hold_id;
     end if;
 
-    if v_entry.status = 'offered' then
-      update public.waitlist_entries we
-      set status = 'expired'
-      where we.id = v_entry.id;
-    end if;
+    update public.waitlist_entries we
+    set status = 'expired'
+    where we.id = v_entry.id;
 
     -- The seat is free again: offer it to the next waiter.
     perform app.promote_waitlist(v_entry.tenant_id, v_entry.session_id, p_now);
@@ -646,7 +695,7 @@ create or replace function public.join_waitlist(
 as $$ select app.join_waitlist(p_tenant, p_session, p_person, p_actor, p_idempotency_key); $$;
 
 create or replace function public.accept_waitlist_offer(
-  p_tenant uuid, p_entry uuid, p_actor uuid, p_idempotency_key text, p_via text default 'front_desk'
+  p_tenant uuid, p_entry uuid, p_actor uuid, p_idempotency_key text, p_via text default 'desk'
 ) returns uuid language sql security invoker set search_path = ''
 as $$ select app.accept_waitlist_offer(p_tenant, p_entry, p_actor, p_idempotency_key, p_via); $$;
 
@@ -692,6 +741,10 @@ grant select on public.waitlist_entries to authenticated, service_role;
 -- 13) Grants — member RPCs to authenticated + service_role; the sweeps + the
 --     internal promote helper to service_role only.
 -- ===========================================================================
+-- app.open_seats is an internal availability helper: the definer callers run as
+-- the owner, so no client/service grant is needed (strip the PUBLIC default).
+revoke all on function app.open_seats(uuid, uuid, timestamptz) from public;
+
 revoke all on function app.join_waitlist(uuid, uuid, uuid, uuid, text) from public;
 revoke all on function app.accept_waitlist_offer(uuid, uuid, uuid, text, text) from public;
 revoke all on function app.decline_waitlist_offer(uuid, uuid, uuid) from public;
