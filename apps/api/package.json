@@ -22,6 +22,7 @@
     "@kelo/contracts": "workspace:*",
     "@kelo/comms": "workspace:*",
     "@kelo/db": "workspace:*",
+    "@kelo/stripe": "workspace:*",
     "@sentry/node": "10.66.0",
     "@supabase/supabase-js": "2.110.7",
     "hono": "4.12.30",

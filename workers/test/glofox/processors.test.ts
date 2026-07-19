@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { processors } from "../../src/processors.js";
 import {
+  BILLING_PROCESS_INBOX_KIND,
+  BILLING_PROCESS_OUTBOX_KIND,
   createGlofoxProcessors,
   GLOFOX_DETECT_DELETIONS_KIND,
   GLOFOX_RECONCILE_KIND,
@@ -37,6 +39,11 @@ describe("registry", () => {
   it("registers the unit-1.5 trust-engine kinds", () => {
     expect(processors[GLOFOX_RECONCILE_KIND]).toBeTypeOf("function");
     expect(processors[GLOFOX_DETECT_DELETIONS_KIND]).toBeTypeOf("function");
+  });
+
+  it("registers the unit-5.3 billing spine drains", () => {
+    expect(processors[BILLING_PROCESS_INBOX_KIND]).toBeTypeOf("function");
+    expect(processors[BILLING_PROCESS_OUTBOX_KIND]).toBeTypeOf("function");
   });
 });
 
@@ -117,16 +124,27 @@ describe("glofox.sync.all fan-out", () => {
     });
 
     const enqueues = callsMatching(pool.calls, "app.enqueue_job");
-    expect(enqueues).toHaveLength(8);
+    // 7 per-tenant loop calls + 1 ordered statement (detect_deletions first) + 2
+    // GLOBAL billing drains.
+    expect(enqueues).toHaveLength(10);
     const kinds = enqueues.map((call) => call.values?.[0]);
     expect(kinds).toEqual([
       ...GLOFOX_SYNC_KINDS,
       GLOFOX_RECONCILE_KIND,
       GLOFOX_DETECT_DELETIONS_KIND,
+      BILLING_PROCESS_INBOX_KIND,
+      BILLING_PROCESS_OUTBOX_KIND,
     ]);
-    for (const call of enqueues) {
+    // The glofox/derivation kinds are tenant-scoped with an hour+tenant key.
+    for (const call of enqueues.slice(0, 8)) {
       expect(call.values?.[2]).toBe(TENANT);
       expect(String(call.values?.[3])).toBe(`${String(call.values?.[0])}:${TENANT}:2026-07-17T23`);
+    }
+    // The billing drains are GLOBAL: tenant NULL (SQL literal, not a bind param)
+    // and a tenant-independent hour key, so every tenant's fan-out converges on
+    // ONE drain job per bucket.
+    for (const call of enqueues.slice(8)) {
+      expect(String(call.values?.[2])).toBe(`${String(call.values?.[0])}:2026-07-17T23`);
     }
   });
 
