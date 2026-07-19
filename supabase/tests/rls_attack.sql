@@ -1145,6 +1145,124 @@ begin
 end
 $$;
 
+-- ---------------------------------------------------------------------------
+-- (28) PAYMENT-INTENT + REFUND RPCs (migration 0034): the intent layer that
+--      feeds the outbox. Proves cross-tenant + actor-binding refusal,
+--      (tenant_id, idempotency_key) idempotency (a duplicate returns the same
+--      result and never writes a second command), the refundable ceiling + the
+--      succeeded precondition, and — the money invariant — that create_refund
+--      NEVER flips the payment status (the webhook is the confirmation
+--      authority). Reuses block-27 seeds (customer, the processing payment);
+--      seeds one succeeded payment (superuser) for the refund path.
+--      (invariant #5/#7: every new RPC gets a cross-tenant attack test.)
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ua uuid; v_ub uuid;
+  v_cust_b uuid; v_succ uuid; v_proc uuid;
+  v_pay uuid; v_pay2 uuid; v_cmd uuid; v_cmd2 uuid;
+  v_status text; n int; raised boolean;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ua from app_test.ctx where key = 'user_a';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+  select id into v_cust_b from public.customers where tenant_id = v_b limit 1;
+  select id into v_proc from public.payments
+    where tenant_id = v_b and status = 'processing' limit 1;
+  insert into public.payments (tenant_id, customer_id, amount_cents, currency, status)
+    values (v_b, v_cust_b, 8000, 'usd', 'succeeded') returning id into v_succ;
+
+  perform app_test.become(v_ub);
+
+  -- Positive: uB (owner of B) records an intent for her own tenant + customer.
+  v_pay := app.create_payment_intent(v_b, v_cust_b, 5000, 'usd', 'pi-b-1', v_ub);
+  perform app_test.assert(v_pay is not null, '(28) create_payment_intent returned null');
+  select count(*) into n from public.stripe_commands
+    where tenant_id = v_b and idempotency_key = 'pi-b-1' and kind = 'create_payment_intent';
+  perform app_test.assert(n = 1, '(28) create_payment_intent did not write exactly one command');
+  select count(*) into n from public.payments
+    where tenant_id = v_b and id = v_pay and status = 'requires_payment';
+  perform app_test.assert(n = 1,
+    '(28) create_payment_intent did not write a requires_payment payment');
+
+  -- Idempotent on (tenant, key): a duplicate returns the SAME payment, no 2nd command.
+  v_pay2 := app.create_payment_intent(v_b, v_cust_b, 5000, 'usd', 'pi-b-1', v_ub);
+  perform app_test.assert(v_pay2 = v_pay, '(28) duplicate key returned a different payment');
+  select count(*) into n from public.stripe_commands
+    where tenant_id = v_b and idempotency_key = 'pi-b-1' and kind = 'create_payment_intent';
+  perform app_test.assert(n = 1, '(28) duplicate create_payment_intent wrote a second command');
+
+  -- Cross-tenant: uB cannot record an intent for tenant A.
+  raised := false;
+  begin
+    perform app.create_payment_intent(v_a, v_cust_b, 5000, 'usd', 'pi-x', v_ub);
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(28) uB could create_payment_intent for tenant A');
+
+  -- A customer that is not tenant B's is rejected.
+  raised := false;
+  begin
+    perform app.create_payment_intent(v_b, gen_random_uuid(), 5000, 'usd', 'pi-y', v_ub);
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(28) create_payment_intent accepted a foreign customer');
+
+  -- Actor spoof: the actor must be the authenticated caller.
+  raised := false;
+  begin
+    perform app.create_payment_intent(v_b, v_cust_b, 5000, 'usd', 'pi-z', v_ua);
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(28) create_payment_intent accepted a spoofed actor');
+
+  -- Refund a succeeded payment within the refundable ceiling.
+  v_cmd := app.create_refund(v_b, v_succ, 3000, 'rf-b-1', v_ub, 'partial');
+  perform app_test.assert(v_cmd is not null, '(28) create_refund returned null');
+  select count(*) into n from public.stripe_commands
+    where tenant_id = v_b and idempotency_key = 'rf-b-1' and kind = 'create_refund';
+  perform app_test.assert(n = 1, '(28) create_refund did not write exactly one command');
+
+  -- THE money invariant: the payment status is untouched — the webhook flips it.
+  select status into v_status from public.payments where id = v_succ;
+  perform app_test.assert(v_status = 'succeeded',
+    '(28) create_refund flipped the payment status — only the webhook is the authority');
+
+  -- Idempotent refund: a duplicate key returns the same command, no 2nd command.
+  v_cmd2 := app.create_refund(v_b, v_succ, 3000, 'rf-b-1', v_ub, 'partial');
+  perform app_test.assert(v_cmd2 = v_cmd, '(28) duplicate refund key returned a different command');
+  select count(*) into n from public.stripe_commands
+    where tenant_id = v_b and idempotency_key = 'rf-b-1' and kind = 'create_refund';
+  perform app_test.assert(n = 1, '(28) duplicate create_refund wrote a second command');
+
+  -- Over-refund: remaining is 8000 - 3000 = 5000; 6000 must be refused.
+  raised := false;
+  begin
+    perform app.create_refund(v_b, v_succ, 6000, 'rf-b-2', v_ub, null);
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(28) create_refund allowed exceeding the refundable amount');
+
+  -- A non-succeeded (processing) payment cannot be refunded.
+  raised := false;
+  begin
+    perform app.create_refund(v_b, v_proc, 100, 'rf-proc', v_ub, null);
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(28) create_refund allowed refunding a non-succeeded payment');
+
+  -- Cross-tenant refund is refused.
+  raised := false;
+  begin
+    perform app.create_refund(v_a, v_succ, 100, 'rf-x', v_ub, null);
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(28) uB could create_refund against tenant A');
+end
+$$;
+
 do $$
 declare
   n int;

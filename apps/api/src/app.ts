@@ -20,6 +20,7 @@ import { registerScheduleRoutes } from "./routes/schedule.js";
 import { registerSchedulingAuthoringRoutes } from "./routes/scheduling-authoring.js";
 import { registerStaffRoutes } from "./routes/staff.js";
 import { registerMarketingRoutes } from "./routes/marketing.js";
+import { registerPaymentRoutes } from "./routes/payments.js";
 import { registerPeopleRoutes } from "./routes/people.js";
 import { registerRetailRoutes } from "./routes/retail.js";
 import { registerWaiverRoutes } from "./routes/waivers.js";
@@ -32,6 +33,15 @@ export interface StaffDeps {
   createStepUpClient?: () => KeloSupabaseClient;
 }
 
+export interface BillingDeps {
+  /**
+   * Service-role client factory the persisted idempotency middleware uses to
+   * reserve/store/release the idempotency_keys row on the money routes
+   * (member-SELECT RLS; the service role writes). Tests inject a no-network fake.
+   */
+  createBillingClient?: () => KeloSupabaseClient;
+}
+
 /**
  * The ONE Hono API app (plan-final §1/§3), base path /api/v1.
  *
@@ -39,7 +49,7 @@ export interface StaffDeps {
  * requireAuth → resolveTenant (SOLE source of tenant id) → requireRole →
  * requireIdempotencyKey on mutations.
  */
-export function createApp(deps: AppDeps & WebhookDeps & StaffDeps = {}): Hono<AppEnv> {
+export function createApp(deps: AppDeps & WebhookDeps & StaffDeps & BillingDeps = {}): Hono<AppEnv> {
   const resolved = resolveDeps(deps);
   const app = new Hono<AppEnv>().basePath("/api/v1");
 
@@ -111,6 +121,7 @@ export function createApp(deps: AppDeps & WebhookDeps & StaffDeps = {}): Hono<Ap
   registerRetailRoutes(app, resolved);
   registerWaiverRoutes(app, resolved);
   registerStaffRoutes(app, resolved, deps.env, deps.createStepUpClient);
+  registerPaymentRoutes(app, resolved, deps.env, deps.createBillingClient);
 
   return app;
 }
