@@ -76,12 +76,19 @@ export const paymentStatusSchema = z.enum([
 ]);
 export type PaymentStatus = z.infer<typeof paymentStatusSchema>;
 
+// migration 0039 added public.payments.tender (stripe|cash|gift_card). It is the
+// AUTHORITATIVE tender discriminator — the row is read verbatim; the route no
+// longer guesses tender from (command_id/intent). Backfilled 'stripe'.
+export const paymentTenderSchema = z.enum(["stripe", "cash", "gift_card"]);
+export type PaymentTender = z.infer<typeof paymentTenderSchema>;
+
 export const paymentSchema = z.object({
   id: uuid,
   customer_id: uuid.nullable(),
   amount_cents: z.number().int().nonnegative(),
   currency: z.string(),
   status: paymentStatusSchema,
+  tender: paymentTenderSchema,
   stripe_payment_intent_id: z.string().nullable(),
   command_id: uuid.nullable(),
   created_at: timestamp,
@@ -90,7 +97,7 @@ export const paymentSchema = z.object({
 export type PaymentRow = z.infer<typeof paymentSchema>;
 
 const PAYMENT_COLUMNS =
-  "id, customer_id, amount_cents, currency, status, stripe_payment_intent_id, command_id, created_at, updated_at";
+  "id, customer_id, amount_cents, currency, status, tender, stripe_payment_intent_id, command_id, created_at, updated_at";
 
 /** Member-read list of the tenant's payments, newest first (RLS-scoped). */
 export async function fetchPayments(

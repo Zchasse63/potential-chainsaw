@@ -10,7 +10,6 @@ import {
   createRefund,
   fetchPayment,
   fetchPayments,
-  type PaymentRow,
 } from "../data-payments.js";
 import { ApiError } from "../errors.js";
 import { requireAuth } from "../middleware/auth.js";
@@ -51,23 +50,12 @@ function resolveRefundThreshold(settings: Record<string, unknown> | undefined): 
 }
 
 /**
- * Tender is DERIVED server-side (there is no tender column — a payment is an
- * event, invariant #6). A cash POS sale carries neither a Stripe outbox command
- * nor a payment-intent id; anything with either is a Stripe payment. The
- * browser renders this server-provided value — it never guesses tender from a
- * money row itself.
+ * Tender is the AUTHORITATIVE public.payments.tender column (migration 0039;
+ * stripe|cash|gift_card) — NOT a derivation. The earlier (command_id/intent)
+ * heuristic is superseded: it could not represent a gift-card settlement and
+ * misread a cash sale whose intent id happened to be null. The row is read
+ * verbatim from the select and the browser renders it as-is.
  */
-function tenderOf(payment: PaymentRow): "cash" | "stripe" {
-  return payment.command_id === null && payment.stripe_payment_intent_id === null
-    ? "cash"
-    : "stripe";
-}
-
-type PaymentView = PaymentRow & { tender: "cash" | "stripe" };
-function withTender(payment: PaymentRow): PaymentView {
-  return { ...payment, tender: tenderOf(payment) };
-}
-
 function requireStepUpSecret(env: NodeJS.ProcessEnv): string {
   const secret = env.STEP_UP_SECRET;
   if (secret === undefined || Buffer.byteLength(secret) < 32) {
@@ -119,7 +107,7 @@ export function registerPaymentRoutes(
     return c.json(
       c.var.ok(
         {
-          payments: payments.map(withTender),
+          payments,
           refund_step_up_cents: resolveRefundThreshold(tenant?.settings),
         },
         native,
@@ -151,7 +139,7 @@ export function registerPaymentRoutes(
     const { tenantId } = tenantOf(c);
     const payment = await fetchPayment(userClient, tenantId, id);
     if (payment === null) throw new ApiError(404, "payment_not_found", "payment not found");
-    return c.json(c.var.ok({ payment: withTender(payment) }, native), 200);
+    return c.json(c.var.ok({ payment }, native), 200);
   });
 
   // -- create a payment intent (owner/manager/front_desk take payments) ------
@@ -180,7 +168,7 @@ export function registerPaymentRoutes(
       if (payment === null) {
         throw new Error("createPaymentIntent: payment vanished after insert");
       }
-      return c.json(c.var.ok({ payment: withTender(payment) }, native), 201);
+      return c.json(c.var.ok({ payment }, native), 201);
     },
   );
 

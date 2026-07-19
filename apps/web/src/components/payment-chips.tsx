@@ -89,6 +89,7 @@ export function PaymentStatusChip({ status }: { status: PaymentStatus }) {
 const TENDER: Record<Tender, { marker: string; label: string }> = {
   cash: { marker: "◈", label: "Cash" },
   stripe: { marker: "▤", label: "Card" },
+  gift_card: { marker: "◆", label: "Gift card" },
 };
 
 export function TenderBadge({ tender }: { tender: Tender }) {

@@ -17,17 +17,31 @@ function success(data: unknown): BoundaryQuery {
   return { status: "success", data: { data, meta: META }, isRefetching: false, refetch: vi.fn() };
 }
 
-const SUCCEEDED_PAYMENT = {
+const STRIPE_PAYMENT = {
   id: "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
   customer_id: "cccccccc-1111-4111-8111-cccccccccccc",
   amount_cents: 20000,
   currency: "usd",
   status: "succeeded" as const,
+  stripe_payment_intent_id: "pi_123",
+  command_id: "cmd-1",
+  tender: "stripe" as const,
+  created_at: "2026-07-19T00:00:00.000Z",
+  updated_at: "2026-07-19T00:00:00.000Z",
+};
+
+const CASH_PAYMENT = {
+  ...STRIPE_PAYMENT,
+  id: "aaaaaaaa-2222-4222-8222-aaaaaaaaaaaa",
   stripe_payment_intent_id: null,
   command_id: null,
   tender: "cash" as const,
-  created_at: "2026-07-19T00:00:00.000Z",
-  updated_at: "2026-07-19T00:00:00.000Z",
+};
+
+const GIFT_CARD_PAYMENT = {
+  ...CASH_PAYMENT,
+  id: "aaaaaaaa-3333-4333-8333-aaaaaaaaaaaa",
+  tender: "gift_card" as const,
 };
 
 const DUNNING_ROW = {
@@ -43,15 +57,18 @@ const DUNNING_ROW = {
   occurred_at: "2026-07-19T00:00:00.000Z",
 };
 
-function renderPayments(overrides: Partial<PaymentsScreenProps> = {}) {
+function renderPayments(
+  overrides: Partial<PaymentsScreenProps> = {},
+  payments: unknown[] = [STRIPE_PAYMENT],
+) {
   const onRefund = vi
     .fn()
-    .mockResolvedValue({ command_id: "cmd-1", payment_id: SUCCEEDED_PAYMENT.id, amount_cents: 0, status: "pending" });
+    .mockResolvedValue({ command_id: "cmd-1", payment_id: STRIPE_PAYMENT.id, amount_cents: 0, status: "pending" });
   const onVerifyStepUp = vi
     .fn()
     .mockResolvedValue({ grantToken: "signed-grant", expiresAt: "2026-07-19T12:05:00.000Z" });
   const props: PaymentsScreenProps = {
-    paymentsQuery: success({ payments: [SUCCEEDED_PAYMENT], refund_step_up_cents: 10000 }),
+    paymentsQuery: success({ payments, refund_step_up_cents: 10000 }),
     dunningQuery: success({ dunning: [DUNNING_ROW] }),
     refundThresholdCents: 10000,
     onRefund,
@@ -67,8 +84,8 @@ function selectPayment() {
 }
 
 describe("PaymentsScreen", () => {
-  it("renders the cash tender badge and webhook-confirmed provenance as TEXT (never color alone)", () => {
-    renderPayments();
+  it("renders the tender badge and webhook-confirmed provenance as TEXT (never color alone)", () => {
+    renderPayments({}, [CASH_PAYMENT]);
     // Tender is a labelled badge, not just a colored dot.
     const tender = screen.getAllByTestId("tender-cash")[0] as HTMLElement;
     expect(tender.textContent).toContain("Cash");
@@ -80,8 +97,33 @@ describe("PaymentsScreen", () => {
     expect(chip.getAttribute("data-confirmed")).toBe("true");
   });
 
+  // W5 regression: a gift_card-tender payment renders its own badge verbatim.
+  it("renders the gift_card tender badge from the server-provided tender", () => {
+    renderPayments({}, [GIFT_CARD_PAYMENT]);
+    const tender = screen.getAllByTestId("tender-gift_card")[0] as HTMLElement;
+    expect(tender.textContent).toContain("Gift card");
+  });
+
+  // W4 regression: a Stripe payment shows the refund ceremony…
+  it("shows the Stripe refund panel for a stripe-tender succeeded payment", () => {
+    renderPayments({}, [STRIPE_PAYMENT]);
+    selectPayment();
+    expect(document.querySelector("#refund-amount")).not.toBeNull();
+    expect(screen.queryByTestId("non-stripe-refund-note")).toBeNull();
+  });
+
+  // …but a cash (non-stripe) settlement never gets the un-resolvable Stripe
+  // ceremony — it gets an honest drawer note instead.
+  it("shows a drawer note (NOT the Stripe refund panel) for a cash-tender succeeded payment", () => {
+    renderPayments({}, [CASH_PAYMENT]);
+    selectPayment();
+    expect(document.querySelector("#refund-amount")).toBeNull();
+    const note = screen.getByTestId("non-stripe-refund-note");
+    expect(note.textContent?.toLowerCase()).toContain("drawer");
+  });
+
   it("demands a manager step-up grant for a refund above the threshold and rides it on the POST", async () => {
-    const { onRefund, onVerifyStepUp } = renderPayments();
+    const { onRefund, onVerifyStepUp } = renderPayments({}, [STRIPE_PAYMENT]);
     selectPayment();
     fireEvent.change(document.querySelector("#refund-amount") as HTMLInputElement, {
       target: { value: "150" },
@@ -98,16 +140,16 @@ describe("PaymentsScreen", () => {
 
     await waitFor(() => expect(onVerifyStepUp).toHaveBeenCalledWith("1234", "refund_over_threshold"));
     await waitFor(() =>
-      expect(onRefund).toHaveBeenCalledWith(SUCCEEDED_PAYMENT.id, {
-        amountCents: 15000,
-        reason: null,
-        grantToken: "signed-grant",
-      }),
+      expect(onRefund).toHaveBeenCalledWith(
+        STRIPE_PAYMENT.id,
+        { amountCents: 15000, reason: null, grantToken: "signed-grant" },
+        expect.any(String),
+      ),
     );
   });
 
   it("refunds under the threshold WITHOUT a step-up grant or prompt", async () => {
-    const { onRefund, onVerifyStepUp } = renderPayments();
+    const { onRefund, onVerifyStepUp } = renderPayments({}, [STRIPE_PAYMENT]);
     selectPayment();
     fireEvent.change(document.querySelector("#refund-amount") as HTMLInputElement, {
       target: { value: "50" },
@@ -116,19 +158,38 @@ describe("PaymentsScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: "Issue refund" }));
 
     await waitFor(() =>
-      expect(onRefund).toHaveBeenCalledWith(SUCCEEDED_PAYMENT.id, {
-        amountCents: 5000,
-        reason: null,
-        grantToken: undefined,
-      }),
+      expect(onRefund).toHaveBeenCalledWith(
+        STRIPE_PAYMENT.id,
+        { amountCents: 5000, reason: null, grantToken: undefined },
+        expect.any(String),
+      ),
     );
     expect(onVerifyStepUp).not.toHaveBeenCalled();
     // The PIN dialog never appeared.
     expect(screen.queryByLabelText("Personal PIN")).toBeNull();
   });
 
+  // W3 regression: a failed-then-retried refund REUSES its idempotency key.
+  it("reuses ONE idempotency key across a failed-then-retried refund", async () => {
+    const onRefund = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("gateway timeout"))
+      .mockResolvedValue({ command_id: "cmd-1", payment_id: STRIPE_PAYMENT.id, amount_cents: 5000, status: "pending" });
+    renderPayments({ onRefund }, [STRIPE_PAYMENT]);
+    selectPayment();
+    fireEvent.change(document.querySelector("#refund-amount") as HTMLInputElement, {
+      target: { value: "50" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Issue refund" }));
+    await waitFor(() => expect(onRefund).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Issue refund" }));
+    await waitFor(() => expect(onRefund).toHaveBeenCalledTimes(2));
+
+    expect(onRefund.mock.calls[0]?.[2]).toBe(onRefund.mock.calls[1]?.[2]);
+  });
+
   it("shows NO optimistic refund status — the payment stays webhook-confirmed after a refund request", async () => {
-    renderPayments();
+    renderPayments({}, [STRIPE_PAYMENT]);
     selectPayment();
     fireEvent.change(document.querySelector("#refund-amount") as HTMLInputElement, {
       target: { value: "50" },
@@ -143,7 +204,7 @@ describe("PaymentsScreen", () => {
   });
 
   it("rejects a refund amount above the payment total client-side (the server also re-verifies)", () => {
-    const { onRefund } = renderPayments();
+    const { onRefund } = renderPayments({}, [STRIPE_PAYMENT]);
     selectPayment();
     fireEvent.change(document.querySelector("#refund-amount") as HTMLInputElement, {
       target: { value: "250" },

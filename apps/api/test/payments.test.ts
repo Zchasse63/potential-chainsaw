@@ -18,6 +18,7 @@ const defaultPayment = {
   amount_cents: 5000,
   currency: "usd",
   status: "requires_payment",
+  tender: "stripe",
   stripe_payment_intent_id: null,
   command_id: COMMAND_ID,
   created_at: NOW,
@@ -424,13 +425,14 @@ describe("GET /payments/dunning — the dunning queue (owner/manager)", () => {
   }
 });
 
-describe("GET /payments — the list carries derived tender + the refund threshold", () => {
-  it("derives tender=cash for a payment with no Stripe command and no intent id", async () => {
+describe("GET /payments — the list reads the tender column + the refund threshold", () => {
+  it("reads tender=cash from the payments.tender column verbatim (not derived) + SELECTs the column", async () => {
     const fake = userFake({
       role: "manager",
       payment: {
         ...defaultPayment,
         status: "succeeded",
+        tender: "cash",
         command_id: null,
         stripe_payment_intent_id: null,
       },
@@ -442,16 +444,20 @@ describe("GET /payments — the list carries derived tender + the refund thresho
     const payload = (await res.json()) as {
       data: { payments: { tender: string }[]; refund_step_up_cents: number };
     };
-    // Tender is SERVER-derived so the web surface never guesses money provenance.
+    // Tender is the AUTHORITATIVE column (migration 0039), rendered verbatim.
     expect(payload.data.payments[0]?.tender).toBe("cash");
+    // W5 regression: the list query must SELECT the tender column (else the DB
+    // would never return it and the derivation heuristic would creep back).
+    const select = fake.calls.find((c) => c.table === "payments" && c.method === "select");
+    expect(String(select?.args[0])).toContain("tender");
     // The refund step-up threshold rides the envelope (no second round trip).
     expect(payload.data.refund_step_up_cents).toBe(7500);
   });
 
-  it("derives tender=stripe when a Stripe outbox command is linked, and defaults the threshold", async () => {
+  it("reads tender=stripe from the column, and defaults the threshold", async () => {
     const fake = userFake({
       role: "owner",
-      payment: { ...defaultPayment, status: "succeeded", command_id: COMMAND_ID },
+      payment: { ...defaultPayment, status: "succeeded", tender: "stripe", command_id: COMMAND_ID },
       settings: {},
     });
     const { app } = appFor(fake);
@@ -462,5 +468,23 @@ describe("GET /payments — the list carries derived tender + the refund thresho
     expect(payload.data.payments[0]?.tender).toBe("stripe");
     // Default threshold ($100) when the tenant has not configured one.
     expect(payload.data.refund_step_up_cents).toBe(10000);
+  });
+
+  it("W5 regression: a gift_card-tender payment (no command, no intent) reads 'gift_card' — the superseded (command_id/intent) heuristic would misread it as 'cash'", async () => {
+    const fake = userFake({
+      role: "manager",
+      payment: {
+        ...defaultPayment,
+        status: "succeeded",
+        tender: "gift_card",
+        command_id: null,
+        stripe_payment_intent_id: null,
+      },
+      settings: {},
+    });
+    const { app } = appFor(fake);
+    const res = await app.request("/api/v1/payments", getReq());
+    const payload = (await res.json()) as { data: { payments: { tender: string }[] } };
+    expect(payload.data.payments[0]?.tender).toBe("gift_card");
   });
 });
