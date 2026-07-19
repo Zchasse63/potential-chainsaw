@@ -1319,6 +1319,120 @@ begin
 end
 $$;
 
+-- ---------------------------------------------------------------------------
+-- (30) SUBSCRIPTIONS + THE DUNNING LEDGER (migration 0037). Member-read
+--      isolation + NO client write path on subscriptions/dunning_states; the
+--      dunning ledger is APPEND-ONLY for EVERY role (service_role included); the
+--      subscriptions.status is webhook-synced (service writes, no client insert);
+--      the one-live-sub partial unique holds; and app.record_dunning_stage (the
+--      SOLE dunning writer, definer) advances the ledger + subscription status.
+--      Reuses block-27's plans/prices/customers seeds (same transaction).
+--      (invariant #5/#6/#7: every new table/RPC gets a cross-tenant attack test.)
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; v_pa uuid;
+  v_cust_a uuid; v_cust_b uuid;
+  v_plan_a uuid; v_plan_b uuid; v_price_a uuid; v_price_b uuid;
+  v_sub_a uuid; v_sub_b uuid;
+  v_status text; n int; raised boolean;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+  select id into v_pa from public.people where tenant_id = v_a limit 1;
+  select id into v_cust_b from public.customers where tenant_id = v_b limit 1;
+  select id into v_plan_a from public.plans where tenant_id = v_a limit 1;
+  select id into v_plan_b from public.plans where tenant_id = v_b limit 1;
+  select id into v_price_a from public.plan_prices where tenant_id = v_a limit 1;
+  select id into v_price_b from public.plan_prices where tenant_id = v_b limit 1;
+  -- Tenant A needs its own customer (block 27 only seeded B's).
+  insert into public.customers (tenant_id, person_id) values (v_a, v_pa)
+    returning id into v_cust_a;
+
+  insert into public.subscriptions (tenant_id, customer_id, plan_id, plan_price_id, status)
+    values (v_a, v_cust_a, v_plan_a, v_price_a, 'active') returning id into v_sub_a;
+  insert into public.subscriptions (tenant_id, customer_id, plan_id, plan_price_id, status)
+    values (v_b, v_cust_b, v_plan_b, v_price_b, 'past_due') returning id into v_sub_b;
+  insert into public.dunning_states (tenant_id, subscription_id, stage)
+    values (v_a, v_sub_a, 'grace_started');
+  insert into public.dunning_states (tenant_id, subscription_id, stage)
+    values (v_b, v_sub_b, 'past_due');
+
+  perform app_test.become(v_ub);
+
+  -- Member-read isolation: zero of A's rows, exactly her own.
+  select count(*) into n from public.subscriptions where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(30) uB can SELECT tenant A subscriptions');
+  select count(*) into n from public.dunning_states where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(30) uB can SELECT tenant A dunning_states');
+  select count(*) into n from public.subscriptions where tenant_id = v_b;
+  perform app_test.assert(n = 1, '(30) uB cannot read her OWN subscriptions');
+
+  -- No client write path: subscriptions are webhook-synced, the ledger is service-only.
+  raised := false;
+  begin
+    insert into public.subscriptions (tenant_id, customer_id, plan_id, plan_price_id, status)
+      values (v_b, v_cust_b, v_plan_b, v_price_b, 'active');
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(30) uB could INSERT into subscriptions');
+
+  raised := false;
+  begin
+    insert into public.dunning_states (tenant_id, subscription_id, stage)
+      values (v_b, v_sub_b, 'recovered');
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(30) uB could INSERT into dunning_states');
+
+  reset role;
+  -- The dunning ledger is append-only at the PRIVILEGE level (service_role too).
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'public.dunning_states', 'update'),
+    '(30) service_role holds UPDATE on dunning_states — the ledger is append-only');
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'public.dunning_states', 'delete'),
+    '(30) service_role holds DELETE on dunning_states — the ledger is append-only');
+  -- subscriptions.status is webhook-synced: the service role writes it; no client insert.
+  perform app_test.assert(
+    has_table_privilege('service_role', 'public.subscriptions', 'update'),
+    '(30) service_role lacks UPDATE on subscriptions — the webhook cannot sync status');
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'public.subscriptions', 'insert'),
+    '(30) authenticated holds INSERT on subscriptions — no optimistic client write');
+
+  -- The one-live-sub partial unique: a second LIVE sub for the same (tenant,
+  -- customer, plan) is refused (v_sub_a is already 'active').
+  raised := false;
+  begin
+    insert into public.subscriptions (tenant_id, customer_id, plan_id, plan_price_id, status)
+      values (v_a, v_cust_a, v_plan_a, v_price_a, 'active');
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised,
+    '(30) a second live subscription for the same plan+customer was allowed');
+
+  -- Positive control: app.record_dunning_stage (definer, the sole writer) advances
+  -- the ledger AND flips subscription status. Clear the JWT so the service branch runs.
+  perform set_config('request.jwt.claims', 'null', true);
+  perform app.record_dunning_stage(v_a, v_sub_a, 'past_due', null, now(), null, '{}'::jsonb);
+  select status into v_status from public.subscriptions where id = v_sub_a;
+  perform app_test.assert(v_status = 'past_due',
+    '(30) app.record_dunning_stage did not flip subscription status to past_due');
+  select count(*) into n from public.dunning_states
+    where subscription_id = v_sub_a and stage = 'past_due';
+  perform app_test.assert(n = 1, '(30) app.record_dunning_stage did not append the past_due stage');
+
+  -- Idempotent: a re-call at the current latest stage appends NO duplicate.
+  perform app.record_dunning_stage(v_a, v_sub_a, 'past_due', null, now(), null, '{}'::jsonb);
+  select count(*) into n from public.dunning_states
+    where subscription_id = v_sub_a and stage = 'past_due';
+  perform app_test.assert(n = 1, '(30) app.record_dunning_stage appended a DUPLICATE past_due stage');
+end
+$$;
+
 do $$
 declare
   n int;

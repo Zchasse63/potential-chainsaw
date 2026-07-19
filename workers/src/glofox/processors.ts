@@ -25,6 +25,7 @@ import { PERSON_EXPORT_KIND, processPersonExport } from "../people/export.js";
 import { BILLING_PROCESS_INBOX_KIND, runInbox } from "../billing/inbox.js";
 import { BILLING_PROCESS_OUTBOX_KIND, runOutbox, type StripeAdapter } from "../billing/outbox.js";
 import { BILLING_VERIFY_MONEY_KIND, runVerifyMoney } from "../billing/verify.js";
+import { BILLING_DUNNING_KIND, runDunning } from "../billing/dunning.js";
 import type { Env as StripeEnv } from "@kelo/stripe";
 
 export {
@@ -34,6 +35,7 @@ export {
   BILLING_PROCESS_INBOX_KIND,
   BILLING_PROCESS_OUTBOX_KIND,
   BILLING_VERIFY_MONEY_KIND,
+  BILLING_DUNNING_KIND,
 };
 
 /**
@@ -195,6 +197,13 @@ export function createGlofoxProcessors(
      */
     [BILLING_VERIFY_MONEY_KIND]: async (_job, ctx) => {
       await runVerifyMoney(ctx.pool, { now });
+     * Phase 5 · unit 5.6 — the DUNNING state machine's time-driven clock. GLOBAL
+     * (no tenant on the job): it scans every open dunning cycle across tenants
+     * and advances reminders / final-notice / past_due on the studio clock.
+     * Recovery + cancellation are event-driven (the inbox).
+     */
+    [BILLING_DUNNING_KIND]: async (_job, ctx) => {
+      await runDunning(ctx.pool, { now });
     },
 
     [GLOFOX_SYNC_KINDS[0]]: syncProcessor(() => erase(membersSpec)),
@@ -364,6 +373,14 @@ export function createGlofoxProcessors(
         BILLING_VERIFY_MONEY_KIND,
         JSON.stringify({}),
         `${BILLING_VERIFY_MONEY_KIND}:${dayBucket}`,
+      // The dunning clock (unit 5.6) is time-driven on a DAILY cadence — its
+      // stage boundaries are day-scaled (grace 14d, reminder +7d). It is GLOBAL
+      // (scans every tenant's open cycles) and day-keyed so the frequent fan-out
+      // converges on ONE dunning pass per day per bucket.
+      await ctx.pool.query(`select app.enqueue_job($1, $2, null, now(), 100, 5, $3)`, [
+        BILLING_DUNNING_KIND,
+        JSON.stringify({}),
+        `${BILLING_DUNNING_KIND}:${dayBucket}`,
       ]);
     },
   };
