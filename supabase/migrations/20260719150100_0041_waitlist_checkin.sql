@@ -480,9 +480,14 @@ begin
   -- Release the offer hold (frees the seat) and mark the entry declined. 0040
   -- holds are ephemeral — releasing DELETES the hold (there is no status column),
   -- which immediately restores availability for the cascade below.
+  -- REVIEW FIX (6.2-crit-5): a FROZEN hold is mid-tender (the member is paying
+  -- for the promoted seat) — deleting it here would reclaim a seat whose
+  -- payment then completes paid-but-unbooked. Frozen holds are released only by
+  -- book_session (consume) or the operator (app.release_hold).
   if v_entry.hold_id is not null then
     delete from public.booking_holds bh
-    where bh.tenant_id = p_tenant and bh.id = v_entry.hold_id;
+    where bh.tenant_id = p_tenant and bh.id = v_entry.hold_id
+      and bh.frozen = false;
   end if;
 
   update public.waitlist_entries we
@@ -530,9 +535,11 @@ begin
 
     -- Release the lapsed hold (0040 holds are ephemeral — DELETE frees the seat)
     -- and mark the offer expired.
+    -- REVIEW FIX (6.2-crit-5): frozen (mid-tender) holds survive the sweep too.
     if v_entry.hold_id is not null then
       delete from public.booking_holds bh
-      where bh.tenant_id = v_entry.tenant_id and bh.id = v_entry.hold_id;
+      where bh.tenant_id = v_entry.tenant_id and bh.id = v_entry.hold_id
+        and bh.frozen = false;
     end if;
 
     update public.waitlist_entries we
@@ -656,7 +663,10 @@ create or replace function public.waitlist_position(
   p_person  uuid
 )
 returns table (
-  position         int,
+  -- POSITION is a col_name_keyword: legal as a table column, but OUT-parameter
+  -- names use the function-name grammar, so it must be quoted here. The JSON
+  -- key PostgREST emits is still "position".
+  "position"       int,
   total_waiting    int,
   offer_expires_at timestamptz,
   status           text

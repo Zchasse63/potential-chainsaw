@@ -127,6 +127,23 @@ export async function freezeHold(
   );
 }
 
+// -- release (REVIEW FIX 6.1-crit-2) ------------------------------------------
+
+/** app.release_hold deletes the hold REGARDLESS of frozen (operator remediation
+ * for an abandoned tender). Returns whether a row was deleted. */
+export async function releaseHold(
+  client: KeloSupabaseClient,
+  args: { tenantId: string; holdId: string; actorId: string },
+): Promise<boolean> {
+  return callRpc(
+    client,
+    "release_hold",
+    { p_tenant: args.tenantId, p_hold: args.holdId, p_actor: args.actorId },
+    z.boolean(),
+    "releaseHold",
+  );
+}
+
 // -- book ---------------------------------------------------------------------
 
 export interface BookArgs {

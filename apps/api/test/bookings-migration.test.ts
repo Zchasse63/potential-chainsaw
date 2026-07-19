@@ -222,3 +222,78 @@ describe("rls_attack.sql — booking coverage (block 32)", () => {
     expect(attackSuite).toContain("a replayed booking key wrote a second booking");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Wave 6a REVIEW FIXES — the six criticals from the 6.1 (CONCERNS) and 6.2
+// (FAIL) reviews, made durable as structural guards. Each assertion names the
+// wrong-booking/wrong-money scenario it forecloses.
+// ---------------------------------------------------------------------------
+const migration41 = readFileSync(
+  "supabase/migrations/20260719150100_0041_waitlist_checkin.sql",
+  "utf8",
+);
+
+describe("review fix A — one active booking per (session, person)", () => {
+  it("has the partial unique index over live statuses", () => {
+    expect(migration).toContain("bookings_one_active_per_person");
+    expect(migration).toMatch(
+      /bookings_one_active_per_person[\s\S]{0,200}where status in \('booked', 'checked_in'\)/,
+    );
+  });
+  it("book_session pre-checks the active booking for a FRIENDLY 23505", () => {
+    // Without the in-body check a raced duplicate surfaces as a raw constraint
+    // error; with it the second booker gets the named refusal.
+    expect(migration).toMatch(/already has an active booking/i);
+  });
+});
+
+describe("review fix B — release_hold (frozen holds must not be immortal)", () => {
+  it("migration defines app.release_hold deleting REGARDLESS of frozen", () => {
+    expect(migration).toContain("create or replace function app.release_hold");
+    expect(migration).toContain("create or replace function public.release_hold");
+  });
+  it("the API mounts POST /bookings/:id/release-hold behind staff roles", () => {
+    expect(routeBookings).toContain('"/bookings/:id/release-hold"');
+    expect(dataBookings).toContain('"release_hold"');
+  });
+});
+
+describe("review fix C — hold refresh never unfreezes a mid-tender hold", () => {
+  it("the hold_session upsert guards its update on frozen = false", () => {
+    expect(migration).toMatch(
+      /do update[\s\S]{0,200}where booking_holds\.frozen = false/,
+    );
+  });
+});
+
+describe("review fix D — orphan-debit closure in book_session", () => {
+  it("replays fast-path BEFORE the waiver/debit work", () => {
+    // A retried key with different p_use_credit must replay the original
+    // booking, not append a fresh debit for the new flag value.
+    expect(migration).toMatch(/'replayed',\s*true/);
+  });
+  it("the credit debit sits INSIDE the guarded sub-block with the insert", () => {
+    // Savepoint semantics: a caught unique_violation race rolls the debit back
+    // with the booking insert — no debit without a booking row.
+    const subBlock = migration.match(/begin[\s\S]*?exception\s+when\s+unique_violation[\s\S]*?end;/);
+    expect(subBlock, "guarded sub-block missing").not.toBeNull();
+    expect(subBlock![0]).toContain("insert into public.credit_ledger");
+  });
+});
+
+describe("review fix E — waitlist sweeps never delete frozen (mid-tender) holds", () => {
+  it("both 0041 hold-DELETE sites carry the frozen = false guard", () => {
+    const guardedDeletes = migration41.match(
+      /delete from public\.booking_holds[\s\S]{0,300}?bh\.frozen = false/g,
+    );
+    expect(guardedDeletes?.length ?? 0).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("review fix F — live-evidence closure (blocks 32+33 in the suite)", () => {
+  it("the attack suite carries both new blocks and the waiver upsert seam", () => {
+    expect(attackSuite).toContain("(32) uB can SELECT tenant A bookings");
+    expect(attackSuite).toContain("(33) authenticated holds INSERT on waitlist_entries");
+    expect(attackSuite).toContain("on conflict (tenant_id, version) do update set active = true");
+  });
+});

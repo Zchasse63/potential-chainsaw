@@ -7,6 +7,7 @@ import {
   cancelBooking,
   fetchSessionAvailability,
   freezeHold,
+  releaseHold,
   holdSession,
 } from "../data-bookings.js";
 import { ApiError } from "../errors.js";
@@ -131,6 +132,25 @@ export function registerBookingRoutes(
       const { tenantId } = tenantOf(c);
       await freezeHold(userClient, { tenantId, holdId: id });
       return c.json(c.var.ok({ hold: { id, frozen: true } }, native), 200);
+    },
+  );
+
+  // -- release a hold (REVIEW FIX 6.1-crit-2: frozen holds must not be immortal) --
+  // :id is the HOLD id. The operator remediation for an abandoned tender (card
+  // declined, member walked away): deletes the hold REGARDLESS of frozen — the
+  // only path besides book_session's consume that removes a frozen hold.
+  app.post(
+    "/bookings/:id/release-hold",
+    requireAuth(deps),
+    resolveTenant,
+    requireRole("owner", "manager", "front_desk"),
+    requireIdempotencyKey,
+    async (c) => {
+      const { id } = parseParams(c, idParams);
+      const { userClient, userId } = authOf(c);
+      const { tenantId } = tenantOf(c);
+      const released = await releaseHold(userClient, { tenantId, holdId: id, actorId: userId });
+      return c.json(c.var.ok({ hold: { id, released } }, native), 200);
     },
   );
 

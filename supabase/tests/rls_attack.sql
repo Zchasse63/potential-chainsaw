@@ -1886,8 +1886,12 @@ begin
 
   -- An ACTIVE waiver version for B + a relationship for PW ONLY, so exactly PW
   -- owes the active signature (needs_signature = active ∧ relationship ∧ unsigned).
+  -- Block (32) already seeded (v_b, 1) in this same transaction; upsert keeps
+  -- this block portable whether it runs after (32) or standalone.
   insert into public.waiver_versions (tenant_id, version, body, active)
-    values (v_b, 1, 'Assumption of risk.', true) returning id into v_wv;
+    values (v_b, 1, 'Assumption of risk.', true)
+    on conflict (tenant_id, version) do update set active = true
+    returning id into v_wv;
   insert into public.person_relationships (tenant_id, person_id, relationship_type, rule_version)
     values (v_b, v_pw, 'recurring_member', 1);
 

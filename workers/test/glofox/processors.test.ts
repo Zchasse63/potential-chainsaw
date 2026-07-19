@@ -13,6 +13,7 @@ import {
 } from "../../src/glofox/processors.js";
 import type { TickCtx } from "../../src/processors.js";
 import { NO_SHOW_SWEEP_KIND, WAITLIST_SWEEP_KIND } from "../../src/booking/sweeps.js";
+import { BOOKING_EXPIRE_HOLDS_KIND } from "../../src/booking/expire-holds.js";
 import {
   callsMatching,
   createFakeClient,
@@ -135,8 +136,9 @@ describe("glofox.sync.all fan-out", () => {
     // 7 per-tenant loop calls + 1 ordered statement (detect_deletions first) + 2
     // GLOBAL hour-keyed billing drains + 1 GLOBAL nightly verify_money + 1 GLOBAL
     // day-keyed dunning pass + the phase-6 booking sweeps: 1 GLOBAL minute-keyed
-    // waitlist sweep + 1 tenant-scoped day-keyed no-show sweep.
-    expect(enqueues).toHaveLength(14);
+    // expire_holds + 1 GLOBAL minute-keyed waitlist sweep + 1 tenant-scoped
+    // day-keyed no-show sweep.
+    expect(enqueues).toHaveLength(15);
     const kinds = enqueues.map((call) => call.values?.[0]);
     expect(kinds).toEqual([
       ...GLOFOX_SYNC_KINDS,
@@ -146,6 +148,7 @@ describe("glofox.sync.all fan-out", () => {
       BILLING_PROCESS_OUTBOX_KIND,
       BILLING_VERIFY_MONEY_KIND,
       BILLING_DUNNING_KIND,
+      BOOKING_EXPIRE_HOLDS_KIND,
       WAITLIST_SWEEP_KIND,
       NO_SHOW_SWEEP_KIND,
     ]);
@@ -170,14 +173,18 @@ describe("glofox.sync.all fan-out", () => {
     const dunning = enqueues[11]!;
     expect(dunning.values?.[0]).toBe(BILLING_DUNNING_KIND);
     expect(String(dunning.values?.[2])).toBe(`${BILLING_DUNNING_KIND}:2026-07-17`);
+    // expire_holds: GLOBAL, MINUTE-keyed (holds have a 300s TTL).
+    const expire = enqueues[12]!;
+    expect(expire.values?.[0]).toBe(BOOKING_EXPIRE_HOLDS_KIND);
+    expect(String(expire.values?.[2])).toBe(`${BOOKING_EXPIRE_HOLDS_KIND}:2026-07-17T23:13`);
     // The waitlist sweep is GLOBAL (tenant NULL SQL literal, not a bind param) and
     // MINUTE-keyed — like expire_holds, a re-fire within the same minute dedupes.
-    const waitlist = enqueues[12]!;
+    const waitlist = enqueues[13]!;
     expect(waitlist.values?.[0]).toBe(WAITLIST_SWEEP_KIND);
     expect(String(waitlist.values?.[2])).toBe(`${WAITLIST_SWEEP_KIND}:2026-07-17T23:13`);
     // The no-show sweep is a DAILY per-tenant money event: tenant-scoped bind param
     // + a day+tenant key so the frequent fan-out converges on one pass per day.
-    const noShow = enqueues[13]!;
+    const noShow = enqueues[14]!;
     expect(noShow.values?.[0]).toBe(NO_SHOW_SWEEP_KIND);
     expect(noShow.values?.[2]).toBe(TENANT);
     expect(String(noShow.values?.[3])).toBe(`${NO_SHOW_SWEEP_KIND}:${TENANT}:2026-07-17`);

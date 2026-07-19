@@ -270,13 +270,21 @@ begin
     raise exception 'session is at capacity' using errcode = '23514';
   end if;
 
-  -- One live hold per (session, person): refresh/replace an existing one (a new
-  -- hold is fresh — reset frozen so a stale freeze does not persist).
+  -- One live hold per (session, person): refresh an existing one — but a FROZEN
+  -- hold is mid-tender and MUST NOT be touched (REVIEW FIX 6.1-crit-3: a delayed
+  -- duplicate hold request was unfreezing + re-arming the TTL, letting the sweep
+  -- reclaim a seat whose payment then completed paid-but-unbooked). A frozen
+  -- conflict returns the existing hold unchanged.
   insert into public.booking_holds (tenant_id, session_id, person_id, expires_at)
   values (p_tenant, p_session, p_person, now() + make_interval(secs => p_ttl_seconds))
   on conflict (tenant_id, session_id, person_id)
-  do update set expires_at = excluded.expires_at, frozen = false
+  do update set expires_at = excluded.expires_at
+  where booking_holds.frozen = false
   returning id into v_hold_id;
+  if v_hold_id is null then
+    select id into v_hold_id from public.booking_holds
+    where tenant_id = p_tenant and session_id = p_session and person_id = p_person;
+  end if;
 
   return v_hold_id;
 end;
@@ -443,6 +451,28 @@ begin
     end if;
   end if;
 
+  -- IDEMPOTENT REPLAY FAST-PATH (REVIEW FIX 6.2-crit-4): resolve the key BEFORE
+  -- any write. Without this, a cross-op key reuse could commit a fresh debit
+  -- while the unique-violation handler replayed the OLD booking — an orphaned
+  -- debit (a stolen credit).
+  select id, credit_entry_id into v_booking_id, v_credit_id
+  from public.bookings
+  where tenant_id = p_tenant and idempotency_key = p_idempotency_key;
+  if found then
+    return jsonb_build_object('booking_id', v_booking_id, 'credit_entry_id', v_credit_id, 'replayed', true);
+  end if;
+
+  -- One ACTIVE booking per person per session (REVIEW FIX 6.1-crit-1): a
+  -- friendly refusal before the partial unique index backstop fires.
+  if exists (
+    select 1 from public.bookings b
+    where b.tenant_id = p_tenant and b.session_id = p_session and b.person_id = p_person
+      and b.status in ('booked', 'checked_in')
+  ) then
+    raise exception 'person already has an active booking for this session'
+      using errcode = '23505';
+  end if;
+
   -- THE WAIVER BLOCK (the phase-6 ENFORCER): a person owing the active-version
   -- signature CANNOT book — booking is impossible without it. The phase-4 desk
   -- queue (routes/waivers.ts) stays as a monitored advisory backstop.
@@ -456,28 +486,30 @@ begin
   -- APPEND-ONLY ledger IN-BODY (NOT the refresh-on-demand matview, which would be
   -- stale here) under the person-row lock taken above. p_use_credit=false books a
   -- complimentary/included seat with no debit (member self-serve always debits).
-  if p_use_credit then
-    select coalesce(sum(cl.delta), 0)::int into v_balance
-    from public.credit_ledger cl
-    where cl.tenant_id = p_tenant and cl.person_id = p_person;
-    if v_balance <= 0 then
-      -- No balance: a drop-in purchase rides the POS/member payment paths, not
-      -- this RPC. Booking is refused so a member is never silently overdrawn.
-      raise exception 'insufficient_credits' using errcode = '22023';
-    end if;
-    -- external_ref = the booking key gives the debit ledger-level idempotency via
-    -- credit_ledger_tenant_ref_type_key (tenant, external_ref, entry_type).
-    insert into public.credit_ledger
-      (tenant_id, person_id, entry_type, delta, source, reason, external_ref, actor_user_id)
-    values
-      (p_tenant, p_person, 'debit', -1, 'native', 'booking', p_idempotency_key, p_actor)
-    returning id into v_credit_id;
-  end if;
-
-  -- Insert the booking (the capacity trigger re-verifies under the same lock).
-  -- A concurrent same-key insert loses the (tenant, idempotency_key) race and is
-  -- replayed; the same key on the debit external_ref is the same safety net.
+  -- REVIEW FIX (6.2-crit-4, part 2): the DEBIT lives INSIDE the guarded
+  -- sub-block with the booking insert — a caught unique-violation (a true
+  -- concurrent race; the fast-path above already handled sequential replays)
+  -- rolls the debit back with it (plpgsql handler = savepoint semantics).
+  -- No code path can commit a debit without its booking.
   begin
+    if p_use_credit then
+      select coalesce(sum(cl.delta), 0)::int into v_balance
+      from public.credit_ledger cl
+      where cl.tenant_id = p_tenant and cl.person_id = p_person;
+      if v_balance <= 0 then
+        -- No balance: a drop-in purchase rides the POS/member payment paths, not
+        -- this RPC. Booking is refused so a member is never silently overdrawn.
+        raise exception 'insufficient_credits' using errcode = '22023';
+      end if;
+      -- external_ref = the booking key gives the debit ledger-level idempotency via
+      -- credit_ledger_tenant_ref_type_key (tenant, external_ref, entry_type).
+      insert into public.credit_ledger
+        (tenant_id, person_id, entry_type, delta, source, reason, external_ref, actor_user_id)
+      values
+        (p_tenant, p_person, 'debit', -1, 'native', 'booking', p_idempotency_key, p_actor)
+      returning id into v_credit_id;
+    end if;
+
     insert into public.bookings
       (tenant_id, session_id, person_id, status, booked_via, credit_entry_id, hold_id, idempotency_key)
     values
@@ -505,6 +537,46 @@ $$;
 
 comment on function app.book_session(uuid, uuid, uuid, uuid, text, text, uuid, boolean) is
   'The native booking authority. Idempotent on the key. A live hold bypasses the capacity re-count (the hold reserved the seat) after asserting person+session ownership; otherwise capacity is re-verified under the session lock. ENFORCES the waiver (needs_signature → 42501 waiver_required). Debits ONE credit as a NEGATIVE append-only credit_ledger entry (balance read from the ledger under a person-row lock; no balance → insufficient_credits). Consumes the hold. Returns {booking_id, credit_entry_id?}.';
+
+-- REVIEW FIX (6.1-crit-1): one ACTIVE booking per (session, person). Without
+-- this, a fresh-key retry after a timeout double-books AND double-debits the
+-- same person. Partial: cancelled/no_show rows never block a rebook.
+create unique index bookings_one_active_per_person
+  on public.bookings (tenant_id, session_id, person_id)
+  where status in ('booked', 'checked_in');
+
+-- REVIEW FIX (6.1-crit-2): frozen holds must not be immortal — the operator
+-- release path (card declined, member walked away). Deletes REGARDLESS of
+-- frozen; role-gated + audited via the API route's actor.
+create or replace function app.release_hold(
+  p_tenant uuid,
+  p_hold   uuid,
+  p_actor  uuid
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if (select auth.uid()) is not null and (select auth.uid()) <> p_actor then
+    raise exception 'release actor must be the authenticated user' using errcode = '42501';
+  end if;
+  if (select auth.uid()) is not null
+     and not app.has_tenant_role(p_tenant, array['owner', 'manager', 'front_desk']) then
+    raise exception 'owner, manager, or front_desk role required' using errcode = '42501';
+  end if;
+  delete from public.booking_holds where tenant_id = p_tenant and id = p_hold;
+  return found;
+end;
+$$;
+create or replace function public.release_hold(p_tenant uuid, p_hold uuid, p_actor uuid)
+returns boolean language sql security invoker set search_path = ''
+as $$ select app.release_hold(p_tenant, p_hold, p_actor); $$;
+revoke all on function app.release_hold(uuid, uuid, uuid) from public;
+grant execute on function app.release_hold(uuid, uuid, uuid) to authenticated, service_role;
+revoke all on function public.release_hold(uuid, uuid, uuid) from public;
+grant execute on function public.release_hold(uuid, uuid, uuid) to authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
 -- app.cancel_booking — the cancellation policy engine (refund vs forfeit).

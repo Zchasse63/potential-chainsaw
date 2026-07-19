@@ -119,6 +119,7 @@ const defaultRpc: Record<string, RpcHandler> = {
   session_availability: () => ({ data: [availabilityRow] }),
   hold_session: () => ({ data: HOLD_ID }),
   freeze_hold: () => ({ data: null }),
+  release_hold: () => ({ data: true }),
   book_session: () => ({ data: { booking_id: BOOKING_ID, credit_entry_id: CREDIT_ID } }),
   cancel_booking: () => ({
     data: { booking_id: BOOKING_ID, status: "cancelled", branch: "refund", refunded: true, credit_entry_id: CREDIT_ID },
@@ -411,5 +412,42 @@ describe("POST /bookings/:id/freeze-hold — freeze a hold's expiry", () => {
     );
     expect(res.status).toBe(403);
     expect(fake.calls.some((c) => c.table === "freeze_hold")).toBe(false);
+  });
+});
+
+// -- POST /bookings/:id/release-hold --------------------------------------------
+// REVIEW FIX 6.1-crit-2: the operator remediation for an abandoned tender. The
+// RPC deletes REGARDLESS of frozen (asserted structurally in
+// bookings-migration.test.ts); here we pin the route contract.
+
+describe("POST /bookings/:id/release-hold — operator hold release", () => {
+  it("threads hold + actor into release_hold and reports the deletion", async () => {
+    const fake = userFake("front_desk");
+    const { app } = appFor(fake);
+    const res = await app.request(
+      `/api/v1/bookings/${HOLD_ID}/release-hold`,
+      post(`/bookings/${HOLD_ID}/release-hold`, {}),
+    );
+    expect(res.status).toBe(200);
+    const payload = (await res.json()) as { data: { hold: { id: string; released: boolean } } };
+    expect(payload.data.hold.id).toBe(HOLD_ID);
+    expect(payload.data.hold.released).toBe(true);
+
+    const rpc = fake.calls.find((c) => c.table === "release_hold");
+    const params = rpc?.args[0] as Record<string, unknown>;
+    expect(params.p_hold).toBe(HOLD_ID);
+    expect(params.p_tenant).toBe(TENANT_A);
+    expect(params.p_actor).toBe(USER_ID);
+  });
+
+  it("403s a trainer before the RPC", async () => {
+    const fake = userFake("trainer");
+    const { app } = appFor(fake);
+    const res = await app.request(
+      `/api/v1/bookings/${HOLD_ID}/release-hold`,
+      post(`/bookings/${HOLD_ID}/release-hold`, {}),
+    );
+    expect(res.status).toBe(403);
+    expect(fake.calls.some((c) => c.table === "release_hold")).toBe(false);
   });
 });
