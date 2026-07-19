@@ -1263,6 +1263,62 @@ begin
 end
 $$;
 
+-- ---------------------------------------------------------------------------
+-- (29) verify_runs (migration 0036): the nightly money-verification history.
+--      Member-read isolation (a tenant sees ONLY its own runs); a GLOBAL run
+--      (tenant_id null) matches no membership and stays hidden; NO client write
+--      path. Reuses block-27's tenants; verify_runs has no unique(tenant_id)/
+--      event_id, so there is nothing to collide with. (invariant #7.)
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid; n int; raised boolean;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+
+  insert into public.verify_runs (tenant_id, started_at, finished_at, ok, violations)
+    values (v_a, now(), now(), true, '[]');
+  insert into public.verify_runs (tenant_id, started_at, finished_at, ok, violations)
+    values (v_b, now(), now(), false, '[{"check":"over_refund"}]');
+  -- The real cadence writes GLOBAL runs (tenant null) — those must be invisible.
+  insert into public.verify_runs (tenant_id, started_at, finished_at, ok, violations)
+    values (null, now(), now(), true, '[]');
+
+  perform app_test.become(v_ub);
+
+  -- Isolation: uB sees only her own run, never tenant A's nor the global one.
+  select count(*) into n from public.verify_runs where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(29) uB can SELECT tenant A verify_runs');
+  select count(*) into n from public.verify_runs where tenant_id is null;
+  perform app_test.assert(n = 0, '(29) uB can SELECT global (null-tenant) verify_runs');
+  select count(*) into n from public.verify_runs where tenant_id = v_b;
+  perform app_test.assert(n = 1, '(29) uB cannot read her OWN verify_runs');
+
+  -- No client write path (the service role writes run history).
+  raised := false;
+  begin
+    insert into public.verify_runs (tenant_id, started_at, ok)
+      values (v_b, now(), true);
+  exception when others then raised := true;
+  end;
+  perform app_test.assert(raised, '(29) uB could INSERT into verify_runs');
+
+  reset role;
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'public.verify_runs', 'insert'),
+    '(29) authenticated holds INSERT on verify_runs — run history is service-written');
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'public.verify_runs', 'update'),
+    '(29) authenticated holds UPDATE on verify_runs — runs are append-once');
+  perform app_test.assert(
+    has_table_privilege('service_role', 'public.verify_runs', 'insert'),
+    '(29) service_role lacks INSERT on verify_runs — verify_money cannot record a run');
+end
+$$;
+
 do $$
 declare
   n int;
