@@ -21,6 +21,7 @@ import { registerSchedulingAuthoringRoutes } from "./routes/scheduling-authoring
 import { registerStaffRoutes } from "./routes/staff.js";
 import { registerMarketingRoutes } from "./routes/marketing.js";
 import { registerPeopleRoutes } from "./routes/people.js";
+import { registerWaiverRoutes } from "./routes/waivers.js";
 import { registerTenantRoutes } from "./routes/tenant.js";
 import { registerWebhookRoutes, type WebhookDeps } from "./routes/webhooks.js";
 import type { AppDeps, AppEnv } from "./types.js";
@@ -106,6 +107,7 @@ export function createApp(deps: AppDeps & WebhookDeps & StaffDeps = {}): Hono<Ap
   registerSchedulingAuthoringRoutes(app, resolved);
   registerMarketingRoutes(app, resolved);
   registerPeopleRoutes(app, resolved);
+  registerWaiverRoutes(app, resolved);
   registerStaffRoutes(app, resolved, deps.env, deps.createStepUpClient);
 
   return app;
