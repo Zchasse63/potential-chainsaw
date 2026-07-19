@@ -1607,6 +1607,229 @@ begin
 end
 $$;
 
+-- ---------------------------------------------------------------------------
+-- (32) NATIVE BOOKING ENGINE (migration 0040): server-side seat holds + the
+--      four money/booking RPCs (hold / freeze / book / cancel). Proves:
+--        * cross-tenant hold/book/cancel refusal (role re-check in-body) + the
+--          availability read is RLS-scoped (uB sees zero of A's sessions);
+--        * the WAIVER enforcer — needs_signature ⇒ book raises waiver_required;
+--        * DB-ENFORCED no-oversell: a SEQUENTIAL over-capacity fill is refused
+--          (FOR UPDATE serialization + the belt-and-suspenders trigger);
+--        * the APPEND-ONLY credit debit — the ledger row COUNT grows by one and
+--          a negative 'debit' is appended (never an in-place balance update);
+--        * the 12h cancel policy — ≥12h appends a POSITIVE refund_credit and
+--          restores the balance; <12h forfeits (the debit stands, no refund);
+--        * a live hold reserves the seat and is BOUND to (person, session) — a
+--          hold cannot book a foreign person; booking consumes the hold;
+--        * booking idempotency replay — the same key returns the same booking
+--          and appends NO second booking and NO second debit.
+--      bookings/booking_holds are RPC-written (NO client INSERT path) and are
+--      NOT append-only (status advances; holds are ephemeral), so they are
+--      absent from block 26; the RPC-written INSERT guard is re-asserted here.
+--      Seeds tenant-A/B resources + offering templates + published sessions +
+--      people + credit grants; reuses block-20/25/27 tenants/owners.
+--      (invariant #5/#6/#7: every new RPC gets a cross-tenant attack test.)
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid;
+  v_res_a uuid; v_res_b uuid; v_ot_a uuid; v_ot_b uuid;
+  v_s_future uuid; v_s_cap uuid; v_s_soon uuid; v_s_a uuid;
+  v_p1 uuid; v_pc1 uuid; v_pc2 uuid; v_pref uuid; v_pfor uuid; v_phold uuid; v_pwaiver uuid;
+  v_res jsonb; v_book1 uuid; v_booking uuid; v_hold uuid;
+  v_needs boolean; v_msg text; n int; n_before int; raised boolean;
+begin
+  reset role;
+  select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b  from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+
+  -- Authoring spine: a resource + offering template per tenant, then PUBLISHED
+  -- sessions. Absence of a resource_readiness row means "ready" (no maintenance/
+  -- closed window), so no readiness seed is needed for a bookable session.
+  insert into public.resources (tenant_id, name) values (v_a, 'Room A') returning id into v_res_a;
+  insert into public.resources (tenant_id, name) values (v_b, 'Room B') returning id into v_res_b;
+  insert into public.offering_templates (tenant_id, name, duration_minutes)
+    values (v_a, 'Class A', 60) returning id into v_ot_a;
+  insert into public.offering_templates (tenant_id, name, duration_minutes)
+    values (v_b, 'Class B', 60) returning id into v_ot_b;
+
+  -- B sessions: a roomy FUTURE session (>12h out), a capacity-1 session (the
+  -- over-sell target), and a SOON session (<12h out, for the forfeit branch).
+  insert into public.scheduled_sessions
+    (tenant_id, offering_template_id, resource_id, starts_at, ends_at, capacity, status, published_at)
+    values (v_b, v_ot_b, v_res_b, now() + interval '24 hours', now() + interval '25 hours', 5, 'published', now())
+    returning id into v_s_future;
+  insert into public.scheduled_sessions
+    (tenant_id, offering_template_id, resource_id, starts_at, ends_at, capacity, status, published_at)
+    values (v_b, v_ot_b, v_res_b, now() + interval '24 hours', now() + interval '25 hours', 1, 'published', now())
+    returning id into v_s_cap;
+  insert into public.scheduled_sessions
+    (tenant_id, offering_template_id, resource_id, starts_at, ends_at, capacity, status, published_at)
+    values (v_b, v_ot_b, v_res_b, now() + interval '2 hours', now() + interval '3 hours', 5, 'published', now())
+    returning id into v_s_soon;
+  -- One published session in tenant A (the cross-tenant + availability target).
+  insert into public.scheduled_sessions
+    (tenant_id, offering_template_id, resource_id, starts_at, ends_at, capacity, status, published_at)
+    values (v_a, v_ot_a, v_res_a, now() + interval '24 hours', now() + interval '25 hours', 5, 'published', now())
+    returning id into v_s_a;
+
+  -- B people (native), each with a positive credit grant (a booking debits ONE).
+  insert into public.people (tenant_id, first_name, source) values (v_b, 'P1',  'native') returning id into v_p1;
+  insert into public.people (tenant_id, first_name, source) values (v_b, 'PC1', 'native') returning id into v_pc1;
+  insert into public.people (tenant_id, first_name, source) values (v_b, 'PC2', 'native') returning id into v_pc2;
+  insert into public.people (tenant_id, first_name, source) values (v_b, 'PRef','native') returning id into v_pref;
+  insert into public.people (tenant_id, first_name, source) values (v_b, 'PFor','native') returning id into v_pfor;
+  insert into public.people (tenant_id, first_name, source) values (v_b, 'PHold','native') returning id into v_phold;
+  insert into public.people (tenant_id, first_name, source) values (v_b, 'PWaiver','native') returning id into v_pwaiver;
+
+  insert into public.credit_ledger (tenant_id, person_id, entry_type, delta, source, external_ref)
+    values
+      (v_b, v_p1,      'grant', 5, 'native', 'g-p1'),
+      (v_b, v_pc1,     'grant', 5, 'native', 'g-pc1'),
+      (v_b, v_pc2,     'grant', 5, 'native', 'g-pc2'),
+      (v_b, v_pref,    'grant', 5, 'native', 'g-pref'),
+      (v_b, v_pfor,    'grant', 5, 'native', 'g-pfor'),
+      (v_b, v_phold,   'grant', 5, 'native', 'g-phold'),
+      (v_b, v_pwaiver, 'grant', 5, 'native', 'g-pwaiver');
+
+  -- PWaiver has a live relationship, so once an active waiver version exists she
+  -- OWES a signature (needs_signature). Seeded now; the version is activated LAST.
+  insert into public.person_relationships (tenant_id, person_id, relationship_type, rule_version)
+    values (v_b, v_pwaiver, 'recurring_member', 1);
+
+  perform app_test.become(v_ub);
+
+  -- (a) HAPPY PATH + the append-only debit: booking P1 appends exactly one
+  --     negative 'debit' entry (the ledger COUNT grows; nothing is updated).
+  select count(*) into n_before from public.credit_ledger where tenant_id = v_b and person_id = v_p1;
+  v_res := app.book_session(v_b, v_p1, v_s_future, v_ub, 'bk-p1', 'desk', null, true);
+  v_book1 := (v_res ->> 'booking_id')::uuid;
+  perform app_test.assert(v_book1 is not null, '(32) book_session returned no booking');
+  select count(*) into n from public.credit_ledger where tenant_id = v_b and person_id = v_p1;
+  perform app_test.assert(n = n_before + 1, '(32) booking did not APPEND a credit entry');
+  select count(*) into n from public.credit_ledger
+    where tenant_id = v_b and person_id = v_p1 and entry_type = 'debit' and delta = -1;
+  perform app_test.assert(n = 1, '(32) booking debit missing or not a negative append');
+
+  -- (b) IDEMPOTENCY REPLAY: same key ⇒ same booking, no second row, no 2nd debit.
+  v_res := app.book_session(v_b, v_p1, v_s_future, v_ub, 'bk-p1', 'desk', null, true);
+  perform app_test.assert((v_res ->> 'booking_id')::uuid = v_book1,
+    '(32) a replayed booking key returned a different booking');
+  perform app_test.assert((v_res ->> 'replayed')::boolean, '(32) replay flag not set');
+  select count(*) into n from public.bookings where tenant_id = v_b and idempotency_key = 'bk-p1';
+  perform app_test.assert(n = 1, '(32) a replayed booking key wrote a second booking');
+  select count(*) into n from public.credit_ledger
+    where tenant_id = v_b and person_id = v_p1 and entry_type = 'debit';
+  perform app_test.assert(n = 1, '(32) a replayed booking appended a second debit');
+
+  -- (c) NO-OVERSELL: a capacity-1 session takes ONE booking; the next is refused.
+  v_res := app.book_session(v_b, v_pc1, v_s_cap, v_ub, 'bk-pc1', 'desk', null, true);
+  perform app_test.assert((v_res ->> 'booking_id') is not null, '(32) first seat could not book');
+  raised := false;
+  begin perform app.book_session(v_b, v_pc2, v_s_cap, v_ub, 'bk-pc2', 'desk', null, true);
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(32) an over-capacity booking was NOT refused');
+  select count(*) into n from public.bookings
+    where tenant_id = v_b and session_id = v_s_cap and status in ('booked', 'checked_in');
+  perform app_test.assert(n = 1, '(32) capacity-1 session holds more than one active booking');
+
+  -- (d) HOLD choreography + the person/session BIND: a hold cannot book a foreign
+  --     person; the rightful owner books via the hold, which is then consumed.
+  v_hold := app.hold_session(v_b, v_s_future, v_phold, v_ub, 300);
+  perform app_test.assert(v_hold is not null, '(32) hold_session returned no hold');
+  raised := false;
+  begin perform app.book_session(v_b, v_p1, v_s_future, v_ub, 'bk-mismatch', 'desk', v_hold, true);
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(32) a hold booked a person it does not belong to');
+  v_res := app.book_session(v_b, v_phold, v_s_future, v_ub, 'bk-phold', 'desk', v_hold, true);
+  perform app_test.assert((v_res ->> 'booking_id') is not null, '(32) hold owner could not book via the hold');
+  select count(*) into n from public.booking_holds where tenant_id = v_b and id = v_hold;
+  perform app_test.assert(n = 0, '(32) booking did not CONSUME the hold');
+
+  -- (e) CANCEL ≥12h ⇒ REFUND: a positive refund_credit is appended, balance
+  --     restored to the granted 5 (grant 5, debit -1, refund +1).
+  v_res := app.book_session(v_b, v_pref, v_s_future, v_ub, 'bk-pref', 'desk', null, true);
+  v_booking := (v_res ->> 'booking_id')::uuid;
+  v_res := app.cancel_booking(v_b, v_booking, v_ub, 'cx-pref', now());
+  perform app_test.assert((v_res ->> 'branch') = 'refund', '(32) a ≥12h cancel did not choose refund');
+  perform app_test.assert((v_res ->> 'refunded')::boolean, '(32) refund branch reported refunded=false');
+  select count(*) into n from public.credit_ledger
+    where tenant_id = v_b and person_id = v_pref and entry_type = 'refund_credit' and delta = 1;
+  perform app_test.assert(n = 1, '(32) refund did not APPEND a positive refund_credit entry');
+  select coalesce(sum(delta), 0) into n from public.credit_ledger where tenant_id = v_b and person_id = v_pref;
+  perform app_test.assert(n = 5, '(32) refund did not restore the credit balance');
+
+  -- (f) CANCEL <12h ⇒ FORFEIT: no refund entry; the debit stands (balance 5-1=4).
+  v_res := app.book_session(v_b, v_pfor, v_s_soon, v_ub, 'bk-pfor', 'desk', null, true);
+  v_booking := (v_res ->> 'booking_id')::uuid;
+  v_res := app.cancel_booking(v_b, v_booking, v_ub, 'cx-pfor', now());
+  perform app_test.assert((v_res ->> 'branch') = 'forfeit', '(32) a <12h cancel did not forfeit');
+  perform app_test.assert(not (v_res ->> 'refunded')::boolean, '(32) a forfeit reported a refund');
+  select count(*) into n from public.credit_ledger
+    where tenant_id = v_b and person_id = v_pfor and entry_type = 'refund_credit';
+  perform app_test.assert(n = 0, '(32) a forfeit APPENDED a refund entry');
+  select coalesce(sum(delta), 0) into n from public.credit_ledger where tenant_id = v_b and person_id = v_pfor;
+  perform app_test.assert(n = 4, '(32) a forfeit did not keep the debit');
+
+  -- (g) CROSS-TENANT refusal: uB (owner of B) cannot hold/book/cancel in tenant A
+  --     (the definer RPCs re-check role in-body → raise, never touch A's rows).
+  raised := false;
+  begin perform app.hold_session(v_a, v_s_a, v_p1, v_ub, 300);
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(32) uB could hold a seat in tenant A');
+  raised := false;
+  begin perform app.book_session(v_a, v_p1, v_s_a, v_ub, 'bk-x', 'desk', null, true);
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(32) uB could book in tenant A');
+  raised := false;
+  begin perform app.cancel_booking(v_a, gen_random_uuid(), v_ub, 'cx-x', now());
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(32) uB could cancel a booking in tenant A');
+
+  -- Availability read is RLS-scoped: uB sees zero of A's sessions, but her own.
+  select count(*) into n from public.session_availability(v_a, now(), now() + interval '48 hours');
+  perform app_test.assert(n = 0, '(32) uB sees tenant A availability');
+  select count(*) into n from public.session_availability(v_b, now(), now() + interval '48 hours');
+  perform app_test.assert(n >= 1, '(32) uB cannot read her OWN availability');
+
+  -- Member-read isolation on the new tables: uB sees zero of A's bookings/holds.
+  select count(*) into n from public.bookings where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(32) uB can SELECT tenant A bookings');
+  select count(*) into n from public.booking_holds where tenant_id = v_a;
+  perform app_test.assert(n = 0, '(32) uB can SELECT tenant A booking_holds');
+
+  -- (h) THE WAIVER ENFORCER (activated LAST — it is tenant-wide). PWaiver owes
+  --     the active-version signature, so booking is impossible (waiver_required).
+  reset role;  -- become() is superuser-only; drop the uB impersonation to seed
+  insert into public.waiver_versions (tenant_id, version, body, active)
+    values (v_b, 1, 'Assumption of risk — sign to proceed.', true);
+  perform app_test.become(v_ub);
+  select needs_signature into v_needs from public.current_waiver_status(v_b, v_pwaiver);
+  perform app_test.assert(v_needs, '(32) PWaiver should owe a signature after activation');
+  raised := false; v_msg := '';
+  begin perform app.book_session(v_b, v_pwaiver, v_s_future, v_ub, 'bk-pw', 'desk', null, true);
+  exception when others then raised := true; v_msg := sqlerrm; end;
+  perform app_test.assert(raised and v_msg like '%waiver_required%',
+    '(32) a person owing a waiver signature could book (enforcer bypassed)');
+  -- The waiver refusal fired BEFORE any credit debit — PWaiver keeps her grant.
+  select coalesce(sum(delta), 0) into n from public.credit_ledger where tenant_id = v_b and person_id = v_pwaiver;
+  perform app_test.assert(n = 5, '(32) a waiver-refused booking still debited a credit');
+
+  -- RPC-written: neither table has a client INSERT path (definer RPCs write).
+  reset role;
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'public.bookings', 'insert'),
+    '(32) authenticated holds INSERT on bookings — bookings are RPC-written');
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'public.booking_holds', 'insert'),
+    '(32) authenticated holds INSERT on booking_holds — holds are RPC-written');
+  perform app_test.assert(
+    not has_table_privilege('service_role', 'public.bookings', 'insert'),
+    '(32) service_role holds INSERT on bookings — only the definer RPCs write');
+end
+$$;
+
 do $$
 declare
   n int;

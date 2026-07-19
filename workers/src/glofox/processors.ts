@@ -26,6 +26,7 @@ import { BILLING_PROCESS_INBOX_KIND, runInbox } from "../billing/inbox.js";
 import { BILLING_PROCESS_OUTBOX_KIND, runOutbox, type StripeAdapter } from "../billing/outbox.js";
 import { BILLING_VERIFY_MONEY_KIND, runVerifyMoney } from "../billing/verify.js";
 import { BILLING_DUNNING_KIND, runDunning } from "../billing/dunning.js";
+import { BOOKING_EXPIRE_HOLDS_KIND, runExpireHolds } from "../booking/expire-holds.js";
 import type { Env as StripeEnv } from "@kelo/stripe";
 
 export {
@@ -36,6 +37,7 @@ export {
   BILLING_PROCESS_OUTBOX_KIND,
   BILLING_VERIFY_MONEY_KIND,
   BILLING_DUNNING_KIND,
+  BOOKING_EXPIRE_HOLDS_KIND,
 };
 
 /**
@@ -209,6 +211,16 @@ export function createGlofoxProcessors(
       await runDunning(ctx.pool, { now });
     },
 
+    /**
+     * Phase 6 · unit 6.1 — the hold-expiry sweep. GLOBAL (no tenant on the job):
+     * one pass reclaims every expired, UN-frozen seat hold across tenants. The
+     * frozen-guard lives in app.expire_holds (deletes only `not frozen`), so a
+     * mid-tender hold is never reclaimed. Injected now, like the drains.
+     */
+    [BOOKING_EXPIRE_HOLDS_KIND]: async (_job, ctx) => {
+      await runExpireHolds(ctx.pool, { now });
+    },
+
     [GLOFOX_SYNC_KINDS[0]]: syncProcessor(() => erase(membersSpec)),
     [GLOFOX_SYNC_KINDS[1]]: syncProcessor(() => erase(membershipsSpec)),
     [GLOFOX_SYNC_KINDS[2]]: syncProcessor(() => erase(eventsSpec)),
@@ -290,6 +302,7 @@ export function createGlofoxProcessors(
       const instant = now();
       const hourBucket = instant.toISOString().slice(0, 13); // YYYY-MM-DDTHH
       const dayBucket = instant.toISOString().slice(0, 10); // YYYY-MM-DD
+      const minuteBucket = instant.toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
       const independentlyEnqueuedKinds = [...GLOFOX_SYNC_KINDS, GLOFOX_RECONCILE_KIND] as const;
       for (const kind of independentlyEnqueuedKinds) {
         await ctx.pool.query(`select app.enqueue_job($1, $2, $3, now(), 100, 5, $4)`, [
@@ -386,6 +399,20 @@ export function createGlofoxProcessors(
         BILLING_DUNNING_KIND,
         JSON.stringify({}),
         `${BILLING_DUNNING_KIND}:${dayBucket}`,
+      ]);
+
+      // The hold-expiry sweep (unit 6.1) reclaims expired UN-frozen seat holds.
+      // Holds have a 300s default TTL, so the hour key the other drains use is
+      // far too coarse — this enqueues with a MINUTE-scoped key. NOTE: the tick
+      // cadence (the single 5-minute Netlify scheduled function) is the REAL
+      // granularity bound; a seat can linger up to one tick past its TTL. That is
+      // acceptable — a held seat only delays reuse, never oversells (capacity
+      // counts live holds), and payment initiation FREEZES the hold so tender is
+      // never reclaimed mid-flight. GLOBAL (tenant NULL): one sweep spans tenants.
+      await ctx.pool.query(`select app.enqueue_job($1, $2, null, now(), 100, 5, $3)`, [
+        BOOKING_EXPIRE_HOLDS_KIND,
+        JSON.stringify({}),
+        `${BOOKING_EXPIRE_HOLDS_KIND}:${minuteBucket}`,
       ]);
     },
   };
