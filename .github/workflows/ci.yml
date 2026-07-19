@@ -132,3 +132,9 @@ jobs:
         # Invoked at repo root so the root vitest config's include globs resolve
         # (DATABASE_URL is set at the job level → the skipIf gate goes active).
         run: pnpm exec vitest run packages/db/test/jobs_concurrency.test.ts
+      - name: booking concurrency storm (zero double-bookings)
+        # The phase-6 gate: 12 genuinely-parallel book_session calls at a 3-seat
+        # session must let exactly 3 win and refuse the rest session_full — the
+        # live proof behind block 32's sequential over-capacity refusal. Same
+        # Postgres service, migrations already applied above.
+        run: pnpm exec vitest run packages/db/test/booking_storm.test.ts
