@@ -423,3 +423,44 @@ describe("GET /payments/dunning — the dunning queue (owner/manager)", () => {
     });
   }
 });
+
+describe("GET /payments — the list carries derived tender + the refund threshold", () => {
+  it("derives tender=cash for a payment with no Stripe command and no intent id", async () => {
+    const fake = userFake({
+      role: "manager",
+      payment: {
+        ...defaultPayment,
+        status: "succeeded",
+        command_id: null,
+        stripe_payment_intent_id: null,
+      },
+      settings: { refund_step_up_cents: 7500 },
+    });
+    const { app } = appFor(fake);
+    const res = await app.request("/api/v1/payments", getReq());
+    expect(res.status).toBe(200);
+    const payload = (await res.json()) as {
+      data: { payments: { tender: string }[]; refund_step_up_cents: number };
+    };
+    // Tender is SERVER-derived so the web surface never guesses money provenance.
+    expect(payload.data.payments[0]?.tender).toBe("cash");
+    // The refund step-up threshold rides the envelope (no second round trip).
+    expect(payload.data.refund_step_up_cents).toBe(7500);
+  });
+
+  it("derives tender=stripe when a Stripe outbox command is linked, and defaults the threshold", async () => {
+    const fake = userFake({
+      role: "owner",
+      payment: { ...defaultPayment, status: "succeeded", command_id: COMMAND_ID },
+      settings: {},
+    });
+    const { app } = appFor(fake);
+    const res = await app.request("/api/v1/payments", getReq());
+    const payload = (await res.json()) as {
+      data: { payments: { tender: string }[]; refund_step_up_cents: number };
+    };
+    expect(payload.data.payments[0]?.tender).toBe("stripe");
+    // Default threshold ($100) when the tenant has not configured one.
+    expect(payload.data.refund_step_up_cents).toBe(10000);
+  });
+});

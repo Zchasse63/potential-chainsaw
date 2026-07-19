@@ -89,12 +89,14 @@ export async function postEnvelope(
   path: string,
   accessToken: string,
   body: unknown,
+  extraHeaders?: Record<string, string>,
 ): Promise<unknown> {
   return requestEnvelope(path, accessToken, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       [IDEMPOTENCY_KEY_HEADER]: crypto.randomUUID(),
+      ...(extraHeaders ?? {}),
     },
     body: JSON.stringify(body),
   });

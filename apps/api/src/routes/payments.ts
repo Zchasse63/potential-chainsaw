@@ -10,6 +10,7 @@ import {
   createRefund,
   fetchPayment,
   fetchPayments,
+  type PaymentRow,
 } from "../data-payments.js";
 import { ApiError } from "../errors.js";
 import { requireAuth } from "../middleware/auth.js";
@@ -47,6 +48,24 @@ function resolveRefundThreshold(settings: Record<string, unknown> | undefined): 
   const raw = settings?.[REFUND_THRESHOLD_SETTING];
   const value = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
   return Number.isInteger(value) && value >= 0 ? value : DEFAULT_REFUND_THRESHOLD_CENTS;
+}
+
+/**
+ * Tender is DERIVED server-side (there is no tender column — a payment is an
+ * event, invariant #6). A cash POS sale carries neither a Stripe outbox command
+ * nor a payment-intent id; anything with either is a Stripe payment. The
+ * browser renders this server-provided value — it never guesses tender from a
+ * money row itself.
+ */
+function tenderOf(payment: PaymentRow): "cash" | "stripe" {
+  return payment.command_id === null && payment.stripe_payment_intent_id === null
+    ? "cash"
+    : "stripe";
+}
+
+type PaymentView = PaymentRow & { tender: "cash" | "stripe" };
+function withTender(payment: PaymentRow): PaymentView {
+  return { ...payment, tender: tenderOf(payment) };
 }
 
 function requireStepUpSecret(env: NodeJS.ProcessEnv): string {
@@ -87,10 +106,26 @@ export function registerPaymentRoutes(
   createBillingClient: () => KeloSupabaseClient = createServiceRoleClient,
 ): void {
   // -- reads (member) --------------------------------------------------------
+  // The list carries each row's derived tender plus the tenant's refund step-up
+  // threshold, so the web surface can decide when the manager PIN ceremony is
+  // required WITHOUT a second round trip or a client-side default guess.
   app.get("/payments", requireAuth(deps), resolveTenant, async (c) => {
     const { userClient } = authOf(c);
     const { tenantId } = tenantOf(c);
-    return c.json(c.var.ok({ payments: await fetchPayments(userClient, tenantId) }, native), 200);
+    const [payments, tenant] = await Promise.all([
+      fetchPayments(userClient, tenantId),
+      fetchTenant(userClient, tenantId),
+    ]);
+    return c.json(
+      c.var.ok(
+        {
+          payments: payments.map(withTender),
+          refund_step_up_cents: resolveRefundThreshold(tenant?.settings),
+        },
+        native,
+      ),
+      200,
+    );
   });
 
   // -- the dunning queue (owner/manager; unit 5.8 web surface) ----------------
@@ -116,7 +151,7 @@ export function registerPaymentRoutes(
     const { tenantId } = tenantOf(c);
     const payment = await fetchPayment(userClient, tenantId, id);
     if (payment === null) throw new ApiError(404, "payment_not_found", "payment not found");
-    return c.json(c.var.ok({ payment }, native), 200);
+    return c.json(c.var.ok({ payment: withTender(payment) }, native), 200);
   });
 
   // -- create a payment intent (owner/manager/front_desk take payments) ------
@@ -145,7 +180,7 @@ export function registerPaymentRoutes(
       if (payment === null) {
         throw new Error("createPaymentIntent: payment vanished after insert");
       }
-      return c.json(c.var.ok({ payment }, native), 201);
+      return c.json(c.var.ok({ payment: withTender(payment) }, native), 201);
     },
   );
 

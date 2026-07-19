@@ -47,23 +47,30 @@ describe("AppShell", () => {
       "Import review",
       "Health",
       "Retail",
+      "◧Point of sale",
+      "$Payments",
       "◎Staff",
       "§Waivers",
     ]);
     expect(screen.getByRole("link", { name: "Marketing" }).getAttribute("href")).toBe("/marketing");
     expect(screen.getByRole("link", { name: "Ask" }).getAttribute("href")).toBe("/ask");
     expect(screen.getByRole("link", { name: "Retail" }).getAttribute("href")).toBe("/retail");
+    expect(screen.getByRole("link", { name: "Point of sale" }).getAttribute("href")).toBe("/pos");
+    expect(screen.getByRole("link", { name: "Payments" }).getAttribute("href")).toBe("/payments");
     expect(screen.getByRole("link", { name: "Staff" }).getAttribute("href")).toBe("/staff");
     expect(screen.getByRole("link", { name: "Waivers" }).getAttribute("href")).toBe("/waivers");
   });
 
-  it("removes Staff, Retail, and Waivers from front-desk and trainer navigation", () => {
+  it("gives front-desk the POS till but not Payments, Staff, Retail, or Waivers", () => {
     access.role = "front_desk";
     render(
       <AppShell>
         <p>content</p>
       </AppShell>,
     );
+    // Front-desk takes cash at the POS but never sees the money surface.
+    expect(screen.getByRole("link", { name: "Point of sale" }).getAttribute("href")).toBe("/pos");
+    expect(screen.queryByRole("link", { name: "Payments" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Staff" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Retail" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Waivers" })).toBeNull();
