@@ -254,13 +254,26 @@ function SlotPicker({
 }
 
 // -- hold countdown -----------------------------------------------------------
-// The hold response carries NO server expires_at (the RPC returns only the id),
-// so the countdown is anchored client-side at the response instant over the TTL
-// we requested. It is labelled as an approximate reservation window; the server
-// sweep + book-time validation are the real authority, and an expired hold is
-// caught honestly at confirm.
+// The countdown is anchored on the SERVER's expires_at when the hold response
+// carries one (F4), falling back to a client anchor over the requested TTL only
+// if it is absent. The server sweep + book-time validation remain the real
+// authority; an expired hold is caught honestly at confirm.
+//
+// FROZEN holds are the exception (F1): once freeze-hold succeeds the sweep will
+// NOT reclaim the seat, so a frozen hold must NEVER show a running countdown or
+// an "expired" state — that would push the operator to release a validly-held
+// seat. A frozen hold renders a STATIC "locked for this tender" line instead.
 
-function HoldCountdown({ remainingMs }: { remainingMs: number }) {
+function HoldCountdown({ remainingMs, frozen }: { remainingMs: number; frozen: boolean }) {
+  if (frozen) {
+    // Seat is locked to this tender — the sweep cannot reclaim it, so there is
+    // no deadline to display and no expired state to fall into.
+    return (
+      <p role="status" data-testid="hold-countdown" className="text-body font-medium text-ink">
+        Seat locked for this tender — the reservation is held until you complete or release it.
+      </p>
+    );
+  }
   const expired = remainingMs <= 0;
   const totalSeconds = Math.max(0, Math.floor(remainingMs / 1000));
   const mm = Math.floor(totalSeconds / 60);
@@ -430,6 +443,9 @@ interface HeldSlot {
   slot: AvailabilityRow;
   holdId: string;
   heldAtMs: number;
+  /** Server expires_at (ms) when the hold response carried one; null → fall back
+   *  to the client anchor (heldAtMs + TTL). */
+  expiresAtMs: number | null;
 }
 
 export function BookScreen({
@@ -472,13 +488,15 @@ export function BookScreen({
   const needsSignature = waiverInspection?.needs_signature;
   const activeVersion = waiverInspection?.active_version ?? null;
 
-  // Re-render the countdown each second while a hold is live (display only; the
-  // server is the authority). Injected `now` keeps tests deterministic.
+  // Re-render the countdown each second while a hold is live AND unfrozen
+  // (display only; the server is the authority). A FROZEN hold stops the tick —
+  // its seat is locked to the tender, so there is no countdown to advance and no
+  // expired state to fall into (F1). Injected `now` keeps tests deterministic.
   useEffect(() => {
-    if (held === null || result !== null) return;
+    if (held === null || result !== null || frozen) return;
     const id = setInterval(() => setTick((value) => value + 1), 1000);
     return () => clearInterval(id);
-  }, [held, result]);
+  }, [held, result, frozen]);
 
   function resetIntent() {
     bookKey.current = null;
@@ -528,7 +546,18 @@ export function BookScreen({
         ttl_seconds: holdTtlSeconds,
       });
       resetIntent();
-      setHeld({ slot, holdId: hold.hold_id, heldAtMs: now() });
+      // Anchor on the SERVER expires_at when present (F4); fall back to the
+      // client anchor (heldAtMs + TTL) only if the response omitted it.
+      const expiresAtMs =
+        hold.expires_at !== null && hold.expires_at !== undefined
+          ? Date.parse(hold.expires_at)
+          : null;
+      setHeld({
+        slot,
+        holdId: hold.id,
+        heldAtMs: now(),
+        expiresAtMs: Number.isNaN(expiresAtMs ?? NaN) ? null : expiresAtMs,
+      });
       setResult(null);
     } catch (caught) {
       setBookError(mutationMessage(caught, "The seat could not be held. Try again."));
@@ -612,7 +641,11 @@ export function BookScreen({
     }
   }
 
-  const remainingMs = held === null ? 0 : held.heldAtMs + holdTtlSeconds * 1000 - now();
+  // Server-authoritative when the hold response carried expires_at (F4); the
+  // client anchor is the documented fallback for a response that omitted it.
+  const holdExpiresAtMs =
+    held === null ? 0 : held.expiresAtMs ?? held.heldAtMs + holdTtlSeconds * 1000;
+  const remainingMs = held === null ? 0 : holdExpiresAtMs - now();
 
   return (
     <div className="space-y-8">
@@ -705,7 +738,7 @@ export function BookScreen({
                 <h2 className="mt-1 font-display text-title font-bold text-ink">
                   {slotClock(held.slot.starts_at)}
                 </h2>
-                <HoldCountdown remainingMs={remainingMs} />
+                <HoldCountdown remainingMs={remainingMs} frozen={frozen} />
               </div>
 
               {needsSignature === true || waiverBlocked ? (

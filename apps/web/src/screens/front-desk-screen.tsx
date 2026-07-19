@@ -219,6 +219,10 @@ export function FrontDeskScreen({
   const checkInKeys = useRef<Map<string, string>>(new Map());
   const undoTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const intervalTimers = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
+  // Bookings whose 10s undo window is still open — a pending intent that has NOT
+  // yet committed. Held so unmount / page teardown can FLUSH them instead of
+  // silently dropping the check-in (F3).
+  const pendingBookings = useRef<Map<string, RosterBooking>>(new Map());
   const acceptKeys = useRef<Map<string, string>>(new Map());
   const declineKeys = useRef<Map<string, string>>(new Map());
   // Guards against overlapping replays (idempotent anyway, but no wasted calls).
@@ -242,6 +246,8 @@ export function FrontDeskScreen({
    *  is a safe no-op if the POST actually landed. */
   const commitCheckIn = useCallback(
     async (booking: RosterBooking) => {
+      // The intent is committing now — it is no longer a pending undo-window row.
+      pendingBookings.current.delete(booking.id);
       if (activeSessionId === null) return;
       const key = keyFor(checkInKeys.current, booking.id);
       const queueEntry: QueuedCheckIn = {
@@ -274,6 +280,8 @@ export function FrontDeskScreen({
   /** Tap check-in → start the 10s undo window; commit only when it elapses. */
   function startCheckIn(booking: RosterBooking) {
     if (undoTimers.current.has(booking.id)) return;
+    // Track the pending intent so unmount / page teardown can flush it (F3).
+    pendingBookings.current.set(booking.id, booking);
     setRow(booking.id, { kind: "undo", secondsLeft: Math.ceil(undoWindowMs / 1000) });
     const started = Date.now();
     const interval = setInterval(() => {
@@ -291,6 +299,9 @@ export function FrontDeskScreen({
   }
 
   function undoCheckIn(bookingId: string) {
+    // An explicit undo cancels the intent entirely — nothing to flush, no server
+    // write at all (the whole point of the pre-commit window).
+    pendingBookings.current.delete(bookingId);
     const timer = undoTimers.current.get(bookingId);
     if (timer !== undefined) {
       clearTimeout(timer);
@@ -303,6 +314,57 @@ export function FrontDeskScreen({
     }
     setRow(bookingId, { kind: "idle" });
   }
+
+  /** Stop a booking's undo-window timers (used when flushing on teardown). */
+  function clearTimers(bookingId: string) {
+    const timer = undoTimers.current.get(bookingId);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      undoTimers.current.delete(bookingId);
+    }
+    const interval = intervalTimers.current.get(bookingId);
+    if (interval !== undefined) {
+      clearInterval(interval);
+      intervalTimers.current.delete(bookingId);
+    }
+  }
+
+  /** UNMOUNT flush (F3): the app is still alive, so FIRE the commit for every
+   *  pending intent — commitCheckIn POSTs when online and enqueues to the
+   *  degraded queue when it cannot reach the server. Never discard. */
+  const flushPendingCommit = useCallback(() => {
+    for (const [id, booking] of [...pendingBookings.current]) {
+      clearTimers(id);
+      void commitCheckIn(booking);
+    }
+  }, [commitCheckIn]);
+
+  /** PAGE-TEARDOWN flush (F3): on pagehide/beforeunload an async POST would not
+   *  survive, so ENQUEUE each pending intent synchronously — it is durable in
+   *  localStorage and replays idempotently on the next mount/reconnect. */
+  const flushPendingEnqueue = useCallback(() => {
+    if (activeSessionId === null) {
+      pendingBookings.current.clear();
+      return;
+    }
+    for (const [id, booking] of [...pendingBookings.current]) {
+      clearTimers(id);
+      const key = keyFor(checkInKeys.current, id);
+      setQueue(
+        enqueueCheckIn(
+          {
+            bookingId: id,
+            sessionId: activeSessionId,
+            personLabel: booking.people?.first_name ?? null,
+            idempotencyKey: key,
+            queuedAt: new Date().toISOString(),
+          },
+          storage ?? undefined,
+        ),
+      );
+    }
+    pendingBookings.current.clear();
+  }, [activeSessionId, storage]);
 
   const runReplay = useCallback(async () => {
     if (replaying.current || !isOnline()) return;
@@ -343,13 +405,23 @@ export function FrontDeskScreen({
     return () => window.removeEventListener("online", onOnline);
   }, []);
 
-  // Clear any pending undo timers on unmount.
+  // FLUSH pending undo-window intents on teardown instead of discarding them
+  // (F3). Refs hold the latest flush closures so the listeners register ONCE.
+  const flushCommitRef = useRef(flushPendingCommit);
+  flushCommitRef.current = flushPendingCommit;
+  const flushEnqueueRef = useRef(flushPendingEnqueue);
+  flushEnqueueRef.current = flushPendingEnqueue;
   useEffect(() => {
-    const timers = undoTimers.current;
-    const intervals = intervalTimers.current;
+    // Page teardown: enqueue synchronously (an async POST would not survive).
+    const onHide = () => flushEnqueueRef.current();
+    window.addEventListener("pagehide", onHide);
+    window.addEventListener("beforeunload", onHide);
     return () => {
-      for (const timer of timers.values()) clearTimeout(timer);
-      for (const interval of intervals.values()) clearInterval(interval);
+      window.removeEventListener("pagehide", onHide);
+      window.removeEventListener("beforeunload", onHide);
+      // Component unmount (tab switch, route change): the app is alive, so fire
+      // the commit — commit-or-queue, never a silently lost check-in.
+      flushCommitRef.current();
     };
   }, []);
 

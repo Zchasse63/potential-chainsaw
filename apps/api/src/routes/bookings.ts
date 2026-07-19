@@ -96,6 +96,10 @@ export function registerBookingRoutes(
   });
 
   // -- reserve a seat (owner/manager/front_desk) -----------------------------
+  // F4: hold_session returns only the id (its 0040 signature is frozen), so
+  // holdSession reads the persisted hold back with the SAME user client and the
+  // route returns { hold: { id, expires_at, frozen } } — a server-authoritative
+  // expiry the desk anchors its countdown on instead of guessing client-side.
   app.post(
     "/bookings/hold",
     requireAuth(deps),

@@ -125,8 +125,11 @@ export async function replayQueue(
       failed.push({ bookingId: entry.bookingId, error });
     }
   }
-  // Keep only entries that did NOT sync (a failed replay stays queued).
-  const remaining = queue.filter((item) => !synced.includes(item.bookingId));
+  // MERGE, never blind-write the pre-await snapshot: an entry enqueued DURING
+  // the awaited POSTs (a failed tap on another booking while we replay) lives
+  // in storage now but NOT in `queue`. Re-read and remove exactly the ids that
+  // synced — so a concurrent enqueue survives instead of being clobbered.
+  const remaining = readQueue(storage).filter((item) => !synced.includes(item.bookingId));
   writeQueue(remaining, storage);
   return { synced, failed, remaining };
 }

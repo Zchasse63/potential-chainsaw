@@ -91,6 +91,23 @@ describe("checkin-queue", () => {
     expect(readQueue(storage).map((item) => item.bookingId)).toEqual(["book-2"]);
   });
 
+  it("preserves an entry enqueued DURING replay (merge, never blind-write the stale snapshot)", async () => {
+    // Reconnect replays book-1; while its POST is in flight, a failed tap on
+    // book-2 enqueues concurrently. The final write must NOT erase book-2.
+    enqueueCheckIn(entry("book-1"), storage);
+    const perform = vi.fn().mockImplementation(async () => {
+      enqueueCheckIn(entry("book-2"), storage);
+    });
+
+    const outcome = await replayQueue(perform, storage);
+
+    expect(perform).toHaveBeenCalledTimes(1); // only the snapshot entry replays
+    expect(outcome.synced).toEqual(["book-1"]);
+    // book-2, enqueued mid-replay, survives the replay's final write.
+    expect(outcome.remaining.map((item) => item.bookingId)).toEqual(["book-2"]);
+    expect(readQueue(storage).map((item) => item.bookingId)).toEqual(["book-2"]);
+  });
+
   it("removeFromQueue drops a single booking", () => {
     enqueueCheckIn(entry("book-1"), storage);
     enqueueCheckIn(entry("book-2"), storage);

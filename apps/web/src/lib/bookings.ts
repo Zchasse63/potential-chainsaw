@@ -47,12 +47,16 @@ export interface AvailabilityData {
   sessions: AvailabilityRow[];
 }
 
-/** POST /bookings/hold → { hold: { hold_id } }. The RPC returns ONLY the id;
- *  it carries no server expires_at, so the countdown is anchored client-side at
- *  the response instant over the requested TTL and the server sweep +
- *  book-time validation remain the real authority (see BookScreen). */
+/** POST /bookings/hold → { hold: { id, expires_at, frozen } } (F4). The route
+ *  reads the persisted hold back with the SAME user client after the RPC, so the
+ *  desk anchors its countdown on the SERVER's expires_at instead of guessing
+ *  from the response instant. `expires_at` may be null if the read came back
+ *  empty, in which case the client anchor is the documented fallback; the server
+ *  sweep + book-time validation remain the real authority (see BookScreen). */
 export interface Hold {
-  hold_id: string;
+  id: string;
+  expires_at: string | null;
+  frozen: boolean;
 }
 
 /** POST /bookings → { booking: BookResult } (data-bookings.ts bookResultSchema). */
@@ -194,7 +198,9 @@ export async function fetchRoster(accessToken: string, sessionId: string): Promi
 /**
  * POST /bookings/hold — reserve a seat. Self-idempotent server-side (one-live-
  * hold upsert), so a fresh random key per attempt is acceptable; the reserved
- * hold is reflected only from this confirmed response. Returns { hold_id }.
+ * hold is reflected only from this confirmed response. Returns
+ * { id, expires_at, frozen } — the server-authoritative expiry the desk
+ * countdown anchors on (F4).
  */
 export async function holdSession(accessToken: string, input: HoldInput): Promise<Hold> {
   const response = await postEnvelope("/bookings/hold", accessToken, input);

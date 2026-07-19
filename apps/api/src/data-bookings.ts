@@ -35,6 +35,14 @@ interface RpcClient {
   rpc(name: string, params?: Record<string, unknown>): PromiseLike<QueryResult>;
 }
 
+/** The minimal PostgREST read builder used for the server-authoritative hold
+ *  read-back (F4). Cast the user client through it, mirroring data-booking.ts. */
+interface TableBuilder extends PromiseLike<QueryResult> {
+  select(columns?: string): TableBuilder;
+  eq(column: string, value: unknown): TableBuilder;
+  limit(count: number): TableBuilder;
+}
+
 function parseInternal<S extends z.ZodTypeAny>(schema: S, data: unknown, label: string): z.output<S> {
   const parsed = schema.safeParse(data);
   if (!parsed.success) throw new Error(`${label}: unexpected DB row shape (${parsed.error.message})`);
@@ -93,8 +101,28 @@ export interface HoldArgs {
   ttlSeconds: number;
 }
 
-/** app.hold_session returns the bare hold id (uuid). */
-export async function holdSession(client: KeloSupabaseClient, args: HoldArgs): Promise<{ hold_id: string }> {
+/** The server-authoritative hold the desk countdown anchors on (F4). */
+export interface HoldRecord {
+  id: string;
+  expires_at: string | null;
+  frozen: boolean;
+}
+
+const holdRowSchema = z.object({
+  expires_at: timestamp.nullable(),
+  frozen: z.boolean(),
+});
+
+/**
+ * app.hold_session returns the bare hold id (uuid); its return type MUST NOT
+ * change (0040 is applied live). To hand the client a server-authoritative
+ * expiry instead of forcing a client-anchored countdown, we read the persisted
+ * hold back with the SAME user client — same-tenant staff RLS allows the SELECT
+ * (attack block 32 proves cross-tenant refusal). If the read-back is
+ * unexpectedly empty the hold still exists, so we return null expiry and let the
+ * client fall back to its own anchor rather than failing the reservation.
+ */
+export async function holdSession(client: KeloSupabaseClient, args: HoldArgs): Promise<HoldRecord> {
   const holdId = await callRpc(
     client,
     "hold_session",
@@ -108,7 +136,20 @@ export async function holdSession(client: KeloSupabaseClient, args: HoldArgs): P
     uuid,
     "holdSession",
   );
-  return { hold_id: holdId };
+  const builder = (client as unknown as { from(table: string): TableBuilder })
+    .from("booking_holds")
+    .select("expires_at, frozen")
+    .eq("id", holdId)
+    .limit(1);
+  const { data, error } = await builder;
+  if (error !== null) throw new Error(`holdSession expiry read failed: ${error.message}`);
+  const parsed = z.array(holdRowSchema).safeParse(data ?? []);
+  const row = parsed.success ? parsed.data[0] : undefined;
+  return {
+    id: holdId,
+    expires_at: row?.expires_at ?? null,
+    frozen: row?.frozen ?? false,
+  };
 }
 
 // -- freeze -------------------------------------------------------------------

@@ -49,7 +49,7 @@ function waiverStatus(needs: boolean): BoundaryQuery {
 }
 
 function renderBook(overrides: Partial<BookScreenProps> = {}) {
-  const onHold = vi.fn().mockResolvedValue({ hold_id: "hold-1" });
+  const onHold = vi.fn().mockResolvedValue({ id: "hold-1", expires_at: null, frozen: false });
   const onFreeze = vi.fn().mockResolvedValue(undefined);
   const onRelease = vi.fn().mockResolvedValue(undefined);
   const onBook = vi.fn().mockResolvedValue({ booking_id: "book-1", credit_entry_id: "credit-1" });
@@ -131,6 +131,54 @@ describe("BookScreen — waiver gate", () => {
     });
     expect(typeof key).toBe("string");
     expect(await screen.findByTestId("book-result")).toBeDefined();
+  });
+});
+
+describe("BookScreen — frozen hold never expires (F1)", () => {
+  it("shows a STATIC locked state for a frozen hold past its TTL, never 'expired'", async () => {
+    // A mutable clock: the hold is anchored at t0, then time is pushed past the
+    // TTL before the freeze completes.
+    let t = 1_000_000;
+    const onHold = vi.fn().mockResolvedValue({ id: "hold-1", expires_at: null, frozen: false });
+    renderBook({ onHold, statusQueryFor: () => waiverStatus(false), holdTtlSeconds: 60, now: () => t });
+    loadPerson();
+
+    fireEvent.click(await screen.findByTestId("slot-book-sess-open"));
+    await waitFor(() => expect(screen.getByTestId("hold-countdown")).toBeDefined());
+    // Before tender, the courtesy countdown is running.
+    expect(screen.getByTestId("hold-countdown").textContent).toContain("Seat held for about");
+
+    // Push the clock WELL past the TTL, then start tender → freeze-hold fires.
+    t = 1_000_000 + 60_000 + 30_000;
+    fireEvent.click(screen.getByTestId("book-tender-credit"));
+
+    // Once frozen, the seat is locked to the tender: a static locked line, never
+    // a running countdown and never the 'expired — reserve again' state.
+    await waitFor(() =>
+      expect(screen.getByTestId("hold-countdown").textContent).toContain("Seat locked for this tender"),
+    );
+    expect(screen.getByTestId("hold-countdown").textContent).not.toContain("expired");
+    // Tender is still available — the operator is NOT pushed to re-hold the seat.
+    expect(screen.getByTestId("book-confirm")).toBeDefined();
+  });
+});
+
+describe("BookScreen — server-authoritative hold expiry (F4)", () => {
+  it("anchors the countdown on the server expires_at, ignoring the client TTL", async () => {
+    // Client TTL is a tiny 5s, but the server says the hold lives ~10 minutes;
+    // the countdown must reflect the SERVER expiry, not the client anchor.
+    const now = 1_000_000;
+    const serverExpires = new Date(now + 600_000).toISOString();
+    const onHold = vi
+      .fn()
+      .mockResolvedValue({ id: "hold-1", expires_at: serverExpires, frozen: false });
+    renderBook({ onHold, statusQueryFor: () => waiverStatus(false), holdTtlSeconds: 5, now: () => now });
+    loadPerson();
+
+    fireEvent.click(await screen.findByTestId("slot-book-sess-open"));
+    await waitFor(() => expect(screen.getByTestId("hold-countdown")).toBeDefined());
+    // ~10:00 from the server expiry, NOT ~0:05 from the client TTL.
+    expect(screen.getByTestId("hold-countdown").textContent).toContain("10:00");
   });
 });
 
