@@ -498,6 +498,71 @@ export async function insertMemberSession(
   return row;
 }
 
+// -- member account (unit 8.3b) ----------------------------------------------
+
+export interface MemberAccount {
+  /** REAL-TIME balance: sum of the append-only credit_ledger (invariant #6 —
+   * no mutable balance column; the app.credit_balances matview lags a booking's
+   * debit, so the member's own view must sum the ledger live). */
+  credit_balance: number;
+  waiver: { needs_signature: boolean };
+  bookings: { booking_id: string; session_id: string; status: string }[];
+}
+
+/** The signed-in member's account: live credit balance, waiver status, and
+ * active bookings (booked|checked_in). session start times are resolved
+ * client-side from /member/schedule (kept out here to avoid leaking any other
+ * attendee's session data). Scope is the resolved member — never the request. */
+export async function fetchMemberAccount(
+  scope: MemberScope,
+  client: KeloSupabaseClient,
+): Promise<MemberAccount> {
+  const ledgerData = await run(
+    from(client, "credit_ledger")
+      .select("delta")
+      .eq("tenant_id", scope.tenantId)
+      .eq("person_id", scope.personId),
+    "fetchMemberAccount.ledger",
+  );
+  const ledger = parseInternal(
+    z.array(z.object({ delta: z.number().int() })),
+    ledgerData ?? [],
+    "fetchMemberAccount.ledger",
+  );
+  const credit_balance = ledger.reduce((sum, row) => sum + row.delta, 0);
+
+  const { data: waiverData, error: waiverErr } = await (client as unknown as RpcClient).rpc(
+    "current_waiver_status",
+    { p_tenant: scope.tenantId, p_person: scope.personId },
+  );
+  if (waiverErr !== null) {
+    throw new Error(`current_waiver_status RPC failed: ${waiverErr.message}`);
+  }
+  const waiverRows = parseInternal(
+    z.array(z.object({ needs_signature: z.boolean() })),
+    waiverData ?? [],
+    "fetchMemberAccount.waiver",
+  );
+  const needs_signature = waiverRows[0]?.needs_signature ?? false;
+
+  const bookingData = await run(
+    from(client, "bookings")
+      .select("id, session_id, status")
+      .eq("tenant_id", scope.tenantId)
+      .eq("person_id", scope.personId),
+    "fetchMemberAccount.bookings",
+  );
+  const bookings = parseInternal(
+    z.array(z.object({ id: uuid, session_id: uuid, status: z.string() })),
+    bookingData ?? [],
+    "fetchMemberAccount.bookings",
+  )
+    .filter((b) => b.status === "booked" || b.status === "checked_in")
+    .map((b) => ({ booking_id: b.id, session_id: b.session_id, status: b.status }));
+
+  return { credit_balance, waiver: { needs_signature }, bookings };
+}
+
 // -- member booking scope (unit 8.3a) ----------------------------------------
 
 /** How many LIVE holds this person currently owns (frozen, or unexpired). The
