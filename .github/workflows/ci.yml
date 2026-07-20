@@ -227,3 +227,8 @@ jobs:
         # PAID+REFUNDED net (refund sign) and the recurring_member-only cohort —
         # a wrong sign/cohort is a silently-wrong headline number.
         run: pnpm exec vitest run packages/db/test/kpi_golden.test.ts
+      - name: ask fill-rate golden (divide-by-zero-safe demand)
+        # WS-4d: execute ask_fill_rate_by_daypart and assert the exact fill for a
+        # normal daypart and the divide-by-zero-safe 0 on a zero-capacity slot —
+        # the /ask digit fence trusts these rows as ground truth.
+        run: pnpm exec vitest run packages/db/test/ask_golden.test.ts
