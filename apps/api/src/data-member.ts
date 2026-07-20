@@ -625,16 +625,24 @@ export async function isContactSuppressed(
 ): Promise<boolean> {
   const data = await run(
     from(client, "comms_suppressions")
-      .select("address")
+      .select("address, reason")
       .eq("tenant_id", tenantId)
       .eq("channel", channel),
     "isContactSuppressed",
   );
-  const rows = parseInternal(z.array(z.object({ address: z.string() })), data ?? [], "isContactSuppressed");
+  const rows = parseInternal(
+    z.array(z.object({ address: z.string(), reason: z.string().nullable() })),
+    data ?? [],
+    "isContactSuppressed",
+  );
   const want = channel === "email" ? normalizedAddress.toLowerCase() : toE164US(normalizedAddress);
   return rows.some((row) => {
     const have = channel === "email" ? row.address.toLowerCase() : toE164US(row.address);
-    return have !== null && have === want;
+    if (have === null || have !== want) return false;
+    // Parity with @kelo/comms canSend for a TRANSACTIONAL message (OTP): SMS is
+    // blocked by any suppression (STOP), email only by a hard bounce — a soft
+    // email suppression must NOT withhold a sign-in code.
+    return channel === "sms" || row.reason === "hard_bounce";
   });
 }
 

@@ -102,7 +102,7 @@ function startApp(scenario: StartScenario = {}) {
       // The suppression check (§3.3) reads this before the direct OTP send.
       comms_suppressions: onTable({
         select: {
-          data: scenario.suppressed === true ? [{ address: CONTACT_NORMALIZED }] : [],
+          data: scenario.suppressed === true ? [{ address: CONTACT_NORMALIZED, reason: "hard_bounce" }] : [],
         },
       }),
       comms_log: onTable({ insert: { data: [{ id: LOG_ID }] } }),
