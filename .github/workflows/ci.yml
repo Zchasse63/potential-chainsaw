@@ -222,3 +222,8 @@ jobs:
         # once per real transition and never on an idempotent re-run (the cohort
         # member_count/MRR key off).
         run: pnpm exec vitest run packages/db/test/relationships_golden.test.ts
+      - name: KPI golden (revenue refund-sign + member cohort)
+        # WS-4c: execute the kpi_* money functions and assert the same-day
+        # PAID+REFUNDED net (refund sign) and the recurring_member-only cohort —
+        # a wrong sign/cohort is a silently-wrong headline number.
+        run: pnpm exec vitest run packages/db/test/kpi_golden.test.ts
