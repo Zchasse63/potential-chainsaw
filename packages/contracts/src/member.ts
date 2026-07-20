@@ -62,3 +62,70 @@ export type MemberScheduleItem = z.infer<typeof memberScheduleItemSchema>;
 
 export const memberScheduleResponse = z.array(memberScheduleItemSchema);
 export type MemberScheduleResponse = z.infer<typeof memberScheduleResponse>;
+
+// ---------------------------------------------------------------------------
+// Unit 8.2b — member AUTH (plan-member-app §3.2/§3.3). OTP start/verify +
+// session minting. Anti-enumeration is BY CONSTRUCTION: /auth/start always
+// does identical work and returns the same neutral 202 shape; /auth/verify
+// failure is ONE neutral shape for unknown-contact/wrong-code/expired/locked
+// (app.consume_member_otp, migration 0044, is the only verdict path).
+// ---------------------------------------------------------------------------
+
+/** Where the session will live — drives cookie (web) vs in-body token (mobile). */
+export const memberPlatformSchema = z.enum(["web", "ios", "android"]);
+export type MemberPlatform = z.infer<typeof memberPlatformSchema>;
+
+export const memberAuthStartBody = z.object({
+  /** The PUBLIC tenant uuid (client env KELO_TENANT_ID; no Supabase material). */
+  tenant: z.string().uuid(),
+  /** Email or US phone, as typed — normalized server-side (email lc / E.164). */
+  contact: z.string().min(1).max(320),
+});
+export type MemberAuthStartBody = z.infer<typeof memberAuthStartBody>;
+
+/** The neutral /auth/start body — IDENTICAL on hit, miss, staff, rate-limit. */
+export const memberAuthStartResponse = z.object({
+  sent: z.literal(true),
+});
+export type MemberAuthStartResponse = z.infer<typeof memberAuthStartResponse>;
+
+export const memberAuthVerifyBody = z.object({
+  /** The PUBLIC tenant uuid (client env KELO_TENANT_ID; no Supabase material). */
+  tenant: z.string().uuid(),
+  /** The same contact the code was sent to (normalized server-side). */
+  contact: z.string().min(1).max(320),
+  /** The 6-digit OTP as typed. Hashed before it touches anything persistent. */
+  code: z.string().min(1).max(16),
+  platform: memberPlatformSchema,
+  device_label: z.string().min(1).max(100).optional(),
+});
+export type MemberAuthVerifyBody = z.infer<typeof memberAuthVerifyBody>;
+
+/**
+ * The claim state a freshly verified session can be in. `needs_resolution`
+ * sessions see FIRST-NAME-ONLY — balances never render pre-resolution (§3.3).
+ */
+export const memberClaimStatusSchema = z.enum(["active", "needs_resolution"]);
+export type MemberClaimStatus = z.infer<typeof memberClaimStatusSchema>;
+
+/**
+ * The member view returned by a successful /auth/verify. Deliberately minimal:
+ * first_name + claim state + session expiry, NO balances or bookings (those
+ * arrive via the 8.2c+ session-scoped routes). `token` is present ONLY for
+ * mobile platforms — web rides the host-only `kelo_member` cookie instead, so
+ * the raw token is returned in-body exactly once per session (§3.2).
+ */
+export const memberAuthViewSchema = z.object({
+  member: z.object({
+    first_name: z.string().nullable(),
+    claim_status: memberClaimStatusSchema,
+  }),
+  session: z.object({
+    /** Rolling expiry (90 days, slid on activity) — ISO 8601 instant. */
+    expires_at: z.string().datetime({ offset: true }),
+    /** Hard 12-month cap — ISO 8601 instant. */
+    absolute_expires_at: z.string().datetime({ offset: true }),
+  }),
+  token: z.string().optional(),
+});
+export type MemberAuthView = z.infer<typeof memberAuthViewSchema>;

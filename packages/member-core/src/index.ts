@@ -12,5 +12,11 @@ export type {
   MemberApiClient,
   MemberApiClientConfig,
 } from "./client.js";
+export type {
+  StartAuthParams,
+  StartAuthResult,
+  VerifyAuthParams,
+  VerifyAuthResult,
+} from "./auth.js";
 export { MemberApiError } from "./errors.js";
 export type { MemberApiErrorKind } from "./errors.js";

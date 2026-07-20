@@ -5,6 +5,14 @@ import {
   type EnvelopeMeta,
   type MemberScheduleResponse,
 } from "@kelo/contracts";
+import {
+  startAuth,
+  verifyAuth,
+  type StartAuthParams,
+  type StartAuthResult,
+  type VerifyAuthParams,
+  type VerifyAuthResult,
+} from "./auth.js";
 import { MemberApiError } from "./errors.js";
 
 /**
@@ -50,6 +58,18 @@ export interface MemberApiClient {
    * validates data against memberScheduleResponse before any surface sees it.
    */
   fetchSchedule(params: FetchScheduleParams): Promise<FetchScheduleResult>;
+  /**
+   * POST /api/v1/member/auth/start — request an OTP (unit 8.2b). ALWAYS the
+   * same neutral 202 shape; `ok: true` means "accepted", never "the contact
+   * exists" (anti-enumeration by construction, §3.3).
+   */
+  startAuth(params: StartAuthParams): Promise<StartAuthResult>;
+  /**
+   * POST /api/v1/member/auth/verify — consume the OTP, resolve the claim, and
+   * mint the session. Web rides the host-only cookie the API sets; mobile gets
+   * the `kmb_…` token in `view.token` exactly once — store it in SecureStore.
+   */
+  verifyAuth(params: VerifyAuthParams): Promise<VerifyAuthResult>;
 }
 
 export interface MemberApiClientConfig {
@@ -60,6 +80,8 @@ export interface MemberApiClientConfig {
 export function createMemberApiClient(config: MemberApiClientConfig = {}): MemberApiClient {
   return {
     fetchSchedule: (params) => fetchSchedule(params, config.fetchImpl),
+    startAuth: (params) => startAuth(params, config.fetchImpl),
+    verifyAuth: (params) => verifyAuth(params, config.fetchImpl),
   };
 }
 
