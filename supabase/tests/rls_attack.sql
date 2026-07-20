@@ -994,7 +994,7 @@ begin
     'communication_consents', 'step_up_events', 'person_relationship_log',
     'briefing_feedback', 'campaign_attributions', 'person_deletions',
     'ask_misses', 'schedule_publish_log', 'plan_prices', 'dunning_states',
-    'verify_runs', 'authority_flips'
+    'verify_runs', 'authority_flips', 'member_verification_events', 'claim_codes'
   ] loop
     foreach role_name in array array['anon', 'authenticated', 'service_role'] loop
       perform app_test.assert(
@@ -2368,6 +2368,226 @@ begin
   perform app_test.assert(
     not has_table_privilege('anon', 'public.people', 'select'),
     '(35) anon can SELECT people directly, bypassing member_schedule');
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- (36) MEMBER IDENTITY SPINE (migration 0044): person_claims,
+--      member_otp_challenges + app.consume_member_otp, member_sessions,
+--      claim_codes, member_verification_events. Covers: (a) append-only
+--      evidence, (b) hash tables never member-readable + cross-tenant claim
+--      isolation, (c) the service-role guard on consume_member_otp,
+--      (d) the 5-attempt cap / single-consume / replay / neutral-expiry,
+--      (e) the partial-active uniques.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid;
+  v_pa uuid; v_pa2 uuid; v_pb uuid;
+  v_ok boolean; v_remaining int; v_locked boolean;
+  v_attempts int;
+  v_cols text[];
+  raised boolean;
+  i int;
+begin
+  reset role;
+  select val::uuid into v_a from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+
+  -- --- Superuser seeds: two people in A (one for the contact-collision
+  --     probe), one person + one ACTIVE claim per tenant. -------------------
+  insert into public.people (tenant_id, first_name, source)
+    values (v_a, 'Claim A1', 'native') returning id into v_pa;
+  insert into public.people (tenant_id, first_name, source)
+    values (v_a, 'Claim A2', 'native') returning id into v_pa2;
+  insert into public.people (tenant_id, first_name, source)
+    values (v_b, 'Claim B1', 'native') returning id into v_pb;
+
+  perform app_test.assert(
+    (select claim_frozen from public.people where id = v_pa) = false,
+    '(36) people.claim_frozen does not default to false');
+
+  insert into public.person_claims (tenant_id, person_id, verified_contact, channel, claimed_via)
+    values (v_a, v_pa, 'a1@example.test', 'email', 'self_email');
+  insert into public.person_claims (tenant_id, person_id, verified_contact, channel, claimed_via)
+    values (v_b, v_pb, 'b1@example.test', 'email', 'self_email');
+
+  -- --- (b) Grant level: no client role holds ANY privilege that exposes
+  --     token or code hashes. ----------------------------------------------
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'public.member_sessions', 'select')
+    and not has_table_privilege('anon', 'public.member_sessions', 'select'),
+    '(36) a client role holds SELECT on member_sessions (token hashes exposed)');
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'public.member_otp_challenges', 'select')
+    and not has_table_privilege('anon', 'public.member_otp_challenges', 'select'),
+    '(36) a client role holds SELECT on member_otp_challenges (code hashes exposed)');
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'public.person_claims', 'insert')
+    and not has_table_privilege('authenticated', 'public.person_claims', 'update'),
+    '(36) authenticated can WRITE person_claims directly (status forgery)');
+  perform app_test.assert(
+    not has_function_privilege('authenticated', 'public.consume_member_otp(uuid, text, text, text, text)', 'execute')
+    and not has_function_privilege('anon', 'public.consume_member_otp(uuid, text, text, text, text)', 'execute')
+    and has_function_privilege('service_role', 'public.consume_member_otp(uuid, text, text, text, text)', 'execute'),
+    '(36) consume_member_otp EXECUTE is not service-role-only');
+
+  -- --- As tenant B staff (authenticated): own claims visible (resolution
+  --     workspace), tenant A claims isolated; hash tables + append-only
+  --     evidence + the OTP RPC all refused at the grant level. --------------
+  perform app_test.become(v_ub, 'authenticated');
+
+  perform app_test.assert(
+    exists (select 1 from public.person_claims where tenant_id = v_b),
+    '(36) tenant B staff cannot read their own person_claims (resolution workspace broken)');
+  perform app_test.assert(
+    not exists (select 1 from public.person_claims where tenant_id = v_a),
+    '(36) tenant A person_claims are visible to tenant B staff');
+
+  raised := false;
+  begin perform 1 from public.member_sessions limit 1;
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(36) authenticated can SELECT member_sessions (token hashes exposed)');
+
+  raised := false;
+  begin perform 1 from public.member_otp_challenges limit 1;
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(36) authenticated can SELECT member_otp_challenges (code hashes exposed)');
+
+  -- (a) append-only evidence is unwritable at runtime, not just on paper.
+  raised := false;
+  begin update public.member_verification_events set kind = 'otp_failed';
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(36) authenticated UPDATE on member_verification_events was allowed');
+  raised := false;
+  begin delete from public.member_verification_events;
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(36) authenticated DELETE on member_verification_events was allowed');
+  raised := false;
+  begin update public.claim_codes set used_at = now();
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(36) authenticated UPDATE on claim_codes was allowed (single-use broken)');
+
+  -- (c) the OTP verdict RPC refuses a non-service-role caller.
+  raised := false;
+  begin perform public.consume_member_otp(v_a, 'h', 'email', 'h', null);
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(36) authenticated EXECUTE on consume_member_otp was not refused');
+
+  -- --- As anon: nothing member-identity is readable at all. -----------------
+  perform app_test.become(null, 'anon');
+  perform app_test.assert(
+    not exists (select 1 from public.person_claims),
+    '(36) anon can read person_claims');
+  perform app_test.assert(
+    not exists (select 1 from public.claim_codes),
+    '(36) anon can read claim_codes');
+
+  reset role;
+
+  -- --- (c) The IN-BODY guard itself: bypass the grant check with the
+  --     superuser session but present a non-service-role JWT → 42501. --------
+  perform set_config('request.jwt.claims',
+    json_build_object('role', 'authenticated')::text, true);
+  raised := false;
+  begin perform app.consume_member_otp(v_a, 'h', 'email', 'h', null);
+  exception when insufficient_privilege then raised := true; end;
+  perform app_test.assert(raised,
+    '(36) consume_member_otp in-body guard accepted a non-service-role JWT');
+
+  -- --- (d) OTP semantics as the service role. -------------------------------
+  perform set_config('request.jwt.claims',
+    json_build_object('role', 'service_role')::text, true);
+
+  -- The verdict shape is EXACTLY (success, remaining_attempts, locked) — no
+  -- code_hash, contact, or expiry oracle can ever join the return type.
+  select array_agg(u.name order by u.ord) into v_cols
+  from pg_proc p,
+    lateral unnest(p.proargnames, p.proargmodes) with ordinality as u(name, mode, ord)
+  where p.pronamespace = 'app'::regnamespace and p.proname = 'consume_member_otp'
+    and u.mode = 't';
+  perform app_test.assert(
+    v_cols = array['success', 'remaining_attempts', 'locked']::text[],
+    '(36) consume_member_otp returns more than the neutral verdict (hash/oracle leak)');
+
+  -- Five wrong tries lock; the 6th — even with the CORRECT code — is refused
+  -- without a comparison and without burning an attempt.
+  insert into public.member_otp_challenges (tenant_id, contact_hash, channel, code_hash, expires_at)
+    values (v_a, 'contact-hash-1', 'email', 'correct-hash-1', now() + interval '10 minutes');
+  for i in 1..5 loop
+    select success, remaining_attempts, locked into v_ok, v_remaining, v_locked
+      from app.consume_member_otp(v_a, 'contact-hash-1', 'email', 'wrong-hash', 'ip-1');
+    perform app_test.assert(not v_ok, '(36) a wrong OTP reported success on try ' || i);
+  end loop;
+  perform app_test.assert(v_locked and v_remaining = 0,
+    '(36) the 5th wrong OTP try did not lock the challenge');
+  select success, remaining_attempts, locked into v_ok, v_remaining, v_locked
+    from app.consume_member_otp(v_a, 'contact-hash-1', 'email', 'correct-hash-1', 'ip-1');
+  perform app_test.assert(not v_ok and v_locked,
+    '(36) a 6th try bypassed the 5-attempt cap with the CORRECT code');
+  select attempts into v_attempts from public.member_otp_challenges
+    where tenant_id = v_a and contact_hash = 'contact-hash-1';
+  perform app_test.assert(v_attempts = 5,
+    '(36) the locked 6th try burned an attempt (cap bypass)');
+
+  -- The correct code consumes EXACTLY once; a replay of the same code fails.
+  insert into public.member_otp_challenges (tenant_id, contact_hash, channel, code_hash, expires_at)
+    values (v_a, 'contact-hash-2', 'sms', 'correct-hash-2', now() + interval '10 minutes');
+  select success, remaining_attempts, locked into v_ok, v_remaining, v_locked
+    from app.consume_member_otp(v_a, 'contact-hash-2', 'sms', 'correct-hash-2', 'ip-2');
+  perform app_test.assert(v_ok, '(36) the correct OTP was refused on a live challenge');
+  select success, remaining_attempts, locked into v_ok, v_remaining, v_locked
+    from app.consume_member_otp(v_a, 'contact-hash-2', 'sms', 'correct-hash-2', 'ip-2');
+  perform app_test.assert(not v_ok, '(36) a replayed OTP consumed a second time');
+
+  -- Expired and unknown contacts return the SAME neutral failure and burn
+  -- no attempt (anti-enumeration).
+  insert into public.member_otp_challenges (tenant_id, contact_hash, channel, code_hash, expires_at)
+    values (v_a, 'contact-hash-3', 'email', 'correct-hash-3', now() - interval '1 minute');
+  select success, remaining_attempts, locked into v_ok, v_remaining, v_locked
+    from app.consume_member_otp(v_a, 'contact-hash-3', 'email', 'correct-hash-3', 'ip-3');
+  perform app_test.assert(not v_ok and v_remaining = 0 and not v_locked,
+    '(36) an expired challenge did not fail with the neutral shape');
+  select attempts into v_attempts from public.member_otp_challenges
+    where tenant_id = v_a and contact_hash = 'contact-hash-3';
+  perform app_test.assert(v_attempts = 0, '(36) an expired challenge burned an attempt');
+  select success, remaining_attempts, locked into v_ok, v_remaining, v_locked
+    from app.consume_member_otp(v_a, 'no-such-contact', 'email', 'any-hash', null);
+  perform app_test.assert(not v_ok and v_remaining = 0 and not v_locked,
+    '(36) an unknown contact leaked a distinguishable failure shape');
+
+  -- Every outcome appended to the append-only audit (hashes only).
+  perform app_test.assert(
+    (select count(*) from public.member_verification_events
+      where tenant_id = v_a and kind = 'otp_failed' and contact_hash = 'contact-hash-1') = 5,
+    '(36) failed OTP attempts were not audited');
+  perform app_test.assert(
+    exists (select 1 from public.member_verification_events
+      where tenant_id = v_a and kind = 'otp_verified' and contact_hash = 'contact-hash-2'),
+    '(36) the verified OTP was not audited');
+
+  -- --- (e) The partial-active uniques. ---------------------------------------
+  raised := false;
+  begin
+    insert into public.person_claims (tenant_id, person_id, verified_contact, channel, claimed_via)
+      values (v_a, v_pa, 'a1-alt@example.test', 'email', 'self_email');
+  exception when unique_violation then raised := true; end;
+  perform app_test.assert(raised, '(36) a second ACTIVE claim per person was allowed');
+
+  raised := false;
+  begin
+    insert into public.person_claims (tenant_id, person_id, verified_contact, channel, claimed_via)
+      values (v_a, v_pa2, 'a1@example.test', 'sms', 'self_sms');
+  exception when unique_violation then raised := true; end;
+  perform app_test.assert(raised, '(36) a second ACTIVE claim per (tenant, contact) was allowed');
+
+  -- Non-active rows never collide: needs_resolution and revoked coexist with
+  -- the active claim on the same person/contact (the resolution path).
+  insert into public.person_claims (tenant_id, person_id, verified_contact, channel, status, claimed_via)
+    values (v_a, v_pa2, 'a1@example.test', 'email', 'needs_resolution', 'self_email');
+  insert into public.person_claims (tenant_id, person_id, verified_contact, channel, status, claimed_via)
+    values (v_a, v_pa, 'a1@example.test', 'email', 'revoked', 'self_email');
 end
 $$;
 
