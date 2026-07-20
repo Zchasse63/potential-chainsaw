@@ -1,13 +1,19 @@
 import { createHash, randomBytes, randomInt } from "node:crypto";
+import { z } from "zod";
 import type { Context, Hono } from "hono";
 import { setCookie } from "hono/cookie";
 import {
+  IDEMPOTENCY_KEY_HEADER,
   memberAuthStartBody,
   memberAuthStartResponse,
   memberAuthVerifyBody,
   memberAuthViewSchema,
+  memberBookBody,
+  memberCancelBody,
+  memberHoldBody,
   memberScheduleQuery,
   memberScheduleResponse,
+  memberWaitlistBody,
   type MemberClaimStatus,
 } from "@kelo/contracts";
 import { createServiceRoleClient, type KeloSupabaseClient } from "@kelo/db";
@@ -17,6 +23,8 @@ import {
   countRecentOtpChallenges,
   createNativePerson,
   enqueueMemberMessage,
+  countLivePersonHolds,
+  fetchBookingPersonId,
   fetchMemberMe,
   insertMemberOtpAudit,
   isContactSuppressed,
@@ -31,6 +39,8 @@ import {
   isStaffEmail,
   normalizeMemberContact,
 } from "../data-member.js";
+import { bookSession, cancelBooking, holdSession } from "../data-bookings.js";
+import { joinWaitlist } from "../data-booking.js";
 import { ApiError } from "../errors.js";
 import {
   MEMBER_COOKIE,
@@ -41,7 +51,7 @@ import {
   resolveMember,
 } from "../middleware/member.js";
 import { memberOf, type AppEnv } from "../types.js";
-import { parseBody, parseQuery } from "../validate.js";
+import { parseBody, parseParams, parseQuery } from "../validate.js";
 
 interface QueryError {
   message: string;
@@ -549,5 +559,101 @@ export function registerMemberRoutes(app: Hono<AppEnv>, deps: MemberDeps = {}): 
       c.var.ok({ revoked: true }, { source: "native", definitionVersion: AUTH_DEFINITION_VERSION }),
       200,
     );
+  });
+
+  // -- member booking (unit 8.3a) --------------------------------------------
+  // All person-scoped: person + actor come ONLY from resolveMember, NEVER the
+  // request, so a member can act only for themselves. The phase-6 RPCs enforce
+  // the waiver block, credit debit, capacity, and 12h refund policy; these
+  // routes add the member-specific guards (hold cap, cancel ownership).
+  const bookingVia = (platform: "web" | "ios" | "android") =>
+    platform === "web" ? ("member_web" as const) : platform === "ios" ? ("member_ios" as const) : ("member_android" as const);
+  const bookingNative = (v: string) => ({ source: "native" as const, definitionVersion: v });
+  const memberIdemKey = (c: Context<AppEnv>): string => {
+    const key = c.req.header(IDEMPOTENCY_KEY_HEADER);
+    if (key === undefined || key.trim() === "") {
+      throw new ApiError(422, "idempotency_key_required", `${IDEMPOTENCY_KEY_HEADER} header is required`);
+    }
+    return key;
+  };
+
+  /** POST /member/holds — reserve a seat (person from the session). Hold-DoS
+   * mitigation (§3.5): at most 2 LIVE holds per member. */
+  app.post("/member/holds", memberAuth, async (c) => {
+    const body = await parseBody(c, memberHoldBody);
+    const { memberTenantId, memberPersonId } = memberOf(c);
+    const scope = { tenantId: memberTenantId, personId: memberPersonId };
+    const db = client();
+    if ((await countLivePersonHolds(db, scope, new Date().toISOString())) >= 2) {
+      throw new ApiError(409, "hold_cap_reached", "you already hold the maximum number of seats");
+    }
+    const hold = await holdSession(db, {
+      tenantId: memberTenantId,
+      sessionId: body.session_id,
+      personId: memberPersonId,
+      actorId: memberPersonId,
+      ttlSeconds: 300,
+    });
+    return c.json(c.var.ok({ hold }, bookingNative("member-booking:v1")), 201);
+  });
+
+  /** POST /member/bookings — book (debits ONE credit; the RPC enforces the
+   * waiver block + idempotency + hold consume). */
+  app.post("/member/bookings", memberAuth, async (c) => {
+    const body = await parseBody(c, memberBookBody);
+    const idempotencyKey = memberIdemKey(c);
+    const { memberTenantId, memberPersonId } = memberOf(c);
+    const result = await bookSession(client(), {
+      tenantId: memberTenantId,
+      personId: memberPersonId,
+      sessionId: body.session_id,
+      actorId: memberPersonId,
+      idempotencyKey,
+      via: bookingVia(body.platform),
+      holdId: body.hold_id ?? null,
+      useCredit: true,
+    });
+    return c.json(c.var.ok({ booking: result }, bookingNative("member-booking:v1")), 201);
+  });
+
+  /** POST /member/bookings/:id/cancel — 12h refund-vs-forfeit in the RPC.
+   * OWNERSHIP: cancel_booking has operator semantics (any booking in-tenant),
+   * so we verify the booking belongs to THIS member before calling it — else a
+   * member could refund/forfeit another member's booking by id. */
+  app.post("/member/bookings/:id/cancel", memberAuth, async (c) => {
+    const { id } = parseParams(c, z.object({ id: z.string().uuid() }));
+    await parseBody(c, memberCancelBody);
+    const idempotencyKey = memberIdemKey(c);
+    const { memberTenantId, memberPersonId } = memberOf(c);
+    const db = client();
+    const owner = await fetchBookingPersonId(db, { tenantId: memberTenantId, personId: memberPersonId }, id);
+    if (owner !== memberPersonId) {
+      // Not yours (or absent): the same neutral 404 either way — no oracle for
+      // whether a booking id exists for another member.
+      throw new ApiError(404, "not_found", "booking not found");
+    }
+    const result = await cancelBooking(db, {
+      tenantId: memberTenantId,
+      bookingId: id,
+      actorId: memberPersonId,
+      idempotencyKey,
+      now: new Date().toISOString(),
+    });
+    return c.json(c.var.ok({ cancellation: result }, bookingNative("member-booking:v1")), 200);
+  });
+
+  /** POST /member/waitlist — join a FULL session's waitlist (FIFO position). */
+  app.post("/member/waitlist", memberAuth, async (c) => {
+    const body = await parseBody(c, memberWaitlistBody);
+    const idempotencyKey = memberIdemKey(c);
+    const { memberTenantId, memberPersonId } = memberOf(c);
+    const result = await joinWaitlist(client(), {
+      tenantId: memberTenantId,
+      sessionId: body.session_id,
+      personId: memberPersonId,
+      actorId: memberPersonId,
+      idempotencyKey,
+    });
+    return c.json(c.var.ok({ waitlist: result }, bookingNative("member-booking:v1")), 201);
   });
 }
