@@ -232,3 +232,9 @@ jobs:
         # normal daypart and the divide-by-zero-safe 0 on a zero-capacity slot —
         # the /ask digit fence trusts these rows as ground truth.
         run: pnpm exec vitest run packages/db/test/ask_golden.test.ts
+      - name: subscription monotonicity (out-of-order webhook cannot regress)
+        # WS-6: run an adversarial out-of-order schedule through the ACTUAL
+        # syncSubscriptionStatus against real Postgres — a stale/delayed
+        # customer.subscription event must be a no-op and never revive a
+        # cancelled member (F6 event-time monotonicity).
+        run: pnpm exec vitest run workers/test/billing/subscription_monotonicity.test.ts
