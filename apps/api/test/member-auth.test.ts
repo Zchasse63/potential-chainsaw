@@ -65,6 +65,14 @@ interface StartScenario {
   staffMembers?: unknown[];
   contactSendsLastHour?: number;
   ipSendsLastHour?: number;
+  suppressed?: boolean;
+}
+
+interface SentOtp {
+  channel: string;
+  toAddress: string;
+  subject: string | null;
+  body: string;
 }
 
 function startApp(scenario: StartScenario = {}) {
@@ -91,6 +99,12 @@ function startApp(scenario: StartScenario = {}) {
       people: onTable({ select: { data: scenario.peopleRows ?? [] } }),
       tenant_users: onTable({ select: { data: scenario.staffMembers ?? [] } }),
       tenants: onTable({ select: { data: [{ name: "Studio A" }] } }),
+      // The suppression check (§3.3) reads this before the direct OTP send.
+      comms_suppressions: onTable({
+        select: {
+          data: scenario.suppressed === true ? [{ address: CONTACT_NORMALIZED }] : [],
+        },
+      }),
       comms_log: onTable({ insert: { data: [{ id: LOG_ID }] } }),
       jobs: onTable({ insert: { data: null } }),
       member_verification_events: onTable({ insert: { data: null } }),
@@ -98,8 +112,16 @@ function startApp(scenario: StartScenario = {}) {
     {},
     scenario.staffUsers ?? [],
   );
-  const app = createApp({ createMemberClient: () => fake.client });
-  return { app, fake };
+  // The injected OTP sender captures every message so tests can assert the REAL
+  // code reached it (and never persisted in comms_log).
+  const sentOtps: SentOtp[] = [];
+  const app = createApp({
+    createMemberClient: () => fake.client,
+    sendMemberOtp: async (msg) => {
+      sentOtps.push(msg);
+    },
+  });
+  return { app, fake, sentOtps };
 }
 
 function postStart(contact: string, init?: RequestInit) {
@@ -147,10 +169,12 @@ describe("POST /member/auth/start — anti-enumeration by construction", () => {
         (call) => call.table === "comms_log" && call.method === "insert",
       );
       expect(commsInsert).toBeDefined();
+      // OTP does NOT ride the comms.send queue (that worker persists + resends
+      // the readable body): no jobs row is enqueued for the OTP path.
       const jobInsert = fake.calls.find(
         (call) => call.table === "jobs" && call.method === "insert",
       );
-      expect(jobInsert).toBeDefined();
+      expect(jobInsert).toBeUndefined();
       const eventInsert = fake.calls.find(
         (call) => call.table === "member_verification_events" && call.method === "insert",
       );
@@ -168,28 +192,25 @@ describe("POST /member/auth/start — anti-enumeration by construction", () => {
     expect(JSON.stringify(challengeRow)).not.toContain(CONTACT_TYPED);
     expect(JSON.stringify(hitBody)).not.toMatch(/\b\d{6}\b/); // the raw code never leaves
 
-    // The dispatch body DOES carry the code (that is the message), to the
-    // normalized typed contact in both cases.
-    for (const fake of [hit.fake, miss.fake]) {
-      const commsInsert = fake.calls.find(
+    // CONFIDENTIALITY (Opus review 8.2b): the PERSISTED comms_log row is a
+    // REDACTED audit record — it must NEVER contain the 6-digit code (comms_log
+    // is staff-readable). The real code goes ONLY to the injected sender.
+    for (const scenario of [hit, miss]) {
+      const commsInsert = scenario.fake.calls.find(
         (call) => call.table === "comms_log" && call.method === "insert",
       );
       const logRow = commsInsert?.args[0] as Record<string, unknown>;
       expect(logRow["to_address"]).toBe(CONTACT_NORMALIZED);
-      expect(logRow["body_preview"]).toMatch(/sign-in code is \d{6}\b/);
       expect(logRow["channel"]).toBe("email");
-    }
+      expect(String(logRow["body_preview"])).not.toMatch(/\d{6}/); // NO code persisted
+      expect(String(logRow["body_preview"])).toContain("••••••"); // the mask
+      expect(logRow["status"]).toBe("sent");
 
-    // The comms.send job rides the existing transactional path, deduped.
-    const jobInsert = hit.fake.calls.find(
-      (call) => call.table === "jobs" && call.method === "insert",
-    );
-    expect(jobInsert?.args[0]).toMatchObject({
-      kind: "comms.send",
-      payload: { comms_log_id: LOG_ID },
-      tenant_id: TENANT_A,
-      idempotency_key: `comms.send:${LOG_ID}`,
-    });
+      // …but the sender received the REAL code (that is the delivered message).
+      expect(scenario.sentOtps).toHaveLength(1);
+      expect(scenario.sentOtps[0]?.body).toMatch(/sign-in code is \d{6}\b/);
+      expect(scenario.sentOtps[0]?.toAddress).toBe(CONTACT_NORMALIZED);
+    }
   });
 
   it("sends the OTP as a transactional message (quiet-hours-exempt by kind), person-linked on hit", async () => {
@@ -201,11 +222,27 @@ describe("POST /member/auth/start — anti-enumeration by construction", () => {
     const logRow = commsInsert?.args[0] as Record<string, unknown>;
     // person-linked on hit; null on miss (asserted by the identical-work test).
     expect(logRow["person_id"]).toBe(PERSON.id);
-    // No campaign_key, no dunning_ template prefix → classifyMessageKind maps
-    // this to 'transactional' in the worker's canSend gate.
     expect(logRow["template_key"]).toBe("member_otp");
-    expect(logRow["campaign_key"]).toBeUndefined();
-    expect(logRow["status"]).toBe("queued");
+    // A direct-send audit row (not queued): the code was handed to the sender.
+    expect(logRow["status"]).toBe("sent");
+    expect(String(logRow["body_preview"])).not.toMatch(/\d{6}/);
+  });
+
+  it("suppressed contact: does NOT send, records status 'suppressed', still neutral 202", async () => {
+    const { app, fake, sentOtps } = startApp({ peopleRows: [PERSON], suppressed: true });
+    const res = await app.request("/api/v1/member/auth/start", postStart(CONTACT_TYPED));
+    // Anti-enumeration holds: still the neutral 202.
+    expect(res.status).toBe(202);
+    expect((await res.json()).data).toEqual({ sent: true });
+    // The sender was NOT invoked (hard bounce / STOP is honored, §3.3).
+    expect(sentOtps).toHaveLength(0);
+    // …but a redacted audit row is still written, marked suppressed.
+    const commsInsert = fake.calls.find(
+      (call) => call.table === "comms_log" && call.method === "insert",
+    );
+    const logRow = commsInsert?.args[0] as Record<string, unknown>;
+    expect(logRow["status"]).toBe("suppressed");
+    expect(String(logRow["body_preview"])).not.toMatch(/\d{6}/);
   });
 
   it("rate-limit: over the per-contact cap returns the SAME neutral 202 and sends nothing", async () => {

@@ -17,6 +17,8 @@ import {
   countRecentOtpChallenges,
   createNativePerson,
   enqueueMemberMessage,
+  insertMemberOtpAudit,
+  isContactSuppressed,
   fetchTenantName,
   findClaimsByContact,
   findPeopleByContact,
@@ -60,6 +62,23 @@ export interface MemberDeps {
    * no-network fake.
    */
   createMemberClient?: () => KeloSupabaseClient;
+  /**
+   * Direct OTP sender. The OTP code must NEVER persist in a staff-readable
+   * place, so it is NOT enqueued through the comms.send worker (that worker
+   * sends comms_log.body_preview verbatim, and comms_log is staff-readable —
+   * a read-the-code account-takeover, Opus review 8.2b). Instead the code is
+   * handed straight to this sender at /start; only a REDACTED comms_log row
+   * persists. The production default is a dry-run no-op (Resend/Twilio go live
+   * at owner gate P3-2 — until then every comms send is dry-run anyway); when
+   * P3-2 lands, wire the @kelo/comms adapter here. Tests inject a fake that
+   * captures the message to assert the real code reached it.
+   */
+  sendMemberOtp?: (msg: {
+    channel: "email" | "sms";
+    toAddress: string;
+    subject: string | null;
+    body: string;
+  }) => Promise<void>;
 }
 
 // -- member auth constants (plan-member-app §3.1/§3.2) -------------------------
@@ -103,6 +122,10 @@ function ipHashOf(c: Context<AppEnv>): string {
  */
 export function registerMemberRoutes(app: Hono<AppEnv>, deps: MemberDeps = {}): void {
   const client = () => deps.createMemberClient?.() ?? createServiceRoleClient();
+  // Default OTP sender: dry-run no-op until Resend/Twilio go live (owner gate
+  // P3-2 — every comms adapter is dry-run today). The security property (the
+  // code never persists readable) holds regardless of whether it delivers.
+  const sendMemberOtp = deps.sendMemberOtp ?? (async () => {});
 
   app.get("/member/schedule", async (c) => {
     const { tenant, from, to } = parseQuery(c, memberScheduleQuery);
@@ -197,21 +220,44 @@ export function registerMemberRoutes(app: Hono<AppEnv>, deps: MemberDeps = {}): 
       contact.channel === "email" && (await isStaffEmail(db, body.tenant, contact.normalized));
 
     const studio = (await fetchTenantName(db, body.tenant)) ?? "studio";
-    await enqueueMemberMessage(db, body.tenant, {
-      personId: person?.id ?? null,
-      channel: contact.channel,
-      toAddress: contact.normalized,
-      subject:
-        contact.channel === "email"
-          ? staffNote
-            ? `Use the ${studio} staff app`
-            : `Your ${studio} sign-in code`
-          : null,
-      body: staffNote
-        ? `You asked to sign in to the ${studio} member app with a staff email. Use the staff app instead — it has your schedule, roster, and desk tools.`
-        : `Your ${studio} sign-in code is ${code}. It expires in 10 minutes.`,
-      templateKey: staffNote ? "member_staff_note" : "member_otp",
-    });
+    if (staffNote) {
+      // Staff-app note carries NO code — the shared comms.send queue path is
+      // safe (nothing secret to persist). Same neutral response as the OTP path.
+      await enqueueMemberMessage(db, body.tenant, {
+        personId: person?.id ?? null,
+        channel: contact.channel,
+        toAddress: contact.normalized,
+        subject: contact.channel === "email" ? `Use the ${studio} staff app` : null,
+        body: `You asked to sign in to the ${studio} member app with a staff email. Use the staff app instead — it has your schedule, roster, and desk tools.`,
+        templateKey: "member_staff_note",
+      });
+    } else {
+      // The OTP body is built once from a template so the sent (real) body and
+      // the persisted (redacted) preview cannot drift. The code goes ONLY to
+      // the sender; only the mask persists in comms_log (never a 6-digit run).
+      const otpBody = (shown: string) =>
+        `Your ${studio} sign-in code is ${shown}. It expires in 10 minutes.`;
+      const subject = contact.channel === "email" ? `Your ${studio} sign-in code` : null;
+      // Suppression (§3.3) still applies — the direct send replaces the worker's
+      // suppression check, so run it here. Identical work on match AND miss.
+      const suppressed = await isContactSuppressed(db, body.tenant, contact.channel, contact.normalized);
+      if (!suppressed) {
+        await sendMemberOtp({
+          channel: contact.channel,
+          toAddress: contact.normalized,
+          subject,
+          body: otpBody(code),
+        });
+      }
+      await insertMemberOtpAudit(db, body.tenant, {
+        personId: person?.id ?? null,
+        channel: contact.channel,
+        toAddress: contact.normalized,
+        subject,
+        redactedPreview: otpBody("••••••"),
+        status: suppressed ? "suppressed" : "sent",
+      });
+    }
 
     await appendMemberVerificationEvent(db, body.tenant, {
       kind: "otp_sent",

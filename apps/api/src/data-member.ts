@@ -606,6 +606,76 @@ export async function enqueueMemberMessage(
   }
 }
 
+// -- OTP dispatch (confidentiality) ------------------------------------------
+
+/**
+ * Is this contact suppressed (hard bounce / SMS STOP)? §3.3 keeps OTP subject
+ * to suppression. The OTP now sends DIRECTLY (not via the comms.send worker —
+ * the worker persists the send body readable, which for an OTP is a staff
+ * account-takeover; see insertMemberOtpAudit), so the suppression check the
+ * worker did must run here. The suppressions table is tiny; fetch this
+ * tenant+channel's rows and compare on the canonical address (lower email /
+ * E.164 phone), matching the worker's join semantics.
+ */
+export async function isContactSuppressed(
+  client: KeloSupabaseClient,
+  tenantId: string,
+  channel: "email" | "sms",
+  normalizedAddress: string,
+): Promise<boolean> {
+  const data = await run(
+    from(client, "comms_suppressions")
+      .select("address")
+      .eq("tenant_id", tenantId)
+      .eq("channel", channel),
+    "isContactSuppressed",
+  );
+  const rows = parseInternal(z.array(z.object({ address: z.string() })), data ?? [], "isContactSuppressed");
+  const want = channel === "email" ? normalizedAddress.toLowerCase() : toE164US(normalizedAddress);
+  return rows.some((row) => {
+    const have = channel === "email" ? row.address.toLowerCase() : toE164US(row.address);
+    return have !== null && have === want;
+  });
+}
+
+/**
+ * Persist an OTP send to comms_log for delivery/audit correlation ONLY, with a
+ * REDACTED body_preview — the code is NEVER stored. comms_log is staff-readable
+ * (`grant select ... to authenticated`, migration 0022); storing the live code
+ * there let any staff user read it and complete /member/auth/verify to hijack
+ * the member's session (Opus security review, 8.2b). The real code goes to the
+ * injected sender at dispatch time; only the mask (••••••) persists. NO
+ * comms.send job is enqueued (that path re-sends from body_preview).
+ */
+export async function insertMemberOtpAudit(
+  client: KeloSupabaseClient,
+  tenantId: string,
+  row: {
+    personId: string | null;
+    channel: "email" | "sms";
+    toAddress: string;
+    subject: string | null;
+    redactedPreview: string;
+    status: "sent" | "suppressed";
+  },
+): Promise<void> {
+  await run(
+    from(client, "comms_log").insert({
+      tenant_id: tenantId,
+      person_id: row.personId,
+      channel: row.channel,
+      direction: "outbound",
+      template_key: "member_otp",
+      subject: row.subject,
+      // REDACTED — never the code. The mask must not match a 6-digit pattern.
+      body_preview: row.redactedPreview.slice(0, 200),
+      to_address: row.toAddress,
+      status: row.status,
+    }),
+    "insertMemberOtpAudit",
+  );
+}
+
 // -- staff-contact hygiene ---------------------------------------------------
 
 /**
