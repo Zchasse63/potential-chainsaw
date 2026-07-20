@@ -2598,6 +2598,148 @@ begin
 end
 $$;
 
+-- (37) MEMBER AUTH RESOLUTION CORE (unit 8.2b — the API session path over
+--      migration 0044; this unit adds NO new table, so there is no new
+--      member-readable grant surface to probe — the generic guard (1) already
+--      covers the 0044 tables). Covers: (a) a session for person A can never
+--      resolve to person B (composite FK + the session→claim join shape);
+--      (b) the token_hash lookup path is service-role-only, including
+--      slide/un-revoke forgery; (c) a needs_resolution claim exposes NO
+--      balances; (d) the partial-active uniqueness holds under a double
+--      self-claim while duplicate needs_resolution holds stay retry-safe.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_b uuid; v_ub uuid;
+  v_pa uuid; v_pa2 uuid; v_pb uuid;
+  v_session uuid;
+  v_claim uuid;
+  raised boolean;
+begin
+  reset role;
+  select val::uuid into v_a from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b';
+
+  -- Reuse the 0044 seeds from block (36) (same transaction): v_pa carries an
+  -- ACTIVE claim on 'a1@example.test'; v_pa2 carries a needs_resolution row.
+  select id into v_pa from public.people where tenant_id = v_a and first_name = 'Claim A1';
+  select id into v_pa2 from public.people where tenant_id = v_a and first_name = 'Claim A2';
+  select id into v_pb from public.people where tenant_id = v_b and first_name = 'Claim B1';
+
+  -- --- (a1) The composite FK: a session cannot pair tenant A with a person
+  --     belonging to tenant B (the 0026 tenant_users pattern). --------------
+  raised := false;
+  begin
+    insert into public.member_sessions
+      (tenant_id, person_id, token_hash, expires_at, absolute_expires_at)
+    values (v_a, v_pb, 'cross-tenant-session', now() + interval '90 days', now() + interval '12 months');
+  exception when foreign_key_violation then raised := true; end;
+  perform app_test.assert(raised,
+    '(37) a member session paired tenant A with tenant B''s person');
+
+  -- --- (a2) The resolve join shape (what resolveMember runs): a session for
+  --     person A resolves ONLY person A''s ACTIVE claim — tenant B''s active
+  --     claim and person A''s non-active history stay invisible to it. ------
+  insert into public.member_sessions
+    (tenant_id, person_id, token_hash, expires_at, absolute_expires_at)
+  values (v_a, v_pa, 'session-hash-a', now() + interval '90 days', now() + interval '12 months')
+  returning id into v_session;
+
+  select pc.id into v_claim
+  from public.member_sessions s
+  join public.person_claims pc
+    on pc.tenant_id = s.tenant_id
+   and pc.person_id = s.person_id
+   and pc.status = 'active'
+  where s.id = v_session;
+  perform app_test.assert(
+    v_claim = (select id from public.person_claims
+               where tenant_id = v_a and person_id = v_pa and status = 'active'),
+    '(37) the session→claim join did not resolve person A''s own ACTIVE claim');
+  perform app_test.assert(
+    not exists (
+      select 1
+      from public.member_sessions s
+      join public.person_claims pc
+        on pc.tenant_id = s.tenant_id
+       and pc.person_id = s.person_id
+       and pc.status = 'active'
+      where s.id = v_session and pc.person_id <> v_pa),
+    '(37) a session for person A resolved a claim belonging to another person');
+
+  -- --- (b) The token_hash path is service-role-only: no client role can
+  --     read sessions, forge a slide, or un-revoke. --------------------------
+  perform app_test.assert(
+    not has_table_privilege('authenticated', 'public.member_sessions', 'update')
+    and not has_table_privilege('anon', 'public.member_sessions', 'update')
+    and not has_table_privilege('authenticated', 'public.member_sessions', 'delete')
+    and not has_table_privilege('anon', 'public.member_sessions', 'delete'),
+    '(37) a client role holds UPDATE/DELETE on member_sessions (slide/revoke forgery)');
+
+  perform app_test.become(v_ub, 'authenticated');
+  raised := false;
+  begin
+    perform 1 from public.member_sessions where token_hash = 'session-hash-a';
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(37) authenticated read member_sessions by token_hash');
+  raised := false;
+  begin
+    update public.member_sessions set revoked_at = null where id = v_session;
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(37) authenticated forged a session slide/un-revoke');
+  reset role;
+
+  -- --- (c) A needs_resolution claim exposes NO balances. --------------------
+  -- Seed a balance fact for v_pa2 (whose claim is needs_resolution — exactly
+  -- the state a pre-resolution member session sits in).
+  insert into public.credit_ledger (tenant_id, person_id, entry_type, delta, source)
+    values (v_a, v_pa2, 'grant', 5, 'native');
+
+  -- Claim state can never become a balance grant: no credit_ledger policy
+  -- consults person_claims at all.
+  perform app_test.assert(
+    not exists (
+      select 1 from pg_catalog.pg_policies p
+      where p.schemaname = 'public' and p.tablename = 'credit_ledger'
+        and (p.qual ilike '%person_claims%' or p.with_check ilike '%person_claims%')),
+    '(37) a credit_ledger policy consults person_claims (claim state could leak balances)');
+
+  -- Cross-tenant staff see neither the balance nor the claim behind it.
+  perform app_test.become(v_ub, 'authenticated');
+  perform app_test.assert(
+    not exists (select 1 from public.credit_ledger where tenant_id = v_a and person_id = v_pa2),
+    '(37) tenant B staff read tenant A balances behind a needs_resolution claim');
+  reset role;
+  perform app_test.become(null, 'anon');
+  raised := false;
+  begin
+    perform 1 from public.credit_ledger limit 1;
+  exception when others then raised := true; end;
+  perform app_test.assert(raised, '(37) anon read credit_ledger balances');
+  reset role;
+
+  -- --- (d) The partial-active uniqueness under a DOUBLE self-claim: the
+  --     second ACTIVE claim for the same person+contact loses; duplicate
+  --     needs_resolution holds stay retry-safe (they never collide). --------
+  raised := false;
+  begin
+    insert into public.person_claims (tenant_id, person_id, verified_contact, channel, claimed_via)
+      values (v_a, v_pa, 'a1@example.test', 'email', 'self_email');
+  exception when unique_violation then raised := true; end;
+  perform app_test.assert(raised, '(37) a double self-claim inserted a second ACTIVE claim');
+
+  insert into public.person_claims (tenant_id, person_id, verified_contact, channel, status, claimed_via)
+    values (v_a, v_pa2, 'a1@example.test', 'email', 'needs_resolution', 'self_email');
+  insert into public.person_claims (tenant_id, person_id, verified_contact, channel, status, claimed_via)
+    values (v_a, v_pa2, 'a1@example.test', 'email', 'needs_resolution', 'self_email');
+  perform app_test.assert(
+    (select count(*) from public.person_claims
+      where tenant_id = v_a and person_id = v_pa2 and status = 'needs_resolution') >= 2,
+    '(37) needs_resolution holds collided (a held claim must stay re-insertable)');
+end
+$$;
+
 do $$
 declare
   n int;

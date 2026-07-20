@@ -33,6 +33,11 @@ export type AppEnv = {
     // set by resolveTenant
     tenantId?: string;
     role?: TenantRole;
+    // set by resolveMember (the member chain — never mixed with the staff chain)
+    memberTenantId?: string;
+    memberPersonId?: string;
+    memberSessionId?: string;
+    memberStepUpAt?: string | null;
   };
 };
 
@@ -45,6 +50,14 @@ export interface AuthVars {
 export interface TenantVars {
   tenantId: string;
   role: TenantRole;
+}
+
+export interface MemberVars {
+  memberTenantId: string;
+  memberPersonId: string;
+  memberSessionId: string;
+  /** Last member step-up (fresh-OTP) instant; null when never stepped up. */
+  memberStepUpAt: string | null;
 }
 
 /** Read the auth context set by requireAuth (throws if it did not run). */
@@ -63,6 +76,20 @@ export function tenantOf(c: Context<AppEnv>): TenantVars {
     throw new Error("resolveTenant middleware did not run for this route");
   }
   return { tenantId, role };
+}
+
+/** Read the member context set by resolveMember (throws if it did not run). */
+export function memberOf(c: Context<AppEnv>): MemberVars {
+  const { memberTenantId, memberPersonId, memberSessionId, memberStepUpAt } = c.var;
+  if (
+    memberTenantId === undefined ||
+    memberPersonId === undefined ||
+    memberSessionId === undefined ||
+    memberStepUpAt === undefined
+  ) {
+    throw new Error("resolveMember middleware did not run for this route");
+  }
+  return { memberTenantId, memberPersonId, memberSessionId, memberStepUpAt };
 }
 
 /**

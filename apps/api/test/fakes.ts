@@ -28,13 +28,19 @@ export interface FakeUserClient {
   calls: RecordedCall[];
 }
 
+export interface FakeAdminUser {
+  id: string;
+  email?: string;
+}
+
 export function fakeUserClient(
   handlers: Record<string, TableHandler>,
   rpcHandlers: Record<string, RpcHandler> = {},
+  adminUsers?: FakeAdminUser[],
 ): FakeUserClient {
   const calls: RecordedCall[] = [];
 
-  const client = {
+  const client: Record<string, unknown> = {
     from(table: string) {
       const tableCalls: RecordedCall[] = [];
       const builder: Record<string, unknown> = {};
@@ -64,6 +70,17 @@ export function fakeUserClient(
       return Promise.resolve({ data: result.data, error: result.error ?? null });
     },
   };
+
+  // The GoTrue admin surface (auth.users is not PostgREST-reachable) — only
+  // present when a test provides users, mirroring the service-role-only
+  // listUsers the member staff-email hygiene check consumes.
+  if (adminUsers !== undefined) {
+    client["auth"] = {
+      admin: {
+        listUsers: () => Promise.resolve({ data: { users: adminUsers }, error: null }),
+      },
+    };
+  }
 
   return { client: client as unknown as KeloSupabaseClient, calls };
 }
