@@ -20,6 +20,9 @@ function accountApp(scenario: {
   deltas?: number[];
   needsSignature?: boolean;
   bookings?: { id: string; session_id: string; status: string }[];
+  /** UPCOMING sessions the fake DB returns for the `.in(ids).gte(starts_at)`
+   * query — i.e. what survives the server-side time bound. Defaults to S1. */
+  sessions?: { id: string; starts_at: string }[];
 } = {}) {
   const fake = fakeUserClient(
     {
@@ -50,6 +53,11 @@ function accountApp(scenario: {
             { id: B1, session_id: S1, status: "booked" },
             { id: B2, session_id: S1, status: "cancelled" },
           ],
+      }),
+      // The fake ignores query filters, so this stands in for the DB's
+      // post-`.gte(starts_at, now)` result — the UPCOMING sessions only.
+      scheduled_sessions: (): FakeResult => ({
+        data: scenario.sessions ?? [{ id: S1, starts_at: FUTURE }],
       }),
     },
     {
@@ -94,6 +102,35 @@ describe("GET /member/account", () => {
       );
       expect(personEq?.args[1], `${table} scoped to session person`).toBe(PERSON_ID);
     }
+  });
+
+  it("excludes bookings whose session has already started (attendance history is not upcoming)", async () => {
+    // A terminal `checked_in` booking for a PAST session: the DB's time bound
+    // returns no upcoming session for it, so it must NOT appear. (Before the
+    // fix, this row rendered forever as a nameless 'time to be confirmed'.)
+    const S_PAST = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const { app } = accountApp({
+      bookings: [
+        { id: B1, session_id: S1, status: "booked" }, // upcoming → kept
+        { id: B2, session_id: S_PAST, status: "checked_in" }, // past → dropped
+      ],
+      sessions: [{ id: S1, starts_at: FUTURE }], // only S1 is upcoming
+    });
+    const res = await app.request("/api/v1/member/account", cookie);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: { bookings: { booking_id: string }[] } };
+    expect(body.data.bookings).toHaveLength(1);
+    expect(body.data.bookings[0]?.booking_id).toBe(B1);
+  });
+
+  it("returns no bookings when the member has none upcoming (only past/attended)", async () => {
+    const { app } = accountApp({
+      bookings: [{ id: B1, session_id: S1, status: "checked_in" }],
+      sessions: [], // S1 already started → not returned by the bound query
+    });
+    const res = await app.request("/api/v1/member/account", cookie);
+    const body = (await res.json()) as { data: { bookings: unknown[] } };
+    expect(body.data.bookings).toHaveLength(0);
   });
 
   it("401s (neutral) without a session", async () => {

@@ -543,6 +543,7 @@ export function registerMemberRoutes(app: Hono<AppEnv>, deps: MemberDeps = {}): 
     const account = await fetchMemberAccount(
       { tenantId: memberTenantId, personId: memberPersonId },
       client(),
+      new Date().toISOString(),
     );
     const view = memberAccountSchema.parse(account);
     return c.json(

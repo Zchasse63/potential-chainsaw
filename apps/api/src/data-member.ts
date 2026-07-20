@@ -39,6 +39,7 @@ interface TableBuilder extends PromiseLike<QueryResult> {
   update(values: unknown): TableBuilder;
   eq(column: string, value: unknown): TableBuilder;
   gte(column: string, value: unknown): TableBuilder;
+  in(column: string, values: readonly unknown[]): TableBuilder;
   order(column: string, options?: { ascending?: boolean }): TableBuilder;
   limit(count: number): TableBuilder;
 }
@@ -516,6 +517,7 @@ export interface MemberAccount {
 export async function fetchMemberAccount(
   scope: MemberScope,
   client: KeloSupabaseClient,
+  nowIso: string,
 ): Promise<MemberAccount> {
   const ledgerData = await run(
     from(client, "credit_ledger")
@@ -552,12 +554,40 @@ export async function fetchMemberAccount(
       .eq("person_id", scope.personId),
     "fetchMemberAccount.bookings",
   );
-  const bookings = parseInternal(
+  const liveBookings = parseInternal(
     z.array(z.object({ id: uuid, session_id: uuid, status: z.string() })),
     bookingData ?? [],
     "fetchMemberAccount.bookings",
-  )
-    .filter((b) => b.status === "booked" || b.status === "checked_in")
+  ).filter((b) => b.status === "booked" || b.status === "checked_in");
+
+  // Bound to UPCOMING sessions only. `checked_in` is terminal (mark_no_shows
+  // never clears it — migration 0041), so without this the account would
+  // accumulate every session the member has ever attended, forever, and render
+  // each as a nameless "time to be confirmed" row. Attendance history is not an
+  // upcoming booking. A booking whose session has already started (or is gone)
+  // is dropped here, at the source — the client window is a display detail, not
+  // the bound.
+  const sessionIds = [...new Set(liveBookings.map((b) => b.session_id))];
+  const upcomingSessionIds = new Set<string>();
+  if (sessionIds.length > 0) {
+    const sessionData = await run(
+      from(client, "scheduled_sessions")
+        .select("id, starts_at")
+        .eq("tenant_id", scope.tenantId)
+        .in("id", sessionIds)
+        .gte("starts_at", nowIso),
+      "fetchMemberAccount.sessions",
+    );
+    const upcoming = parseInternal(
+      z.array(z.object({ id: uuid, starts_at: z.string() })),
+      sessionData ?? [],
+      "fetchMemberAccount.sessions",
+    );
+    for (const s of upcoming) upcomingSessionIds.add(s.id);
+  }
+
+  const bookings = liveBookings
+    .filter((b) => upcomingSessionIds.has(b.session_id))
     .map((b) => ({ booking_id: b.id, session_id: b.session_id, status: b.status }));
 
   return { credit_balance, waiver: { needs_signature }, bookings };

@@ -10,12 +10,18 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AccountRouteImport } from './routes/account'
 import { Route as SigninRouteImport } from './routes/signin'
 import { Route as BookSessionIdRouteImport } from './routes/book.$sessionId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccountRoute = AccountRouteImport.update({
+  id: '/account',
+  path: '/account',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SigninRoute = SigninRouteImport.update({
@@ -31,30 +37,34 @@ const BookSessionIdRoute = BookSessionIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/account': typeof AccountRoute
   '/signin': typeof SigninRoute
   '/book/$sessionId': typeof BookSessionIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/account': typeof AccountRoute
   '/signin': typeof SigninRoute
   '/book/$sessionId': typeof BookSessionIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/account': typeof AccountRoute
   '/signin': typeof SigninRoute
   '/book/$sessionId': typeof BookSessionIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/signin' | '/book/$sessionId'
+  fullPaths: '/' | '/account' | '/signin' | '/book/$sessionId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/signin' | '/book/$sessionId'
-  id: '__root__' | '/' | '/signin' | '/book/$sessionId'
+  to: '/' | '/account' | '/signin' | '/book/$sessionId'
+  id: '__root__' | '/' | '/account' | '/signin' | '/book/$sessionId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AccountRoute: typeof AccountRoute
   SigninRoute: typeof SigninRoute
   BookSessionIdRoute: typeof BookSessionIdRoute
 }
@@ -66,6 +76,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/account': {
+      id: '/account'
+      path: '/account'
+      fullPath: '/account'
+      preLoaderRoute: typeof AccountRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/signin': {
@@ -87,6 +104,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AccountRoute: AccountRoute,
   SigninRoute: SigninRoute,
   BookSessionIdRoute: BookSessionIdRoute,
 }
