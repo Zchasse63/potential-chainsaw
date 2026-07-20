@@ -500,6 +500,38 @@ export async function insertMemberSession(
 
 // -- session lifecycle (unit 8.2c) -------------------------------------------
 
+const refreshOutcomeSchema = z.object({
+  outcome: z.enum(["not_found", "revoked", "reuse", "expired", "needs_resolution", "rotated"]),
+  session_id: uuid.nullable(),
+  expires_at: z.string().nullable(),
+  absolute_expires_at: z.string().nullable(),
+  platform: z.enum(["web", "ios", "android"]).nullable(),
+});
+export type RefreshOutcome = z.infer<typeof refreshOutcomeSchema>;
+
+/** Atomic single-use rotation with reuse-detection (migration 0045). Only the
+ * sha256 token hashes cross this boundary; the RPC decides + rotates under a
+ * FOR UPDATE lock. 'rotated' carries the new session; every other outcome the
+ * route maps to a neutral 401 (a 'reuse' outcome has already burned the family
+ * server-side). */
+export async function refreshMemberSession(
+  client: KeloSupabaseClient,
+  tokenHash: string,
+  newTokenHash: string,
+): Promise<RefreshOutcome> {
+  const { data, error } = await (client as unknown as RpcClient).rpc("refresh_member_session", {
+    p_token_hash: tokenHash,
+    p_new_token_hash: newTokenHash,
+  });
+  if (error !== null) {
+    throw new Error(`refresh_member_session RPC failed: ${error.message}`);
+  }
+  const rows = parseInternal(z.array(refreshOutcomeSchema), data ?? [], "refreshMemberSession");
+  const row = rows[0];
+  if (row === undefined) throw new Error("refreshMemberSession: RPC returned no outcome row");
+  return row;
+}
+
 /** Revoke a session (logout). Scoped to the resolved tenant+person+id so a
  * token can only ever revoke its OWN session; idempotent (already-revoked stays
  * revoked). member_sessions has no client policy — service-role only. */

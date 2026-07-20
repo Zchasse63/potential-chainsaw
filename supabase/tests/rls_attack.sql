@@ -2740,6 +2740,81 @@ begin
 end
 $$;
 
+-- ===========================================================================
+-- (38) MEMBER SESSION ROTATION (migration 0045): app.refresh_member_session —
+--      service-role-only, single-use rotation that INHERITS the absolute cap,
+--      and reuse-detection that burns the entire rotation family.
+-- ===========================================================================
+do $$
+declare
+  v_a uuid; v_person uuid;
+  v_abs timestamptz := now() + interval '300 days';
+  v_s1 uuid; v_child uuid;
+  v_outcome text; v_new_abs timestamptz;
+  raised boolean;
+begin
+  reset role;
+  select val::uuid into v_a from app_test.ctx where key = 'tenant_a';
+  insert into public.people (tenant_id, first_name, source)
+    values (v_a, 'Rot A', 'native') returning id into v_person;
+  insert into public.person_claims (tenant_id, person_id, verified_contact, channel, claimed_via)
+    values (v_a, v_person, 'rot@example.test', 'email', 'self_email');
+
+  -- Grant posture (the 8.2a Supabase-default-grant lesson): NO client role may
+  -- EXECUTE the wrapper; only service_role.
+  perform app_test.assert(
+    not has_function_privilege('authenticated', 'public.refresh_member_session(text, text)', 'execute')
+    and not has_function_privilege('anon', 'public.refresh_member_session(text, text)', 'execute')
+    and has_function_privilege('service_role', 'public.refresh_member_session(text, text)', 'execute'),
+    '(38) refresh_member_session EXECUTE is not service-role-only');
+
+  -- In-body service-role guard: an authenticated JWT is refused (42501).
+  perform set_config('request.jwt.claims', json_build_object('role', 'authenticated')::text, true);
+  raised := false;
+  begin perform app.refresh_member_session('hash-x', 'hash-y');
+  exception when insufficient_privilege then raised := true; end;
+  perform app_test.assert(raised, '(38) refresh_member_session accepted a non-service-role JWT');
+
+  -- As the service role: seed a LIVE session and rotate it.
+  perform set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
+  insert into public.member_sessions
+    (tenant_id, person_id, token_hash, expires_at, absolute_expires_at, platform)
+    values (v_a, v_person, 'hash-1', now() + interval '90 days', v_abs, 'web')
+    returning id into v_s1;
+
+  select r.outcome, r.absolute_expires_at into v_outcome, v_new_abs
+    from app.refresh_member_session('hash-1', 'hash-2') r;
+  perform app_test.assert(v_outcome = 'rotated', '(38) a live session did not rotate');
+
+  -- Old revoked; child exists linking rotated_from; absolute cap INHERITED
+  -- (rotation must never reset the 12-month hard cap).
+  perform app_test.assert(
+    (select revoked_at is not null from public.member_sessions where id = v_s1),
+    '(38) the rotated (old) session was not revoked');
+  select id into v_child from public.member_sessions where token_hash = 'hash-2';
+  perform app_test.assert(v_child is not null, '(38) rotation minted no child session');
+  perform app_test.assert(
+    (select rotated_from from public.member_sessions where id = v_child) = v_s1,
+    '(38) the child session does not link rotated_from to the old one');
+  perform app_test.assert(v_new_abs = v_abs,
+    '(38) rotation EXTENDED the absolute cap (must inherit, never reset)');
+
+  -- REUSE: replay the now-revoked-and-rotated 'hash-1' → the whole family burns
+  -- (both the old node AND the live child), and no new session is minted.
+  select r.outcome into v_outcome from app.refresh_member_session('hash-1', 'hash-3') r;
+  perform app_test.assert(v_outcome = 'reuse', '(38) a replayed rotated token was not flagged reuse');
+  perform app_test.assert(
+    (select revoked_at is not null from public.member_sessions where id = v_child),
+    '(38) reuse-detection did not revoke the live family member (token theft persists)');
+  perform app_test.assert(
+    not exists (select 1 from public.member_sessions where token_hash = 'hash-3'),
+    '(38) reuse-detection still minted a new session');
+
+  reset role;
+  perform set_config('request.jwt.claims', '{}', true);
+end
+$$;
+
 do $$
 declare
   n int;

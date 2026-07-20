@@ -20,6 +20,7 @@ import {
   fetchMemberMe,
   insertMemberOtpAudit,
   isContactSuppressed,
+  refreshMemberSession,
   revokeMemberSession,
   fetchTenantName,
   findClaimsByContact,
@@ -36,6 +37,7 @@ import {
   MEMBER_SESSION_ROLLING_MS,
   MEMBER_SESSION_ROLLING_SECONDS,
   MEMBER_TOKEN_PREFIX,
+  presentedMemberToken,
   resolveMember,
 } from "../middleware/member.js";
 import { memberOf, type AppEnv } from "../types.js";
@@ -438,6 +440,54 @@ export function registerMemberRoutes(app: Hono<AppEnv>, deps: MemberDeps = {}): 
       },
       // Mobile gets the raw token in-body ONCE (SecureStore); web rides the cookie.
       ...(body.platform === "web" ? {} : { token }),
+    });
+    return c.json(
+      c.var.ok(view, { source: "native", definitionVersion: AUTH_DEFINITION_VERSION }),
+      200,
+    );
+  });
+
+  /**
+   * POST /member/auth/refresh — single-use token ROTATION with reuse-detection
+   * (§3.2). NOT resolveMember-gated: refresh must SEE a revoked/rotated token to
+   * run reuse-detection (resolveMember would 401 it first). The atomic RPC
+   * (migration 0045) decides + rotates under a FOR UPDATE lock. On 'rotated' we
+   * issue a fresh token (new cookie for web / in-body for mobile); EVERY other
+   * outcome — including 'reuse', which has already burned the family
+   * server-side — returns the SAME neutral 401 so nothing is distinguishable.
+   */
+  app.post("/member/auth/refresh", async (c) => {
+    const token = presentedMemberToken(c);
+    if (token === null) {
+      throw new ApiError(401, "unauthorized", "a valid member session is required");
+    }
+    const newToken = `${MEMBER_TOKEN_PREFIX}${randomBytes(32).toString("base64url")}`;
+    const outcome = await refreshMemberSession(client(), sha256Hex(token), sha256Hex(newToken));
+    if (
+      outcome.outcome !== "rotated" ||
+      outcome.expires_at === null ||
+      outcome.absolute_expires_at === null
+    ) {
+      throw new ApiError(401, "unauthorized", "a valid member session is required");
+    }
+    // Web rides the cookie; mobile ('ios'/'android') gets the new token in-body
+    // ONCE (SecureStore). The old token was revoked inside the RPC.
+    if (outcome.platform === "web") {
+      setCookie(c, MEMBER_COOKIE, newToken, {
+        httpOnly: true,
+        secure: true,
+        sameSite: "Lax",
+        path: "/",
+        maxAge: MEMBER_SESSION_ROLLING_SECONDS,
+      });
+    }
+    const view = memberAuthViewSchema.parse({
+      member: { first_name: null, claim_status: "active" },
+      session: {
+        expires_at: outcome.expires_at,
+        absolute_expires_at: outcome.absolute_expires_at,
+      },
+      ...(outcome.platform === "web" ? {} : { token: newToken }),
     });
     return c.json(
       c.var.ok(view, { source: "native", definitionVersion: AUTH_DEFINITION_VERSION }),

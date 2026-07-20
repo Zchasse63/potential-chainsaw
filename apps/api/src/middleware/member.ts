@@ -46,8 +46,11 @@ export interface MemberAuthDeps {
   createMemberClient?: () => KeloSupabaseClient;
 }
 
-/** The presented credential: cookie first (web), then the Bearer header (mobile). */
-function presentedToken(c: Parameters<MiddlewareHandler<AppEnv>>[0]): string | null {
+/** The presented credential: cookie first (web), then the Bearer header
+ * (mobile). Exported so /member/auth/refresh can read the SAME credential
+ * without resolveMember (which 401s revoked/rotated tokens — refresh must see
+ * them to run reuse-detection). */
+export function presentedMemberToken(c: Parameters<MiddlewareHandler<AppEnv>>[0]): string | null {
   const cookieToken = getCookie(c)[MEMBER_COOKIE];
   if (cookieToken !== undefined && cookieToken.startsWith(MEMBER_TOKEN_PREFIX)) {
     return cookieToken;
@@ -62,7 +65,7 @@ function presentedToken(c: Parameters<MiddlewareHandler<AppEnv>>[0]): string | n
 
 export function resolveMember(deps: MemberAuthDeps = {}): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
-    const token = presentedToken(c);
+    const token = presentedMemberToken(c);
     if (token === null) {
       throw new ApiError(401, "unauthorized", MEMBER_SESSION_NEUTRAL_MESSAGE);
     }
