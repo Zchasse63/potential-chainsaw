@@ -51,6 +51,13 @@ _Last updated: 2026-07-17 (Phase 0 in progress)._
 | P8-1 | **The Sauna Guys brand assets** | Logo, colors, type for the member-surface skin (now ALSO the app icons/splash for the store apps) | 🟧 (phase 8) |
 | P8-2 | **Apple Developer Program + Google Play Console accounts** (owner plan change 2026-07-19: native iOS+Android member apps required at cutover) | Enroll Apple Developer Program ($99/yr — enrollment can take days) + Google Play Console ($25 once). Needed before store submission; store review adds lead time to the phase-8 critical path. | 🟥 (phase-8 store gate) |
 
+## Wave 8 code follow-ups (not owner-gated — tracked so they don't slip)
+
+| Ref | Item | Note | State |
+|---|---|---|---|
+| W8-FU1 | **Member web JS budget harness** (plan-member-app §7) | The `apps/member` public schedule client chunk is ~90KB gz vs the plan's 30KB per-route budget. Needs a CI budget check + route-level code-splitting/trimming of the TanStack Start runtime. Not security; a perf gate. Land with W8-5 (RUM by funnel step). | 🟨 (W8-5) |
+| W8-FU2 | **Self-hosted member fonts** | `packages/ui` `tokens.css` still `@import`s Google Fonts; the member site should self-host the font assets (privacy + no third-party request on the public page). Lands with the P8-1 brand seam (`the-sauna-guys.css`). | 🟨 (with P8-1) |
+
 ## Owner policy defaults in force (owner-questions §B — using documented defaults until changed)
 
 Briefing 6:00 AM studio time · dunning grace 14d · quiet hours 9 PM–9 AM · marketing cooldown 7d ·
