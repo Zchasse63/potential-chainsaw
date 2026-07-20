@@ -11,6 +11,7 @@ import {
   memberAuthViewSchema,
   memberBookBody,
   memberCancelBody,
+  memberClaimStatusView,
   memberHoldBody,
   memberScheduleQuery,
   memberScheduleResponse,
@@ -35,6 +36,7 @@ import {
   fetchTenantName,
   findClaimsByContact,
   findPeopleByContact,
+  findPersonClaimStatus,
   insertMemberSession,
   insertOtpChallenge,
   insertPersonClaim,
@@ -545,6 +547,29 @@ export function registerMemberRoutes(app: Hono<AppEnv>, deps: MemberDeps = {}): 
     const view = memberAccountSchema.parse(account);
     return c.json(
       c.var.ok(view, { source: "native", definitionVersion: "member-account:v1" }),
+      200,
+    );
+  });
+
+  /** GET /member/claim/status — the ONE route a needs_resolution session can
+   * reach (allowUnresolved): its own claim status + first name (§3.3). No
+   * balances/bookings. Lets the member app poll "am I resolved yet?". */
+  const memberClaimAuth = resolveMember({
+    createMemberClient: deps.createMemberClient,
+    allowUnresolved: true,
+  });
+  app.get("/member/claim/status", memberClaimAuth, async (c) => {
+    const { memberTenantId, memberPersonId, memberSessionId } = memberOf(c);
+    const scope = { tenantId: memberTenantId, personId: memberPersonId };
+    const db = client();
+    const claim = await findPersonClaimStatus(scope, db);
+    const me = await fetchMemberMe(scope, db, memberSessionId);
+    const view = memberClaimStatusView.parse({
+      claim_status: claim?.status ?? "needs_resolution",
+      first_name: me?.first_name ?? null,
+    });
+    return c.json(
+      c.var.ok(view, { source: "native", definitionVersion: "member-claim:v1" }),
       200,
     );
   });
