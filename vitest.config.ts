@@ -14,6 +14,7 @@ export default defineConfig({
       "@kelo/stripe": `${root}packages/stripe/src/index.ts`,
       "@kelo/db": `${root}packages/db/src/index.ts`,
       "@kelo/glofox": `${root}packages/glofox/src/index.ts`,
+      "@kelo/member-core": `${root}packages/member-core/src/index.ts`,
       "@kelo/workers": `${root}workers/src/index.ts`,
       "@kelo/api": `${root}apps/api/src/index.ts`,
       // @kelo/ui/react resolves to its TS source so component tests run

@@ -13,8 +13,11 @@
     { "path": "packages/ui" },
     { "path": "packages/ui/tsconfig.react.json" },
     { "path": "packages/ui/tsconfig.test.json" },
+    { "path": "packages/member-core" },
+    { "path": "packages/member-core/tsconfig.test.json" },
     { "path": "apps/api" },
     { "path": "apps/web" },
+    { "path": "apps/member" },
     { "path": "workers" },
     { "path": "netlify" }
   ]

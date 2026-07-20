@@ -1,0 +1,25 @@
+{
+  "name": "@kelo/member-core",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Shared member-surface spine (plan-member-app §4.1): pure-TS typed API client over @kelo/contracts with freshness-envelope handling and the typed error taxonomy. Consumed by apps/member (web) and apps/member-mobile later. ZERO Supabase material, zero DOM/react-native — enforced by test/import-guard.test.ts.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@kelo/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "4.1.10"
+  }
+}

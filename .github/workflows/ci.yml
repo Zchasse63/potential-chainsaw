@@ -44,6 +44,22 @@ jobs:
             echo "::error::secret reference found in the built web bundle"
             exit 1
           fi
+      - name: no Supabase/secret material in built member artifacts
+        # plan-member-app §5/§7: the member web bundle ships ZERO Supabase
+        # material (no URL, no anon key, no @supabase specifier) and no
+        # secrets — the structural successor to the retired fail-closed
+        # PostgREST assertion (with no member JWTs in existence, the control
+        # is "no credential material ships at all"). Greps whichever output
+        # dirs the Start build produced.
+        run: |
+          if grep -rIn -e 'SUPABASE_SERVICE_ROLE_KEY' -e 'SUPABASE_DB_URL' \
+              -e 'SUPABASE_ANON_KEY' -e 'SUPABASE_URL' \
+              -e 'sk_live' -e 'rk_live' \
+              -e 'supabase\.co' -e 'supabase\.in' -e '@supabase' \
+              apps/member/dist apps/member/.output 2>/dev/null; then
+            echo "::error::Supabase/secret material found in the built member bundle"
+            exit 1
+          fi
 
   secrets:
     name: secrets scan
@@ -81,6 +97,49 @@ jobs:
               --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' \
               --include='*.mts' --include='*.mjs'; then
             echo "::error::SUPABASE_SERVICE_ROLE_KEY referenced from apps/web"
+            exit 1
+          fi
+
+      - name: no Supabase material in member client sources
+        # plan-member-app §3.1 ground 2 / §5: the member web app and the shared
+        # member-core ship ZERO Supabase material — no anon key, no URL, no
+        # @supabase import (the only backend contact is the /api proxy).
+        # packages/member-core also carries a vitest import guard
+        # (test/import-guard.test.ts) that runs in the check job's test step.
+        # Test dirs are excluded: the guards legitimately NAME the banned
+        # strings in their matchers.
+        run: |
+          if grep -rIn -e '@supabase' -e 'SUPABASE_URL' -e 'SUPABASE_ANON_KEY' \
+              -e 'SUPABASE_SERVICE_ROLE_KEY' -e 'SUPABASE_DB_URL' \
+              -e 'supabase\.co' -e 'supabase\.in' \
+              apps/member/src packages/member-core/src \
+              --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' \
+              --include='*.mts' --include='*.mjs'; then
+            echo "::error::Supabase material referenced from member client sources"
+            exit 1
+          fi
+
+      - name: member site ships zero cron/background work
+        # CLAUDE.md invariant #4, by machine (plan-member-app §5): exactly one
+        # scheduler — the primary site's tick + jobs queue. The member site
+        # ships none: no cron key in its netlify.toml (the word itself is
+        # banned there), no scheduled/background-function imports or files
+        # under apps/member.
+        run: |
+          if grep -In 'schedule' apps/member/netlify.toml; then
+            echo "::error::cron-style config found in apps/member/netlify.toml"
+            exit 1
+          fi
+          if grep -rIn '@netlify/functions' apps/member \
+              --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' \
+              --include='*.mts' --include='*.mjs' --exclude-dir=node_modules \
+              --exclude-dir=dist --exclude-dir=dist-test --exclude-dir=.output; then
+            echo "::error::a Netlify function import (the cron API) appeared under apps/member"
+            exit 1
+          fi
+          if find apps/member -name '*-background.*' \
+              -not -path '*/node_modules/*' -not -path '*/dist/*' | grep .; then
+            echo "::error::a Netlify background function file appeared under apps/member"
             exit 1
           fi
 
