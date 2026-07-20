@@ -32,4 +32,10 @@ done
 echo "==> running RLS attack suite"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/rls_attack.sql
 
-echo "db-test.sh: SUCCESS — bootstrap, migrations, and RLS attack suite all passed"
+# Data-rights (GDPR/legal-evidence) integration proof — migration 0025's
+# pseudonymize_person / apply_retention_policy / retention guards. Self-contained
+# (begin…rollback), so it leaves the DB untouched for anything after it.
+echo "==> running data-rights integration proof"
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/data_rights.sql
+
+echo "db-test.sh: SUCCESS — bootstrap, migrations, RLS attack suite, and data-rights proof all passed"
