@@ -1162,7 +1162,7 @@ declare
   v_a uuid; v_b uuid; v_ua uuid; v_ub uuid;
   v_cust_b uuid; v_succ uuid; v_proc uuid;
   v_pay uuid; v_pay2 uuid; v_cmd uuid; v_cmd2 uuid;
-  v_status text; n int; raised boolean;
+  v_status text; v_msg text; n int; raised boolean;
 begin
   reset role;
   select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
@@ -1195,27 +1195,27 @@ begin
     where tenant_id = v_b and idempotency_key = 'pi-b-1' and kind = 'create_payment_intent';
   perform app_test.assert(n = 1, '(28) duplicate create_payment_intent wrote a second command');
 
-  -- Cross-tenant: uB cannot record an intent for tenant A.
+  -- Cross-tenant: uB cannot record an intent for tenant A (role re-check → 42501).
   raised := false;
   begin
     perform app.create_payment_intent(v_a, v_cust_b, 5000, 'usd', 'pi-x', v_ub);
-  exception when others then raised := true;
+  exception when insufficient_privilege then raised := true;
   end;
   perform app_test.assert(raised, '(28) uB could create_payment_intent for tenant A');
 
-  -- A customer that is not tenant B's is rejected.
+  -- A customer that is not tenant B's is rejected (P0002 = customer not found).
   raised := false;
   begin
     perform app.create_payment_intent(v_b, gen_random_uuid(), 5000, 'usd', 'pi-y', v_ub);
-  exception when others then raised := true;
+  exception when no_data_found then raised := true;
   end;
   perform app_test.assert(raised, '(28) create_payment_intent accepted a foreign customer');
 
-  -- Actor spoof: the actor must be the authenticated caller.
+  -- Actor spoof: the actor must be the authenticated caller (42501).
   raised := false;
   begin
     perform app.create_payment_intent(v_b, v_cust_b, 5000, 'usd', 'pi-z', v_ua);
-  exception when others then raised := true;
+  exception when insufficient_privilege then raised := true;
   end;
   perform app_test.assert(raised, '(28) create_payment_intent accepted a spoofed actor');
 
@@ -1238,27 +1238,30 @@ begin
     where tenant_id = v_b and idempotency_key = 'rf-b-1' and kind = 'create_refund';
   perform app_test.assert(n = 1, '(28) duplicate create_refund wrote a second command');
 
-  -- Over-refund: remaining is 8000 - 3000 = 5000; 6000 must be refused.
-  raised := false;
+  -- Over-refund: remaining is 8000 - 3000 = 5000; 6000 must be refused on THAT
+  -- exact ground (22023 + message), not merely "some error".
+  raised := false; v_msg := '';
   begin
     perform app.create_refund(v_b, v_succ, 6000, 'rf-b-2', v_ub, null);
-  exception when others then raised := true;
+  exception when invalid_parameter_value then raised := true; v_msg := sqlerrm;
   end;
-  perform app_test.assert(raised, '(28) create_refund allowed exceeding the refundable amount');
+  perform app_test.assert(raised and v_msg like '%refund exceeds refundable%',
+    '(28) create_refund allowed exceeding the refundable amount');
 
-  -- A non-succeeded (processing) payment cannot be refunded.
-  raised := false;
+  -- A non-succeeded (processing) payment cannot be refunded (22023 + message).
+  raised := false; v_msg := '';
   begin
     perform app.create_refund(v_b, v_proc, 100, 'rf-proc', v_ub, null);
-  exception when others then raised := true;
+  exception when invalid_parameter_value then raised := true; v_msg := sqlerrm;
   end;
-  perform app_test.assert(raised, '(28) create_refund allowed refunding a non-succeeded payment');
+  perform app_test.assert(raised and v_msg like '%only a succeeded payment%',
+    '(28) create_refund allowed refunding a non-succeeded payment');
 
-  -- Cross-tenant refund is refused.
+  -- Cross-tenant refund is refused (role re-check → 42501).
   raised := false;
   begin
     perform app.create_refund(v_a, v_succ, 100, 'rf-x', v_ub, null);
-  exception when others then raised := true;
+  exception when insufficient_privilege then raised := true;
   end;
   perform app_test.assert(raised, '(28) uB could create_refund against tenant A');
 end
@@ -1464,7 +1467,7 @@ declare
   v_retail_b uuid; v_gcp_b uuid; v_plan_dropin_b uuid;
   v_lines jsonb; v_res jsonb; v_order uuid; v_payment uuid;
   v_gc_code text; v_card uuid; v_redeem jsonb;
-  v_status text; v_tender text; n int; raised boolean;
+  v_status text; v_tender text; v_msg text; n int; raised boolean;
 begin
   reset role;
   select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
@@ -1538,20 +1541,21 @@ begin
   select count(*) into n from public.pos_orders where tenant_id = v_b and idempotency_key = 'pos-b-1';
   perform app_test.assert(n = 1, '(31) duplicate pos_checkout wrote a second order');
 
-  -- Cross-tenant: uB cannot check out against tenant A.
+  -- Cross-tenant: uB cannot check out against tenant A (role re-check → 42501).
   raised := false;
   begin perform app.pos_checkout(v_a, v_ub, 'pos-x', null, v_lines, 'cash', 0);
-  exception when others then raised := true; end;
+  exception when insufficient_privilege then raised := true; end;
   perform app_test.assert(raised, '(31) uB could pos_checkout for tenant A');
 
-  -- An unknown line kind is refused.
-  raised := false;
+  -- An unknown line kind is refused on THAT ground (22023 + message).
+  raised := false; v_msg := '';
   begin
     perform app.pos_checkout(v_b, v_ub, 'pos-badkind', v_pb,
       jsonb_build_array(jsonb_build_object('kind', 'bogus', 'ref_id', v_retail_b, 'qty', 1)),
       'cash', 0);
-  exception when others then raised := true; end;
-  perform app_test.assert(raised, '(31) pos_checkout accepted an unknown line kind');
+  exception when invalid_parameter_value then raised := true; v_msg := sqlerrm; end;
+  perform app_test.assert(raised and v_msg like '%unknown line kind%',
+    '(31) pos_checkout accepted an unknown line kind');
 
   -- REDEEM: a partial redemption appends a NEGATIVE entry; balance = 5000 - 2000.
   v_redeem := app.redeem_gift_card(v_b, v_ub, v_gc_code, 2000, 'rd-b-1');
@@ -1567,18 +1571,20 @@ begin
     where gift_card_id = v_card and idempotency_key = 'rd-b-1';
   perform app_test.assert(n = 1, '(31) duplicate redeem key wrote a second ledger entry');
 
-  -- OVER-REDEMPTION: only 3000 remains; 4000 must be refused.
-  raised := false;
+  -- OVER-REDEMPTION: only 3000 remains; 4000 must be refused on THAT exact
+  -- balance ground (22023 + message), never for an unrelated reason.
+  raised := false; v_msg := '';
   begin perform app.redeem_gift_card(v_b, v_ub, v_gc_code, 4000, 'rd-b-2');
-  exception when others then raised := true; end;
-  perform app_test.assert(raised, '(31) redeem allowed exceeding the balance');
+  exception when invalid_parameter_value then raised := true; v_msg := sqlerrm; end;
+  perform app_test.assert(raised and v_msg like '%redemption exceeds gift card balance%',
+    '(31) redeem allowed exceeding the balance');
 
-  -- FRONT_DESK + DISCOUNT → refused (a discount is a manager decision).
+  -- FRONT_DESK + DISCOUNT → refused (a discount is a manager decision → 42501).
   reset role;  -- become() is superuser-only; drop the uB impersonation first
   perform app_test.become(v_uf);
   raised := false;
   begin perform app.pos_checkout(v_b, v_uf, 'pos-fd-disc', v_pb, v_lines, 'cash', 500);
-  exception when others then raised := true; end;
+  exception when insufficient_privilege then raised := true; end;
   perform app_test.assert(raised, '(31) front_desk could apply a discount');
 
   -- front_desk CAN check out with NO discount (positive control).
