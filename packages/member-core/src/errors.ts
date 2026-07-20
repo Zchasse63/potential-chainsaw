@@ -25,17 +25,28 @@ export class MemberApiError extends Error {
   readonly kind: MemberApiErrorKind;
   /** HTTP status for kind "http_error"; undefined otherwise. */
   readonly status?: number;
+  /**
+   * The API's structured error code (`error.code` in the body) for kind
+   * "http_error" — e.g. "session_at_capacity", "insufficient_credits",
+   * "booking_waiver_required". Surfaces branch on THIS, not on `status` alone,
+   * because one status can carry several conditions (409 is both the capacity
+   * ceiling and an idempotency-key conflict). Undefined when no code was parseable.
+   */
+  readonly code?: string;
 
   constructor(
     kind: MemberApiErrorKind,
     message: string,
-    options: { status?: number; cause?: unknown } = {},
+    options: { status?: number; code?: string; cause?: unknown } = {},
   ) {
     super(message, { cause: options.cause });
     this.name = "MemberApiError";
     this.kind = kind;
     if (options.status !== undefined) {
       this.status = options.status;
+    }
+    if (options.code !== undefined) {
+      this.code = options.code;
     }
   }
 }

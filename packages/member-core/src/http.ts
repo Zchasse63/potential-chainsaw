@@ -66,10 +66,16 @@ export async function memberRequest(
   }
 
   if (!response.ok) {
+    // Pull the structured `error.code` from the body so callers can branch on
+    // the condition (e.g. 409 session_at_capacity vs 409 idempotency_key_conflict)
+    // rather than an overloaded status. Best-effort — a bodyless/non-JSON error
+    // just yields an undefined code.
+    const code = await readErrorCode(response);
     return {
       ok: false,
       error: new MemberApiError("http_error", `${opts.label} request returned HTTP ${response.status}`, {
         status: response.status,
+        ...(code !== undefined ? { code } : {}),
       }),
     };
   }
@@ -95,4 +101,26 @@ export async function memberRequest(
     };
   }
   return { ok: true, data: inspection.data, meta: inspection.meta };
+}
+
+/**
+ * Best-effort read of the API's `{ error: { code, ... } }` body on a non-2xx.
+ * Never throws — a missing/non-JSON/oddly-shaped body just returns undefined,
+ * so the caller falls back to status-only handling.
+ */
+async function readErrorCode(response: Response): Promise<string | undefined> {
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return undefined;
+  }
+  if (typeof body === "object" && body !== null && "error" in body) {
+    const err = (body as { error?: unknown }).error;
+    if (typeof err === "object" && err !== null && "code" in err) {
+      const code = (err as { code?: unknown }).code;
+      if (typeof code === "string") return code;
+    }
+  }
+  return undefined;
 }
