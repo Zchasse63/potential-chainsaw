@@ -2937,6 +2937,75 @@ begin
 end
 $$;
 
+-- ===========================================================================
+-- (40) STEP-UP AUTH (migration 0026): app.set_step_up_pin — the re-auth gate in
+--      front of money + data-rights operations. Restores invariant #7 coverage
+--      for this RPC: the role-escalation guard, cross-tenant refusal,
+--      actor<>caller, and the owner/manager aal2 (MFA) requirement; a legit
+--      owner→strictly-lower-role set still works.
+-- ===========================================================================
+do $$
+declare
+  v_a uuid; v_b uuid; v_ua uuid; v_ub uuid; v_uf uuid;
+  h text := 'scrypt$32768$8$1$' || repeat('A', 22) || '$' || repeat('A', 43);
+  raised boolean;
+begin
+  reset role;
+  select val::uuid into v_a from app_test.ctx where key = 'tenant_a';
+  select val::uuid into v_b from app_test.ctx where key = 'tenant_b';
+  select val::uuid into v_ua from app_test.ctx where key = 'user_a'; -- owner in tenant A
+  select val::uuid into v_ub from app_test.ctx where key = 'user_b'; -- owner in tenant B
+  -- A front_desk user in tenant A (a role that must NOT set a higher-role PIN).
+  insert into auth.users (id, email) values (gen_random_uuid(), 'stepup-fd@example.test')
+    returning id into v_uf;
+  insert into public.tenant_users (tenant_id, user_id, role) values (v_a, v_uf, 'front_desk');
+
+  -- (a) a front_desk actor CANNOT set the owner's PIN (role escalation).
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', v_uf, 'role', 'authenticated', 'aal', 'aal2')::text, true);
+  raised := false;
+  begin perform app.set_step_up_pin(v_a, v_ua, h, v_uf);
+  exception when insufficient_privilege then raised := true; end;
+  perform app_test.assert(raised, '(40) front_desk set a higher-role step-up PIN (escalation)');
+
+  -- (b) cross-tenant: a tenant-A owner cannot set a PIN in tenant B (no membership).
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', v_ua, 'role', 'authenticated', 'aal', 'aal2')::text, true);
+  raised := false;
+  begin perform app.set_step_up_pin(v_b, v_ub, h, v_ua);
+  exception when insufficient_privilege then raised := true; end;
+  perform app_test.assert(raised, '(40) a foreign-tenant actor set a step-up PIN');
+
+  -- (c) actor <> authenticated caller.
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', v_uf, 'role', 'authenticated', 'aal', 'aal2')::text, true);
+  raised := false;
+  begin perform app.set_step_up_pin(v_a, v_ua, h, v_ua);
+  exception when insufficient_privilege then raised := true; end;
+  perform app_test.assert(raised, '(40) set_step_up_pin accepted actor <> caller');
+
+  -- (d) an owner/manager PIN change WITHOUT aal2 (MFA) is refused — a
+  --     magic-link/password session must not become PIN-reset authority.
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', v_ua, 'role', 'authenticated', 'aal', 'aal1')::text, true);
+  raised := false;
+  begin perform app.set_step_up_pin(v_a, v_ua, h, v_ua);
+  exception when insufficient_privilege then raised := true; end;
+  perform app_test.assert(raised, '(40) an owner set a PIN without aal2 MFA');
+
+  -- (e) an aal2 owner setting a strictly-lower (front_desk) PIN SUCCEEDS.
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', v_ua, 'role', 'authenticated', 'aal', 'aal2')::text, true);
+  perform app.set_step_up_pin(v_a, v_uf, h, v_ua);
+  perform app_test.assert(
+    (select step_up_pin_hash = h from public.tenant_users where tenant_id = v_a and user_id = v_uf),
+    '(40) a legitimate owner->front_desk PIN set did not persist');
+
+  reset role;
+  perform set_config('request.jwt.claims', '{}', true);
+end
+$$;
+
 do $$
 declare
   n int;
