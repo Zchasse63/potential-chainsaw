@@ -1636,8 +1636,9 @@ declare
   v_res_a uuid; v_res_b uuid; v_ot_a uuid; v_ot_b uuid;
   v_s_future uuid; v_s_cap uuid; v_s_soon uuid; v_s_a uuid;
   v_p1 uuid; v_pc1 uuid; v_pc2 uuid; v_pref uuid; v_pfor uuid; v_phold uuid; v_pwaiver uuid;
+  v_pzero uuid;
   v_res jsonb; v_book1 uuid; v_booking uuid; v_hold uuid;
-  v_needs boolean; v_msg text; n int; n_before int; raised boolean;
+  v_needs boolean; v_msg text; v_state text; n int; n_before int; raised boolean;
 begin
   reset role;
   select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
@@ -1682,6 +1683,8 @@ begin
   insert into public.people (tenant_id, first_name, source) values (v_b, 'PFor','native') returning id into v_pfor;
   insert into public.people (tenant_id, first_name, source) values (v_b, 'PHold','native') returning id into v_phold;
   insert into public.people (tenant_id, first_name, source) values (v_b, 'PWaiver','native') returning id into v_pwaiver;
+  -- PZero gets NO credit grant below — the zero-credit refusal target (c2).
+  insert into public.people (tenant_id, first_name, source) values (v_b, 'PZero','native') returning id into v_pzero;
 
   insert into public.credit_ledger (tenant_id, person_id, entry_type, delta, source, external_ref)
     values
@@ -1728,11 +1731,26 @@ begin
   perform app_test.assert((v_res ->> 'booking_id') is not null, '(32) first seat could not book');
   raised := false;
   begin perform app.book_session(v_b, v_pc2, v_s_cap, v_ub, 'bk-pc2', 'desk', null, true);
-  exception when others then raised := true; end;
-  perform app_test.assert(raised, '(32) an over-capacity booking was NOT refused');
+  exception when check_violation then raised := true; end;  -- 23514, the exact no-oversell code
+  perform app_test.assert(raised, '(32) an over-capacity booking was NOT refused with check_violation (23514)');
   select count(*) into n from public.bookings
     where tenant_id = v_b and session_id = v_s_cap and status in ('booked', 'checked_in');
   perform app_test.assert(n = 1, '(32) capacity-1 session holds more than one active booking');
+
+  -- (c2) ZERO-CREDIT REFUSAL — the reason must be insufficient_credits (22023),
+  --      not merely "some error". A `when others` catch passes for the WRONG
+  --      reason too (a NOT NULL, a capacity refusal, a permission error), so it
+  --      cannot tell "refused because broke" from "refused for an unrelated
+  --      bug". PZero holds no credit lot; the booking is refused on that exact
+  --      ground and NOTHING is appended to the append-only ledger.
+  raised := false; v_state := ''; v_msg := '';
+  begin perform app.book_session(v_b, v_pzero, v_s_future, v_ub, 'bk-zero', 'desk', null, true);
+  exception when invalid_parameter_value then raised := true; v_state := sqlstate; v_msg := sqlerrm; end;
+  perform app_test.assert(raised and v_msg like '%insufficient_credits%',
+    '(32) a zero-credit booking was not refused with insufficient_credits');
+  perform app_test.assert(v_state = '22023', '(32) insufficient_credits raised a non-22023 SQLSTATE');
+  select count(*) into n from public.credit_ledger where tenant_id = v_b and person_id = v_pzero;
+  perform app_test.assert(n = 0, '(32) a credit-refused booking still appended a ledger row');
 
   -- (d) HOLD choreography + the person/session BIND: a hold cannot book a foreign
   --     person; the rightful owner books via the hold, which is then consumed.
@@ -1740,7 +1758,7 @@ begin
   perform app_test.assert(v_hold is not null, '(32) hold_session returned no hold');
   raised := false;
   begin perform app.book_session(v_b, v_p1, v_s_future, v_ub, 'bk-mismatch', 'desk', v_hold, true);
-  exception when others then raised := true; end;
+  exception when insufficient_privilege then raised := true; end;  -- 42501, the hold/person bind
   perform app_test.assert(raised, '(32) a hold booked a person it does not belong to');
   v_res := app.book_session(v_b, v_phold, v_s_future, v_ub, 'bk-phold', 'desk', v_hold, true);
   perform app_test.assert((v_res ->> 'booking_id') is not null, '(32) hold owner could not book via the hold');
@@ -1774,17 +1792,19 @@ begin
 
   -- (g) CROSS-TENANT refusal: uB (owner of B) cannot hold/book/cancel in tenant A
   --     (the definer RPCs re-check role in-body → raise, never touch A's rows).
+  -- The definer RPCs re-check role in-body; uB has no membership in tenant A, so
+  -- each hits the "role required" guard → 42501 (never "some error").
   raised := false;
   begin perform app.hold_session(v_a, v_s_a, v_p1, v_ub, 300);
-  exception when others then raised := true; end;
+  exception when insufficient_privilege then raised := true; end;
   perform app_test.assert(raised, '(32) uB could hold a seat in tenant A');
   raised := false;
   begin perform app.book_session(v_a, v_p1, v_s_a, v_ub, 'bk-x', 'desk', null, true);
-  exception when others then raised := true; end;
+  exception when insufficient_privilege then raised := true; end;
   perform app_test.assert(raised, '(32) uB could book in tenant A');
   raised := false;
   begin perform app.cancel_booking(v_a, gen_random_uuid(), v_ub, 'cx-x', now());
-  exception when others then raised := true; end;
+  exception when insufficient_privilege then raised := true; end;
   perform app_test.assert(raised, '(32) uB could cancel a booking in tenant A');
 
   -- Availability read is RLS-scoped: uB sees zero of A's sessions, but her own.
@@ -1809,7 +1829,7 @@ begin
   perform app_test.assert(v_needs, '(32) PWaiver should owe a signature after activation');
   raised := false; v_msg := '';
   begin perform app.book_session(v_b, v_pwaiver, v_s_future, v_ub, 'bk-pw', 'desk', null, true);
-  exception when others then raised := true; v_msg := sqlerrm; end;
+  exception when insufficient_privilege then raised := true; v_msg := sqlerrm; end;  -- 42501 + message
   perform app_test.assert(raised and v_msg like '%waiver_required%',
     '(32) a person owing a waiver signature could book (enforcer bypassed)');
   -- The waiver refusal fired BEFORE any credit debit — PWaiver keeps her grant.
@@ -3057,6 +3077,67 @@ begin
   perform app_test.assert(a1 = false, '(41) v1 stayed active after v2 was activated');
   perform app_test.assert(a2 = true,  '(41) v2 was not activated');
   perform app_test.assert(n_active = 1, '(41) more than one active waiver version per tenant');
+
+  reset role;
+  perform set_config('request.jwt.claims', '{}', true);
+end
+$$;
+
+-- ===========================================================================
+-- (42) CAMPAIGN APPROVAL IMMUTABILITY (migration 0024): a comms send to real
+--      members must go through the ApprovalCeremony (app.approve_campaign, a
+--      SECURITY DEFINER path). app.protect_campaign_approval refuses, for a
+--      direct `authenticated` write: editing an already-approved/sending/sent
+--      campaign, and forging an approval by setting status/approved_by/
+--      approved_at directly (both 42501). Editing a still-draft campaign
+--      stays allowed. A bypass here would let un-reviewed copy reach members.
+-- ===========================================================================
+do $$
+declare
+  v_t uuid; v_u uuid; c_appr uuid; c_draft uuid; raised boolean;
+begin
+  reset role;
+  insert into public.tenants (name, slug)
+    values ('Camp Immut', 'camp-immut-' || substr(gen_random_uuid()::text, 1, 8))
+    returning id into v_t;
+  insert into auth.users (id, email)
+    values (gen_random_uuid(), 'camp-immut-owner@example.test') returning id into v_u;
+  insert into public.tenant_users (tenant_id, user_id, role) values (v_t, v_u, 'owner');
+
+  -- Seeded as the suite role: the BEFORE-UPDATE trigger does not fire on insert.
+  insert into public.campaigns (tenant_id, name, segment_key, template_key, channel, kind,
+      draft_subject, draft_body, status, approved_by, approved_at)
+    values (v_t, 'Approved One', 'at_risk', 'winback', 'email', 'marketing',
+      'Subj', 'Body text', 'approved', v_u, now()) returning id into c_appr;
+  insert into public.campaigns (tenant_id, name, segment_key, template_key, channel, kind,
+      draft_subject, draft_body, status)
+    values (v_t, 'Draft One', 'at_risk', 'winback', 'email', 'marketing',
+      'Subj', 'Draft body', 'draft') returning id into c_draft;
+
+  -- The trigger only guards the `authenticated` role; RLS (campaigns_update)
+  -- passes because the owner belongs to the tenant.
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', v_u, 'role', 'authenticated')::text, true);
+  set role authenticated;
+
+  -- (a) an already-APPROVED campaign is frozen to direct edits (42501).
+  raised := false;
+  begin update public.campaigns set draft_body = 'sneaky rewrite' where id = c_appr;
+  exception when insufficient_privilege then raised := true; end;
+  perform app_test.assert(raised, '(42) an approved campaign was edited outside approve_campaign()');
+
+  -- (b) an approval cannot be FORGED by a direct status/approver write (42501).
+  raised := false;
+  begin update public.campaigns set status = 'approved', approved_by = v_u, approved_at = now()
+    where id = c_draft;
+  exception when insufficient_privilege then raised := true; end;
+  perform app_test.assert(raised, '(42) a campaign approval was forged by a direct write');
+
+  -- (c) positive control: editing a still-DRAFT body (no approval fields) works.
+  update public.campaigns set draft_body = 'legitimately refined draft' where id = c_draft;
+  perform app_test.assert(
+    (select draft_body from public.campaigns where id = c_draft) = 'legitimately refined draft',
+    '(42) a legitimate draft-body edit was blocked');
 
   reset role;
   perform set_config('request.jwt.claims', '{}', true);
