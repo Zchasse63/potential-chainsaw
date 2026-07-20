@@ -3006,6 +3006,63 @@ begin
 end
 $$;
 
+-- ===========================================================================
+-- (41) WAIVER LIFECYCLE IMMUTABILITY (migration 0028): the legal-consent
+--      record must be tamper-evident. app.protect_waiver_version makes an
+--      ACTIVE (or signed) version's identity/text immutable and undeletable
+--      (errcode 23503), and app.activate_waiver_version enforces EXACTLY ONE
+--      active version per tenant — activating v2 demotes v1 atomically. A
+--      mutated/duplicated active waiver would let a member be bound to text
+--      they never saw, or void a signature retroactively.
+-- ===========================================================================
+do $$
+declare
+  v_t uuid; v_u uuid; v1 uuid; v2 uuid; raised boolean; n_active int; a1 boolean; a2 boolean;
+begin
+  reset role;
+  -- A FRESH tenant + owner: tenant_a already carries an active waiver (block 39),
+  -- and the one-active partial unique index would reject a second active row.
+  insert into public.tenants (name, slug)
+    values ('Waiver Immut', 'waiver-immut-' || substr(gen_random_uuid()::text, 1, 8))
+    returning id into v_t;
+  insert into auth.users (id, email)
+    values (gen_random_uuid(), 'waiver-immut-owner@example.test') returning id into v_u;
+  insert into public.tenant_users (tenant_id, user_id, role) values (v_t, v_u, 'owner');
+
+  insert into public.waiver_versions (tenant_id, version, title, body, active)
+    values (v_t, 1, 'Liability v1', 'Bound text one', true) returning id into v1;
+  insert into public.waiver_versions (tenant_id, version, title, body, active)
+    values (v_t, 2, 'Liability v2', 'Bound text two', false) returning id into v2;
+
+  -- (a) the ACTIVE version's bound text is immutable (23503 = foreign_key_violation).
+  raised := false;
+  begin update public.waiver_versions set body = 'tampered' where id = v1;
+  exception when foreign_key_violation then raised := true; end;
+  perform app_test.assert(raised, '(41) an active waiver version''s bound text was mutated');
+
+  -- (b) an ACTIVE version cannot be deleted — the audit trail can''t be erased.
+  raised := false;
+  begin delete from public.waiver_versions where id = v1;
+  exception when foreign_key_violation then raised := true; end;
+  perform app_test.assert(raised, '(41) an active waiver version was deleted');
+
+  -- (c) activating v2 (as the tenant owner) demotes v1 → EXACTLY one active.
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', v_u, 'role', 'authenticated')::text, true);
+  perform app.activate_waiver_version(v_t, v2, v_u);
+  perform set_config('request.jwt.claims', '{}', true);
+  select active into a1 from public.waiver_versions where id = v1;
+  select active into a2 from public.waiver_versions where id = v2;
+  select count(*) into n_active from public.waiver_versions where tenant_id = v_t and active;
+  perform app_test.assert(a1 = false, '(41) v1 stayed active after v2 was activated');
+  perform app_test.assert(a2 = true,  '(41) v2 was not activated');
+  perform app_test.assert(n_active = 1, '(41) more than one active waiver version per tenant');
+
+  reset role;
+  perform set_config('request.jwt.claims', '{}', true);
+end
+$$;
+
 do $$
 declare
   n int;
