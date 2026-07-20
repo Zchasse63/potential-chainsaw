@@ -498,12 +498,84 @@ export async function insertMemberSession(
   return row;
 }
 
+// -- session lifecycle (unit 8.2c) -------------------------------------------
+
+/** Revoke a session (logout). Scoped to the resolved tenant+person+id so a
+ * token can only ever revoke its OWN session; idempotent (already-revoked stays
+ * revoked). member_sessions has no client policy — service-role only. */
+export async function revokeMemberSession(
+  scope: MemberScope,
+  client: KeloSupabaseClient,
+  sessionId: string,
+  atIso: string,
+): Promise<void> {
+  // Scoped to tenant+person+id so a token can only revoke its OWN session. A
+  // double-logout simply re-stamps revoked_at (harmless — resolveMember only
+  // checks revoked_at !== null).
+  await run(
+    from(client, "member_sessions")
+      .update({ revoked_at: atIso })
+      .eq("tenant_id", scope.tenantId)
+      .eq("person_id", scope.personId)
+      .eq("id", sessionId),
+    "revokeMemberSession",
+  );
+}
+
+/** The GET /member/me summary for an ALREADY-RESOLVED active session: the
+ * person's first name + this session's expiry window. No balances/bookings
+ * (those are the account unit). resolveMember guarantees the active claim. */
+export async function fetchMemberMe(
+  scope: MemberScope,
+  client: KeloSupabaseClient,
+  sessionId: string,
+): Promise<{ first_name: string | null; expires_at: string; absolute_expires_at: string } | null> {
+  const personData = await run(
+    from(client, "people")
+      .select("first_name")
+      .eq("tenant_id", scope.tenantId)
+      .eq("id", scope.personId)
+      .limit(1),
+    "fetchMemberMe.person",
+  );
+  const persons = parseInternal(
+    z.array(z.object({ first_name: z.string().nullable() })),
+    personData ?? [],
+    "fetchMemberMe.person",
+  );
+  const person = persons[0];
+  if (person === undefined) return null;
+
+  const sessionData = await run(
+    from(client, "member_sessions")
+      .select("expires_at, absolute_expires_at")
+      .eq("tenant_id", scope.tenantId)
+      .eq("person_id", scope.personId)
+      .eq("id", sessionId)
+      .limit(1),
+    "fetchMemberMe.session",
+  );
+  const sessions = parseInternal(
+    z.array(z.object({ expires_at: z.string(), absolute_expires_at: z.string() })),
+    sessionData ?? [],
+    "fetchMemberMe.session",
+  );
+  const session = sessions[0];
+  if (session === undefined) return null;
+  return {
+    first_name: person.first_name,
+    expires_at: session.expires_at,
+    absolute_expires_at: session.absolute_expires_at,
+  };
+}
+
 // -- audit (append-only) ---------------------------------------------------------
 
 export type MemberVerificationEventKind =
   | "otp_sent"
   | "claim_attempt"
-  | "claim_conflict";
+  | "claim_conflict"
+  | "session_revoked";
 
 /** Append to the member auth/claim ledger. Hashes only; the table is
  * append-only for every application role (UPDATE/DELETE revoked, 0044). The
