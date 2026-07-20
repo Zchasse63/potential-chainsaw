@@ -50,10 +50,19 @@ _Owner plan change 2026-07-19 (plan-final §10): native iOS + Android member app
 Native, one codebase) are REQUIRED and cutover-gating — app parity with the Glofox member app the
 studio's members use today. The web app still ships FIRST (claiming/no-install path; earns beta
 metrics during store review). One client-agnostic member API/auth spine serves all three surfaces._
+_Status 2026-07-20: the member WEB booking surface is COMPLETE + merged (8.3e–h):
+Choose (schedule+book links) → Identify (OTP sign-in) → waiver gate → Book→Confirmed
+credit path (honest waitlist on the 409 capacity race, idempotent) → read-only Account
+(credits/waiver/upcoming) → Sign-out. Shared `packages/member-core` (auth/booking/account/
+logout) + pure adapters drive it; 1101 tests green; zero-Supabase bundle guard passes. Two
+independent reviews caught real bugs (race status-code mapping; unbounded past bookings) →
+fixed → re-reviewed PASS. Remaining in 8.1 (all deferred/gated): Stripe drop-in Pay stage
+(P0-5), waiver-signing in-flow (needs a member waiver-sign endpoint), receipts, unsubscribe
+prefs. NEXT code wave: 8.2 mobile — start with the architect step._
 | Unit | Scope |
 |---|---|
-| **8.1 member web app** | The member SSR web surface (on-domain booking, account claiming, credits/cards, waiver, receipts, unsubscribe prefs) per §6 phase 8 + plans/plan-member-app.md — built against the booking engine; deploys with the Netlify gate. |
-| **8.2 mobile apps** | Expo/React Native iOS + Android consuming the same member API spine; shared member-core package (API client, auth/claiming hooks, booking state machine) per the plan-member-app mobile track; push via Expo (APNs/FCM); store submission on the critical path (owner gates: Apple Developer + Play Console accounts, P8-2). |
+| **8.1 member web app** | The member SSR web surface (on-domain booking, account claiming, credits/cards, waiver, receipts, unsubscribe prefs) per §6 phase 8 + plans/plan-member-app.md — built against the booking engine; deploys with the Netlify gate. **Booking surface + account + session lifecycle DONE (2026-07-20); Pay/waiver-sign/receipts/prefs deferred or gated.** |
+| **8.2 mobile apps** | Expo/React Native iOS + Android consuming the same member API spine; shared member-core package (API client, auth/claiming hooks, booking state machine) per the plan-member-app mobile track; push via Expo (APNs/FCM); store submission on the critical path (owner gates: Apple Developer + Play Console accounts, P8-2). **NEXT — reuses the completed member-core spine; can be built before the store gates, but has no simulator in the build env (typecheck/unit-testable, not runtime-verifiable here).** |
 
 ### Live-ops / owner-gated (NOT code — tracked in BLOCKERS)
 Netlify deploy (P0-3, unlocks scheduler cadence + every URL) · Stripe Connect account (P0-5 → live
