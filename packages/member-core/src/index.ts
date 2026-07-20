@@ -28,5 +28,8 @@ export {
   logoutMember,
 } from "./booking.js";
 export type { Hold, Booking, Cancellation, MemberResult } from "./booking.js";
+// Member self-serve waiver signing (unit 8.3i) — shared web + mobile.
+export { fetchWaiver, signWaiver } from "./waiver.js";
+export type { Waiver, WaiverVersionView, WaiverSignature } from "./waiver.js";
 export { MemberApiError } from "./errors.js";
 export type { MemberApiErrorKind } from "./errors.js";
