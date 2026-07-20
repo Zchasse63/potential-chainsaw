@@ -98,7 +98,11 @@ describe("migration 0044 — consume_member_otp (the 0026 record_step_up_attempt
       "revoke all on function app.consume_member_otp(uuid, text, text, text, text) from public",
     );
     expect(migration).toContain(
-      "revoke all on function public.consume_member_otp(uuid, text, text, text, text) from public",
+      // Must revoke from the ROLES explicitly, not just PUBLIC: Supabase's
+      // default privileges auto-grant EXECUTE on new public-schema functions to
+      // anon + authenticated, so `from public` alone leaves the wrapper
+      // member-callable (the 8.2a live-apply finding).
+      "revoke all on function public.consume_member_otp(uuid, text, text, text, text)\n  from public, anon, authenticated",
     );
     expect(migration).toContain(
       "grant execute on function public.consume_member_otp(uuid, text, text, text, text)\n  to service_role",
