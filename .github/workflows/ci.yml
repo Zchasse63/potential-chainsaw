@@ -216,3 +216,9 @@ jobs:
         # active_recurring / at_risk membership, the priority-complement, and the
         # single-highest-priority reduction — the derivation was only grep-tested.
         run: pnpm exec vitest run packages/db/test/segments_golden.test.ts
+      - name: relationship typing golden (classification + log fires once)
+        # WS-4b: execute app.recompute_all_relationships and assert the
+        # precedence classification + that person_relationship_log fires exactly
+        # once per real transition and never on an idempotent re-run (the cohort
+        # member_count/MRR key off).
+        run: pnpm exec vitest run packages/db/test/relationships_golden.test.ts
