@@ -211,3 +211,8 @@ jobs:
         # over-balance, and never drive the append-only ledger negative — the
         # live proof behind block 31's sequential refusal (FOR UPDATE holds).
         run: pnpm exec vitest run packages/db/test/giftcard_storm.test.ts
+      - name: segment engine golden (exact membership + priority rule)
+        # WS-4a: execute app.recompute_segments on real Postgres and assert exact
+        # active_recurring / at_risk membership, the priority-complement, and the
+        # single-highest-priority reduction — the derivation was only grep-tested.
+        run: pnpm exec vitest run packages/db/test/segments_golden.test.ts
