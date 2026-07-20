@@ -498,6 +498,53 @@ export async function insertMemberSession(
   return row;
 }
 
+// -- member booking scope (unit 8.3a) ----------------------------------------
+
+/** How many LIVE holds this person currently owns (frozen, or unexpired). The
+ * member hold-DoS cap (§3.5) counts these; a person has at most a handful, so
+ * fetch + filter in JS rather than a count RPC. */
+export async function countLivePersonHolds(
+  client: KeloSupabaseClient,
+  scope: MemberScope,
+  nowIso: string,
+): Promise<number> {
+  const data = await run(
+    from(client, "booking_holds")
+      .select("expires_at, frozen")
+      .eq("tenant_id", scope.tenantId)
+      .eq("person_id", scope.personId),
+    "countLivePersonHolds",
+  );
+  const rows = parseInternal(
+    z.array(z.object({ expires_at: z.string(), frozen: z.boolean() })),
+    data ?? [],
+    "countLivePersonHolds",
+  );
+  return rows.filter((row) => row.frozen || row.expires_at > nowIso).length;
+}
+
+/** The person a booking belongs to, or null if it does not exist in this
+ * tenant. The member cancel route uses this to enforce OWNERSHIP: cancel_booking
+ * has operator semantics (any booking in-tenant) and does NOT check the actor,
+ * so without this a member could cancel — and refund/forfeit — ANOTHER member's
+ * booking by id. person_id is immutable, so the check is race-free. */
+export async function fetchBookingPersonId(
+  client: KeloSupabaseClient,
+  scope: MemberScope,
+  bookingId: string,
+): Promise<string | null> {
+  const data = await run(
+    from(client, "bookings")
+      .select("person_id")
+      .eq("tenant_id", scope.tenantId)
+      .eq("id", bookingId)
+      .limit(1),
+    "fetchBookingPersonId",
+  );
+  const rows = parseInternal(z.array(z.object({ person_id: uuid })), data ?? [], "fetchBookingPersonId");
+  return rows[0]?.person_id ?? null;
+}
+
 // -- session lifecycle (unit 8.2c) -------------------------------------------
 
 const refreshOutcomeSchema = z.object({

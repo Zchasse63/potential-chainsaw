@@ -129,3 +129,39 @@ export const memberAuthViewSchema = z.object({
   token: z.string().optional(),
 });
 export type MemberAuthView = z.infer<typeof memberAuthViewSchema>;
+
+// -- member booking (unit 8.3a) ----------------------------------------------
+
+/** The channel a member booking rode in on — booked_via provenance ONLY, never
+ * a security boundary (person scope always comes from the session). */
+export const memberBookingPlatform = z.enum(["web", "ios", "android"]).default("web");
+
+/** POST /member/holds — reserve a seat (person from the session). */
+export const memberHoldBody = z.object({
+  session_id: z.string().uuid(),
+  platform: memberBookingPlatform,
+});
+export type MemberHoldBody = z.infer<typeof memberHoldBody>;
+
+/** POST /member/bookings — book a session. A member always debits ONE credit
+ * (comp is operator-only); a member with no credits gets 422 insufficient
+ * credits and is routed to buy/pay (the Pay stage). No use_credit knob. */
+export const memberBookBody = z.object({
+  session_id: z.string().uuid(),
+  hold_id: z.string().uuid().nullish(),
+  platform: memberBookingPlatform,
+});
+export type MemberBookBody = z.infer<typeof memberBookBody>;
+
+/** POST /member/bookings/:id/cancel — 12h refund-vs-forfeit is enforced in the RPC. */
+export const memberCancelBody = z.object({
+  platform: memberBookingPlatform,
+});
+export type MemberCancelBody = z.infer<typeof memberCancelBody>;
+
+/** POST /member/waitlist — join a FULL session's waitlist (FIFO position). */
+export const memberWaitlistBody = z.object({
+  session_id: z.string().uuid(),
+  platform: memberBookingPlatform,
+});
+export type MemberWaitlistBody = z.infer<typeof memberWaitlistBody>;
