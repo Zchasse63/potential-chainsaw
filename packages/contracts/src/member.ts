@@ -183,3 +183,13 @@ export const memberAccountSchema = z.object({
   ),
 });
 export type MemberAccount = z.infer<typeof memberAccountSchema>;
+
+// -- member claim status (unit 8.3c) -----------------------------------------
+
+/** GET /member/claim/status — the ONE endpoint a needs_resolution session can
+ * reach: its own claim status + first name (§3.3). No balances/bookings. */
+export const memberClaimStatusView = z.object({
+  claim_status: z.enum(["active", "needs_resolution", "frozen", "revoked"]),
+  first_name: z.string().nullable(),
+});
+export type MemberClaimStatusView = z.infer<typeof memberClaimStatusView>;

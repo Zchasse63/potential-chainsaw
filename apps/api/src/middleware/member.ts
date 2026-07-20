@@ -44,6 +44,16 @@ export const MEMBER_SESSION_NEUTRAL_MESSAGE = "a valid member session is require
 export interface MemberAuthDeps {
   /** Service-role client factory; tests inject a no-network fake. */
   createMemberClient?: () => KeloSupabaseClient;
+  /**
+   * When true, a session whose claim is NOT active (needs_resolution / frozen)
+   * still resolves — the handler reads the status itself. The ONLY route that
+   * sets this is GET /member/claim/status: a needs_resolution session is 403'd
+   * from every other route, so it needs one endpoint to poll "am I resolved
+   * yet?". A valid-but-unresolved session still exposes NOTHING here beyond its
+   * own claim status + first name (§3.3). Default (undefined) keeps the strict
+   * active-claim gate for every other route.
+   */
+  allowUnresolved?: boolean;
 }
 
 /** The presented credential: cookie first (web), then the Bearer header
@@ -88,10 +98,11 @@ export function resolveMember(deps: MemberAuthDeps = {}): MiddlewareHandler<AppE
 
     const scope = { tenantId: session.tenant_id, personId: session.person_id };
     const claim = await findPersonClaimStatus(scope, client);
-    if (claim === null || claim.status !== "active") {
-      // Absent/needs_resolution/frozen/revoked claim: the same neutral shape
-      // as an unknown session, at 403. Balances and identity stay sealed; the
-      // claim-status endpoint (8.2c) is the only route these sessions reach.
+    if (claim === null || (claim.status !== "active" && deps.allowUnresolved !== true)) {
+      // Absent/needs_resolution/frozen/revoked claim: the same neutral shape as
+      // an unknown session, at 403. Balances and identity stay sealed. The ONE
+      // exception is GET /member/claim/status (allowUnresolved), which lets a
+      // needs_resolution session read its OWN status + first name (§3.3).
       throw new ApiError(403, "unauthorized", MEMBER_SESSION_NEUTRAL_MESSAGE);
     }
 
