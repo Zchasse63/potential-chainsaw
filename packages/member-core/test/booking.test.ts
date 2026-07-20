@@ -113,6 +113,45 @@ describe("joinWaitlist", () => {
   });
 });
 
+describe("http_error carries the structured error.code", () => {
+  // The API's onError serializes `{ error: { code, message, correlation_id } }`.
+  // Callers branch on the CODE (e.g. 409 session_at_capacity vs 409
+  // idempotency_key_conflict), so member-core must surface it, not just status.
+  function errorFetch(status: number, body: unknown): typeof fetch {
+    return (() =>
+      Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status,
+          headers: { "content-type": "application/json" },
+        }),
+      )) as unknown as typeof fetch;
+  }
+
+  it("captures error.code + status from a non-2xx body", async () => {
+    const fetchImpl = errorFetch(409, {
+      error: { code: "session_at_capacity", message: "the session is at capacity", correlation_id: "c" },
+    });
+    const res = await bookSeat({ origin: ORIGIN, sessionId: SESSION, idempotencyKey: "k", fetchImpl });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.kind).toBe("http_error");
+      expect(res.error.status).toBe(409);
+      expect(res.error.code).toBe("session_at_capacity");
+    }
+  });
+
+  it("tolerates a bodyless / non-JSON error (code undefined, status kept)", async () => {
+    const fetchImpl = (() =>
+      Promise.resolve(new Response("gateway timeout", { status: 504 }))) as unknown as typeof fetch;
+    const res = await bookSeat({ origin: ORIGIN, sessionId: SESSION, idempotencyKey: "k", fetchImpl });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.status).toBe(504);
+      expect(res.error.code).toBeUndefined();
+    }
+  });
+});
+
 describe("fetchAccount", () => {
   it("GETs /member/account and returns balance + waiver + bookings", async () => {
     const { fetchImpl, seen } = capturingFetch({

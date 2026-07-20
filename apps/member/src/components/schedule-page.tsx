@@ -46,32 +46,48 @@ function timeLabel(iso: string, timeZone: string): string {
 
 function SessionRow({ session, timeZone }: { session: MemberScheduleItem; timeZone: string }) {
   const full = session.available === 0;
+  // The Choose → Book link (plan-ux §H). A plain anchor (not a router Link) so
+  // this shared presentational row stays router-agnostic and unit-testable
+  // without a RouterProvider; TanStack Start SSRs the /book target on nav. Full
+  // sessions link too — the booking screen offers the honest waitlist there.
+  const href = `/book/${encodeURIComponent(session.session_id)}`;
+  const label = full
+    ? `Join the waitlist for ${session.offering_name}`
+    : `Book ${session.offering_name}`;
   return (
-    <li className="rounded-3 border border-hairline bg-surface-card p-4 shadow-1">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-body font-medium text-ink">{session.offering_name}</p>
-          <p className="mt-0.5 text-body text-ink-secondary">
-            {timeLabel(session.starts_at, timeZone)} – {timeLabel(session.ends_at, timeZone)}
+    <li>
+      <a
+        href={href}
+        aria-label={label}
+        className="block rounded-3 border border-hairline bg-surface-card p-4 shadow-1 transition-colors hover:border-border-strong focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-body font-medium text-ink">{session.offering_name}</p>
+            <p className="mt-0.5 text-body text-ink-secondary">
+              {timeLabel(session.starts_at, timeZone)} – {timeLabel(session.ends_at, timeZone)}
+            </p>
+          </div>
+          <p className="shrink-0 text-body text-ink-muted">
+            {session.credit_cost} {session.credit_cost === 1 ? "credit" : "credits"}
           </p>
         </div>
-        <p className="shrink-0 text-body text-ink-muted">
-          {session.credit_cost} {session.credit_cost === 1 ? "credit" : "credits"}
-        </p>
-      </div>
-      <p className="mt-2 text-body">
-        {full ? (
-          // Honest waitlist (plan-ux §H): a full session says so plainly. The
-          // waitlist JOIN is a booking action — later unit; this is the
-          // read-only affordance only.
-          <span className="font-medium text-ink-secondary">Full — waitlist available</span>
-        ) : (
-          <span className="text-ink-secondary">
-            {session.available} of {session.capacity}{" "}
-            {session.available === 1 ? "spot" : "spots"} left
+        <p className="mt-2 flex items-center justify-between gap-3 text-body">
+          {full ? (
+            // Honest waitlist (plan-ux §H): a full session says so plainly and
+            // the tap goes to the waitlist-join on the booking screen.
+            <span className="font-medium text-ink-secondary">Full — waitlist available</span>
+          ) : (
+            <span className="text-ink-secondary">
+              {session.available} of {session.capacity}{" "}
+              {session.available === 1 ? "spot" : "spots"} left
+            </span>
+          )}
+          <span aria-hidden="true" className="shrink-0 font-medium text-brand-600">
+            {full ? "Join waitlist →" : "Book →"}
           </span>
-        )}
-      </p>
+        </p>
+      </a>
     </li>
   );
 }

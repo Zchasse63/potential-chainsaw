@@ -63,8 +63,15 @@ describe("SchedulePage (public, read-only)", () => {
     // available === 0 → the waitlist affordance, never a fake "book" button.
     expect(screen.getByText("Full — waitlist available")).toBeTruthy();
     expect(screen.getAllByText("1 credit")).toHaveLength(2);
-    // No booking actions exist in this unit (W8-3 lands the flow).
-    expect(screen.queryByRole("button", { name: /book/i })).toBeNull();
+
+    // W8-3: each session row is the Choose → Book link (open → "Book",
+    // full → "Join the waitlist"), both pointing at /book/<session_id>.
+    const openLink = screen.getByRole("link", { name: `Book ${OPEN_SESSION.offering_name}` });
+    expect(openLink.getAttribute("href")).toBe(`/book/${OPEN_SESSION.session_id}`);
+    const fullLink = screen.getByRole("link", {
+      name: `Join the waitlist for ${FULL_SESSION.offering_name}`,
+    });
+    expect(fullLink.getAttribute("href")).toBe(`/book/${FULL_SESSION.session_id}`);
   });
 
   it("empty: explains the emptiness is real (the studio's live book)", () => {
