@@ -2476,13 +2476,20 @@ begin
   perform app_test.assert(raised, '(36) authenticated EXECUTE on consume_member_otp was not refused');
 
   -- --- As anon: nothing member-identity is readable at all. -----------------
+  -- become() is SUPERUSER-only; we are still 'authenticated' from the block
+  -- above, so drop back to superuser before re-impersonating (the same reset
+  -- every other block does between become() calls).
+  reset role;
   perform app_test.become(null, 'anon');
+  -- anon holds NO table privilege on the identity tables at all — a bare
+  -- SELECT raises `permission denied` before RLS is even consulted, so assert
+  -- the grant is absent (stronger than an RLS-filtered empty result).
   perform app_test.assert(
-    not exists (select 1 from public.person_claims),
-    '(36) anon can read person_claims');
+    not has_table_privilege('anon', 'public.person_claims', 'select'),
+    '(36) anon holds SELECT on person_claims');
   perform app_test.assert(
-    not exists (select 1 from public.claim_codes),
-    '(36) anon can read claim_codes');
+    not has_table_privilege('anon', 'public.claim_codes', 'select'),
+    '(36) anon holds SELECT on claim_codes');
 
   reset role;
 

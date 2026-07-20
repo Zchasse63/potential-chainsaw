@@ -407,7 +407,16 @@ grant select, insert on public.member_verification_events to service_role;
 revoke update, delete on public.member_verification_events from anon, authenticated, service_role;
 
 revoke all on function app.consume_member_otp(uuid, text, text, text, text) from public;
-revoke all on function public.consume_member_otp(uuid, text, text, text, text) from public;
+-- Supabase's default privileges auto-GRANT execute on every new PUBLIC-schema
+-- function to anon + authenticated (an explicit role grant, NOT via PUBLIC), so
+-- `revoke ... from public` alone leaves the wrapper member-callable. This RPC
+-- is the ONE OTP verdict path and is service-role-only (the in-body 42501 guard
+-- is the real boundary; this closes the grant-level hole too — attack block 36).
+-- The wrapper still exists so the API service client reaches it via PostgREST
+-- .rpc() (public schema only); app.consume_member_otp lives outside public and
+-- never got the auto-grant.
+revoke all on function public.consume_member_otp(uuid, text, text, text, text)
+  from public, anon, authenticated;
 grant execute on function app.consume_member_otp(uuid, text, text, text, text)
   to service_role;
 grant execute on function public.consume_member_otp(uuid, text, text, text, text)
