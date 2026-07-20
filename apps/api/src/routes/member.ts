@@ -17,8 +17,10 @@ import {
   countRecentOtpChallenges,
   createNativePerson,
   enqueueMemberMessage,
+  fetchMemberMe,
   insertMemberOtpAudit,
   isContactSuppressed,
+  revokeMemberSession,
   fetchTenantName,
   findClaimsByContact,
   findPeopleByContact,
@@ -34,8 +36,9 @@ import {
   MEMBER_SESSION_ROLLING_MS,
   MEMBER_SESSION_ROLLING_SECONDS,
   MEMBER_TOKEN_PREFIX,
+  resolveMember,
 } from "../middleware/member.js";
-import type { AppEnv } from "../types.js";
+import { memberOf, type AppEnv } from "../types.js";
 import { parseBody, parseQuery } from "../validate.js";
 
 interface QueryError {
@@ -438,6 +441,62 @@ export function registerMemberRoutes(app: Hono<AppEnv>, deps: MemberDeps = {}): 
     });
     return c.json(
       c.var.ok(view, { source: "native", definitionVersion: AUTH_DEFINITION_VERSION }),
+      200,
+    );
+  });
+
+  // -- session-scoped routes (unit 8.2c) -------------------------------------
+  // resolveMember is the SOLE source of identity; it 403s a needs_resolution /
+  // absent claim, so only an ACTIVE session reaches these. Identity comes from
+  // memberOf(c) — never from the request body.
+  const memberAuth = resolveMember({ createMemberClient: deps.createMemberClient });
+
+  /** GET /member/me — the signed-in member's first name + session window (no
+   * balances/bookings; those are the account unit). */
+  app.get("/member/me", memberAuth, async (c) => {
+    const { memberTenantId, memberPersonId, memberSessionId } = memberOf(c);
+    const me = await fetchMemberMe(
+      { tenantId: memberTenantId, personId: memberPersonId },
+      client(),
+      memberSessionId,
+    );
+    if (me === null) throw new ApiError(404, "not_found", "member not found");
+    const view = memberAuthViewSchema.parse({
+      member: { first_name: me.first_name, claim_status: "active" },
+      session: { expires_at: me.expires_at, absolute_expires_at: me.absolute_expires_at },
+    });
+    return c.json(
+      c.var.ok(view, { source: "native", definitionVersion: AUTH_DEFINITION_VERSION }),
+      200,
+    );
+  });
+
+  /** POST /member/auth/logout — revoke THIS session (scoped so a token can only
+   * revoke its own) and clear the host-only web cookie. Idempotent. */
+  app.post("/member/auth/logout", memberAuth, async (c) => {
+    const { memberTenantId, memberPersonId, memberSessionId } = memberOf(c);
+    await revokeMemberSession(
+      { tenantId: memberTenantId, personId: memberPersonId },
+      client(),
+      memberSessionId,
+      new Date().toISOString(),
+    );
+    await appendMemberVerificationEvent(client(), memberTenantId, {
+      kind: "session_revoked",
+      contactHash: null,
+      ipHash: null,
+      personId: memberPersonId,
+    });
+    // Clear the cookie (host-only, matching the set attributes; maxAge 0).
+    setCookie(c, MEMBER_COOKIE, "", {
+      httpOnly: true,
+      secure: true,
+      sameSite: "Lax",
+      path: "/",
+      maxAge: 0,
+    });
+    return c.json(
+      c.var.ok({ revoked: true }, { source: "native", definitionVersion: AUTH_DEFINITION_VERSION }),
       200,
     );
   });
