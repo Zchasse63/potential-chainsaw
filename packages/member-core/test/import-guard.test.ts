@@ -19,12 +19,15 @@ const sourceFiles = readdirSync(srcDir)
   .filter((name) => name.endsWith(".ts"))
   .map((name) => ({ name, code: readFileSync(new URL(name, srcDir), "utf8") }));
 
-// Every static/dynamic import specifier in a file.
+// Every import specifier in a file: `import/export … from "x"`, dynamic
+// `import("x")`, AND a bare side-effect `import "x"` (which has no `from` — a
+// naive from-only regex would miss `import "@supabase/foo"` for its side
+// effects; that is exactly the kind of leak this guard must catch).
 const IMPORT_SPECIFIER =
-  /(?:import|export)[^"']*?from\s*["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']/g;
+  /(?:import|export)[^"']*?from\s*["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']|import\s+["']([^"']+)["']/g;
 
 function specifiersOf(code: string): string[] {
-  return [...code.matchAll(IMPORT_SPECIFIER)].map((m) => (m[1] ?? m[2]) as string);
+  return [...code.matchAll(IMPORT_SPECIFIER)].map((m) => (m[1] ?? m[2] ?? m[3]) as string);
 }
 
 describe("packages/member-core stays pure TS with zero Supabase material", () => {

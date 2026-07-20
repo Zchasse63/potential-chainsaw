@@ -20,6 +20,14 @@
   command = "pnpm --filter @kelo/member... build"
   publish = "dist/client"
 
+[build.environment]
+  # PIN the SSR runtime. The Start SSR handler renders React on the server;
+  # leaving this unset lets Netlify pick a default that has drifted across
+  # Node majors (18/20 have no global `navigator`; ≥21 does). The shared
+  # DataBoundary is now SSR-safe regardless, but pinning keeps the server
+  # render deterministic and matches the workspace's Node 20 CI/toolchain.
+  NODE_VERSION = "20"
+
 # /api/* → the one Hono API on the PRIMARY site. Status 200 = rewrite: the
 # function sees the original /api/v1/... path, and the host-only member cookie
 # (no Domain attribute) survives the proxy untouched (plan §3.2/§5).

@@ -48,10 +48,30 @@ export interface DataBoundaryProps<T> {
   children: (data: T, meta: EnvelopeMeta) => ReactNode;
 }
 
-/** Connectivity flag — independent of the query's primary state. */
+/** Connectivity flag — independent of the query's primary state.
+ *
+ * SSR-safe: on the server there is no `navigator`/`window` (Node 20 has no
+ * global `navigator` at all — reading it throws; Node ≥21 exposes it but
+ * `navigator.onLine` is `undefined`). A server render is definitionally
+ * "online" — it just fetched the data — so it must initialise to `true` and
+ * never touch `window`. This component is shared with SSR consumers
+ * (apps/member is the first): a naive `navigator.onLine` initializer either
+ * 500s the whole SSR handler or paints a false "you're offline" banner into
+ * public HTML, then mismatches on hydration. The client corrects the flag on
+ * the first `online`/`offline` event after mount.
+ *
+ * The `typeof` checks are evaluated at CALL time (not captured in a
+ * module-level const): the DOM globals must be probed when the hook runs, so
+ * the guard holds no matter when the module was loaded relative to the SSR
+ * runtime. */
+function browserOnline(): boolean {
+  return typeof navigator === "undefined" ? true : navigator.onLine;
+}
+
 function useOnlineStatus(): boolean {
-  const [online, setOnline] = useState(() => navigator.onLine);
+  const [online, setOnline] = useState(browserOnline);
   useEffect(() => {
+    if (typeof window === "undefined") return;
     const goOnline = () => setOnline(true);
     const goOffline = () => setOnline(false);
     window.addEventListener("online", goOnline);
