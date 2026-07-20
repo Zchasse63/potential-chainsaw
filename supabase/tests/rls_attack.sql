@@ -2810,6 +2810,18 @@ begin
     not exists (select 1 from public.member_sessions where token_hash = 'hash-3'),
     '(38) reuse-detection still minted a new session');
 
+  -- A plain LOGGED-OUT token (revoked, NO child) must return 'revoked' — the
+  -- has_child gate must NOT false-burn an ordinary logout as a reuse attack.
+  insert into public.member_sessions
+    (tenant_id, person_id, token_hash, expires_at, absolute_expires_at, platform, revoked_at)
+    values (v_a, v_person, 'hash-loggedout', now() + interval '90 days', v_abs, 'web', now());
+  select r.outcome into v_outcome from app.refresh_member_session('hash-loggedout', 'hash-4') r;
+  perform app_test.assert(v_outcome = 'revoked',
+    '(38) a plain logged-out token was mis-flagged (false family burn on logout)');
+  perform app_test.assert(
+    not exists (select 1 from public.member_sessions where token_hash = 'hash-4'),
+    '(38) a logged-out refresh still minted a new session');
+
   reset role;
   perform set_config('request.jwt.claims', '{}', true);
 end
