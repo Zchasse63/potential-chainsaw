@@ -193,3 +193,27 @@ export const memberClaimStatusView = z.object({
   first_name: z.string().nullable(),
 });
 export type MemberClaimStatusView = z.infer<typeof memberClaimStatusView>;
+
+// -- member booking responses (units 8.3a/8.3b — member-core validates these) --
+
+export const memberHoldResponse = z.object({
+  hold: z.object({
+    id: z.string().uuid(),
+    expires_at: z.string().nullable(),
+    frozen: z.boolean(),
+  }),
+});
+export const memberBookResponse = z.object({
+  booking: z.object({ booking_id: z.string().uuid(), replayed: z.boolean().optional() }),
+});
+export const memberCancelResponse = z.object({
+  cancellation: z.object({
+    booking_id: z.string().uuid(),
+    status: z.string(),
+    branch: z.enum(["refund", "forfeit"]).nullable(),
+    refunded: z.boolean(),
+  }),
+});
+export const memberWaitlistResponse = z.object({
+  waitlist: z.object({ position: z.number().int().positive() }),
+});
