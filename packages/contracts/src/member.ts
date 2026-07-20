@@ -165,3 +165,21 @@ export const memberWaitlistBody = z.object({
   platform: memberBookingPlatform,
 });
 export type MemberWaitlistBody = z.infer<typeof memberWaitlistBody>;
+
+// -- member account (unit 8.3b) ----------------------------------------------
+
+/** GET /member/account — the signed-in member's live credit balance, waiver
+ * status, and active bookings. Session start times are resolved client-side
+ * from /member/schedule (no other attendee's session data is exposed here). */
+export const memberAccountSchema = z.object({
+  credit_balance: z.number().int(),
+  waiver: z.object({ needs_signature: z.boolean() }),
+  bookings: z.array(
+    z.object({
+      booking_id: z.string().uuid(),
+      session_id: z.string().uuid(),
+      status: z.string(),
+    }),
+  ),
+});
+export type MemberAccount = z.infer<typeof memberAccountSchema>;

@@ -7,6 +7,7 @@ import {
   memberAuthStartBody,
   memberAuthStartResponse,
   memberAuthVerifyBody,
+  memberAccountSchema,
   memberAuthViewSchema,
   memberBookBody,
   memberCancelBody,
@@ -25,6 +26,7 @@ import {
   enqueueMemberMessage,
   countLivePersonHolds,
   fetchBookingPersonId,
+  fetchMemberAccount,
   fetchMemberMe,
   insertMemberOtpAudit,
   isContactSuppressed,
@@ -527,6 +529,22 @@ export function registerMemberRoutes(app: Hono<AppEnv>, deps: MemberDeps = {}): 
     });
     return c.json(
       c.var.ok(view, { source: "native", definitionVersion: AUTH_DEFINITION_VERSION }),
+      200,
+    );
+  });
+
+  /** GET /member/account — the signed-in member's live credit balance, waiver
+   * status, and active bookings (§3.5). Balance sums the append-only ledger in
+   * real time (the matview lags a fresh debit); person from the session only. */
+  app.get("/member/account", memberAuth, async (c) => {
+    const { memberTenantId, memberPersonId } = memberOf(c);
+    const account = await fetchMemberAccount(
+      { tenantId: memberTenantId, personId: memberPersonId },
+      client(),
+    );
+    const view = memberAccountSchema.parse(account);
+    return c.json(
+      c.var.ok(view, { source: "native", definitionVersion: "member-account:v1" }),
       200,
     );
   });
