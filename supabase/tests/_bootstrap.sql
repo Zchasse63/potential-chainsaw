@@ -43,6 +43,14 @@ create table if not exists auth.users (
 
 -- Minimal stand-ins for Supabase's JWT-claim readers. The attack suite sets
 -- request.jwt.claims via set_config() to impersonate users.
+create or replace function auth.jwt()
+returns jsonb
+language sql
+stable
+as $$
+  select coalesce(current_setting('request.jwt.claims', true)::jsonb, '{}'::jsonb);
+$$;
+
 create or replace function auth.uid()
 returns uuid
 language sql
