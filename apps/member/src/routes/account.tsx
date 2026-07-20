@@ -1,6 +1,6 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { createMemberApiClient, fetchAccount } from "@kelo/member-core";
+import { createMemberApiClient, fetchAccount, logoutMember } from "@kelo/member-core";
 import { EmptyState } from "@kelo/ui/react";
 import { AccountScreen } from "../components/account-screen.jsx";
 import { toAccountView, type SessionMeta } from "../lib/account-view.js";
@@ -95,6 +95,11 @@ function AccountRoute() {
         )
       }
       onRequireSignIn={() => void router.navigate({ to: "/signin" })}
+      onSignOut={() => {
+        // Best-effort revoke (the API also clears the cookie), then home. We
+        // navigate regardless — logout is idempotent and the cookie is gone.
+        void logoutMember({ origin: "" }).finally(() => void router.navigate({ to: "/" }));
+      }}
     />
   );
 }

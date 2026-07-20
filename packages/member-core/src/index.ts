@@ -25,6 +25,7 @@ export {
   cancelBooking,
   joinWaitlist,
   fetchAccount,
+  logoutMember,
 } from "./booking.js";
 export type { Hold, Booking, Cancellation, MemberResult } from "./booking.js";
 export { MemberApiError } from "./errors.js";

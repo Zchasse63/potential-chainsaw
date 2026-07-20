@@ -12,6 +12,8 @@ import type { AccountView } from "../lib/account-view.js";
 export interface AccountScreenProps {
   load: () => Promise<AccountView>;
   onRequireSignIn: () => void;
+  /** Revoke the session (the route calls member-core logout, then navigates). */
+  onSignOut: () => void;
 }
 
 type Phase =
@@ -19,7 +21,7 @@ type Phase =
   | { kind: "error" }
   | { kind: "ready"; view: Extract<AccountView, { ok: true }> };
 
-export function AccountScreen({ load, onRequireSignIn }: AccountScreenProps) {
+export function AccountScreen({ load, onRequireSignIn, onSignOut }: AccountScreenProps) {
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -79,7 +81,20 @@ export function AccountScreen({ load, onRequireSignIn }: AccountScreenProps) {
         </div>
       )}
 
-      {phase.kind === "ready" && <AccountBody view={phase.view} />}
+      {phase.kind === "ready" && (
+        <>
+          <AccountBody view={phase.view} />
+          {/* Shared-device sign-out (§3H parking-lot phone): revoke the session
+              so the next person can't land on this member's account. */}
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="mt-8 w-full rounded-3 border border-border-strong px-4 py-3 text-body font-medium text-ink"
+          >
+            Sign out
+          </button>
+        </>
+      )}
     </main>
   );
 }

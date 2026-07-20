@@ -3,6 +3,7 @@ import {
   memberBookResponse,
   memberCancelResponse,
   memberHoldResponse,
+  memberLogoutResponse,
   memberWaitlistResponse,
   type EnvelopeMeta,
   type MemberAccount,
@@ -168,6 +169,26 @@ export async function joinWaitlist(
     clientFetch,
   );
   return validated(out, memberWaitlistResponse, (d) => d.waitlist, "waitlist");
+}
+
+/** POST /member/auth/logout — revoke THIS session (the API also clears the web
+ * cookie). Idempotent; not a money mutation, so no idempotency key. */
+export async function logoutMember(
+  params: SessionCall,
+  clientFetch?: FetchImpl,
+): Promise<MemberResult<{ revoked: boolean }>> {
+  const out = await memberRequest(
+    {
+      origin: params.origin,
+      path: "/api/v1/member/auth/logout",
+      method: "POST",
+      token: params.token,
+      fetchImpl: params.fetchImpl,
+      label: "logout",
+    },
+    clientFetch,
+  );
+  return validated(out, memberLogoutResponse, (d) => d, "logout");
 }
 
 /** GET /member/account — live credit balance, waiver status, active bookings. */
