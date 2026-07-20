@@ -18,5 +18,14 @@ export type {
   VerifyAuthParams,
   VerifyAuthResult,
 } from "./auth.js";
+// Session-scoped booking client (units 8.3a/8.3b) — shared web + mobile.
+export {
+  holdSeat,
+  bookSeat,
+  cancelBooking,
+  joinWaitlist,
+  fetchAccount,
+} from "./booking.js";
+export type { Hold, Booking, Cancellation, MemberResult } from "./booking.js";
 export { MemberApiError } from "./errors.js";
 export type { MemberApiErrorKind } from "./errors.js";
