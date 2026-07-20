@@ -221,3 +221,36 @@ export const memberWaitlistResponse = z.object({
 /** POST /member/auth/logout — revoke THIS session; the API also clears the
  * host-only cookie. Idempotent. */
 export const memberLogoutResponse = z.object({ revoked: z.boolean() });
+
+// -- member waiver (self-serve in-flow signing, unit 8.3i) -------------------
+
+/** GET /member/waiver — the active waiver's text for THIS member + whether they
+ * still need to sign it. `version` is null when the studio has no active waiver
+ * published (in which case needs_signature is false — nothing to sign). */
+export const memberWaiverView = z.object({
+  needs_signature: z.boolean(),
+  version: z
+    .object({
+      id: z.string().uuid(),
+      version: z.number().int().positive(),
+      title: z.string().nullable(),
+      body: z.string(),
+    })
+    .nullable(),
+});
+export type MemberWaiverView = z.infer<typeof memberWaiverView>;
+
+/** POST /member/waiver/sign — typed name + explicit acknowledgement. The active
+ * version is resolved SERVER-SIDE (no version id in the body), so a stale/forged
+ * version is structurally impossible. */
+export const memberWaiverSignBody = z.object({
+  typed_name: z.string().trim().min(1).max(200),
+  acknowledged: z.literal(true),
+});
+export type MemberWaiverSignBody = z.infer<typeof memberWaiverSignBody>;
+
+export const memberWaiverSignResponse = z.object({
+  signature_id: z.string().uuid(),
+  waiver_version_id: z.string().uuid(),
+});
+export type MemberWaiverSignResponse = z.infer<typeof memberWaiverSignResponse>;

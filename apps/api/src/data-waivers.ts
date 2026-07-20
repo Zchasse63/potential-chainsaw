@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { KeloSupabaseClient } from "@kelo/db";
+import { ApiError } from "./errors.js";
 
 /**
  * Phase 4.3 — waiver engine data layer. The write path goes through the
@@ -11,7 +12,7 @@ import type { KeloSupabaseClient } from "@kelo/db";
 
 interface QueryResult {
   data: unknown;
-  error: { message: string } | null;
+  error: { message: string; code?: string } | null;
 }
 
 interface TableBuilder extends PromiseLike<QueryResult> {
@@ -129,6 +130,75 @@ export async function personWaiverStatus(
   const data = await run(rpc(client, "current_waiver_status", params), "personWaiverStatus");
   const rows = parseInternal(z.array(waiverStatusSchema), data ?? [], "personWaiverStatus");
   return rows[0] ?? null;
+}
+
+/** The tenant's ACTIVE waiver version (the one a member must sign), or null if
+ * the studio has published none. Unit 8.3i. */
+export async function fetchActiveWaiverVersion(
+  client: KeloSupabaseClient,
+  tenantId: string,
+): Promise<WaiverVersionRow | null> {
+  const data = await run(
+    from(client, "waiver_versions")
+      .select("id, version, title, body, active, effective_from, created_at")
+      .eq("tenant_id", tenantId)
+      .eq("active", true)
+      .limit(1),
+    "fetchActiveWaiverVersion",
+  );
+  const rows = parseInternal(z.array(waiverVersionSchema), data ?? [], "fetchActiveWaiverVersion");
+  return rows[0] ?? null;
+}
+
+/** Maps the member_portal RPC's SQLSTATEs onto structured errors (mirrors
+ * data-bookings.ts's mapRpcError). Unlike the desk path, members WILL hit the
+ * "active version changed between read and sign" race routinely, so it gets a
+ * distinguishable 409 the client reloads on — never a bare 500. */
+function mapMemberWaiverRpcError(error: { message: string; code?: string }): ApiError {
+  const message = error.message ?? "";
+  switch (error.code) {
+    case "42501":
+      return new ApiError(403, "waiver_sign_forbidden", "the server refused this waiver signature");
+    case "22023":
+      if (message.includes("active waiver version")) {
+        return new ApiError(409, "waiver_version_changed", "the waiver was updated — reload and try again");
+      }
+      return new ApiError(422, "waiver_sign_invalid", message);
+    case "P0002":
+      return new ApiError(404, "waiver_version_not_found", "the waiver version is no longer available");
+    default:
+      throw new Error(`recordMemberWaiverSignature RPC failed: ${message}`);
+  }
+}
+
+/** Records a member self-serve (source 'member_portal') signature via the
+ * definer RPC. person/actor come ONLY from the session at the route; the RPC's
+ * in-body service-role gate is the forge defense (attack block 39). Unit 8.3i. */
+export async function recordMemberWaiverSignature(
+  client: KeloSupabaseClient,
+  params: {
+    p_tenant: string;
+    p_person: string;
+    p_waiver_version: string;
+    p_typed_name: string;
+    p_ip_hash: string | null;
+    p_user_agent: string | null;
+  },
+): Promise<string> {
+  const { data, error } = await rpc(client, "record_waiver_signature", {
+    p_tenant: params.p_tenant,
+    p_person: params.p_person,
+    p_waiver_version: params.p_waiver_version,
+    p_typed_name: params.p_typed_name,
+    p_acknowledged: true,
+    p_source: "member_portal",
+    p_ip_hash: params.p_ip_hash,
+    p_user_agent: params.p_user_agent,
+    p_link_token_hash: null,
+    p_actor: null,
+  });
+  if (error !== null) throw mapMemberWaiverRpcError(error);
+  return parseInternal(z.string().uuid(), data, "recordMemberWaiverSignature");
 }
 
 /** Records the append-only signature via the definer RPC. source 'desk' is the

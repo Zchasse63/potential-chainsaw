@@ -1,10 +1,18 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { bookSeat, createMemberApiClient, fetchAccount, joinWaitlist } from "@kelo/member-core";
+import {
+  bookSeat,
+  createMemberApiClient,
+  fetchAccount,
+  fetchWaiver,
+  joinWaitlist,
+  signWaiver,
+} from "@kelo/member-core";
 import type { MemberScheduleItem } from "@kelo/contracts";
 import { EmptyState } from "@kelo/ui/react";
 import { BookingPanel } from "../components/booking-panel.jsx";
 import { toAccountLoad, toBookOutcome, toWaitlistOutcome } from "../lib/booking-outcome.js";
+import { toSignWaiverOutcome, toWaiverLoad } from "../lib/waiver-outcome.js";
 
 /**
  * `/book/$sessionId` — the Book → Confirmed stage (plan-member-app §3H).
@@ -96,6 +104,8 @@ function BookRoute() {
         }
         onRequireSignIn={() => void router.navigate({ to: "/signin" })}
         makeIdempotencyKey={() => crypto.randomUUID()}
+        loadWaiver={() => fetchWaiver({ origin: "" }).then(toWaiverLoad)}
+        onSignWaiver={(typedName) => signWaiver({ origin: "", typedName }).then(toSignWaiverOutcome)}
       />
     </main>
   );

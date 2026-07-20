@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { WaiverStep, type SignWaiverOutcome, type WaiverLoad } from "./waiver-step.jsx";
 
 /**
  * The Book → Confirmed core (plan-member-app §3H) for a signed-in member. It
@@ -57,6 +58,9 @@ export interface BookingPanelProps {
   onRequireSignIn: () => void;
   /** Per-intent idempotency key (route injects crypto.randomUUID). */
   makeIdempotencyKey: () => string;
+  /** Waiver stage (unit 8.3i): load the active waiver text + sign in-flow. */
+  loadWaiver: () => Promise<WaiverLoad>;
+  onSignWaiver: (typedName: string) => Promise<SignWaiverOutcome>;
 }
 
 type Phase =
@@ -64,7 +68,7 @@ type Phase =
   | { kind: "account_error" }
   | { kind: "ready" }
   | { kind: "already_booked" }
-  | { kind: "blocked_waiver" }
+  | { kind: "waiver" }
   | { kind: "out_of_credits" }
   | { kind: "booking" }
   | { kind: "confirmed" }
@@ -104,7 +108,7 @@ export function BookingPanel(props: BookingPanelProps) {
       if (acct.bookedSessionIds.includes(session.session_id)) {
         setPhase({ kind: "already_booked" });
       } else if (acct.waiverNeedsSignature) {
-        setPhase({ kind: "blocked_waiver" });
+        setPhase({ kind: "waiver" });
       } else if (session.available <= 0) {
         setPhase({ kind: "offer_waitlist", reason: "full" });
       } else if (acct.creditBalance < session.credit_cost) {
@@ -142,7 +146,7 @@ export function BookingPanel(props: BookingPanelProps) {
         setPhase({ kind: "out_of_credits" });
         break;
       case "waiver":
-        setPhase({ kind: "blocked_waiver" });
+        setPhase({ kind: "waiver" });
         break;
       case "unavailable":
         setPhase({ kind: "unavailable" });
@@ -205,13 +209,15 @@ export function BookingPanel(props: BookingPanelProps) {
         </Panel>
       )}
 
-      {phase.kind === "blocked_waiver" && (
-        <Panel tone="warn" role="status">
-          <p className="text-body text-ink">
-            You need a signed waiver before you can book. The studio will send you the waiver, or you can
-            sign it at the front desk on arrival.
-          </p>
-        </Panel>
+      {phase.kind === "waiver" && (
+        <div className="flex flex-col gap-3">
+          <p className="text-body text-ink-muted">One thing first — please sign the studio's waiver.</p>
+          <WaiverStep
+            loadWaiver={props.loadWaiver}
+            onSign={props.onSignWaiver}
+            onSigned={retryAccountLoad}
+          />
+        </div>
       )}
 
       {phase.kind === "out_of_credits" && (

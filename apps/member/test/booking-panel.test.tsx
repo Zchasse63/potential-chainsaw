@@ -42,6 +42,10 @@ function renderPanel(overrides: Partial<BookingPanelProps> = {}) {
     onJoinWaitlist: vi.fn<(k: string) => Promise<WaitlistOutcome>>().mockResolvedValue({ ok: true, position: 2 }),
     onRequireSignIn: vi.fn(),
     makeIdempotencyKey: vi.fn(() => "key-1"),
+    loadWaiver: vi
+      .fn()
+      .mockResolvedValue({ ok: true, needsSignature: true, title: "Waiver", body: "Assume all risk." }),
+    onSignWaiver: vi.fn().mockResolvedValue({ ok: true }),
     ...overrides,
   };
   render(<BookingPanel {...props} />);
@@ -63,14 +67,35 @@ describe("BookingPanel — happy path", () => {
 });
 
 describe("BookingPanel — gates", () => {
-  it("blocks on an unsigned waiver and never offers to book", async () => {
+  it("routes an unsigned-waiver member into the in-flow waiver step (no book button yet)", async () => {
     renderPanel({
       loadAccount: vi
         .fn<() => Promise<AccountLoad>>()
         .mockResolvedValue({ ok: true, creditBalance: 5, waiverNeedsSignature: true, bookedSessionIds: [] }),
     });
-    expect(await screen.findByText(/need a signed waiver/i)).toBeDefined();
+    // The WaiverStep renders the text + sign affordance — not a dead-end.
+    expect(await screen.findByText(/assume all risk/i)).toBeDefined();
+    expect(screen.getByRole("button", { name: /sign & continue/i })).toBeDefined();
     expect(screen.queryByRole("button", { name: /book with 1 credit/i })).toBeNull();
+  });
+
+  it("after signing the waiver in-flow, re-gates and offers the credit book", async () => {
+    // First gate says waiver needed; after signing, the re-gate says it's done.
+    const loadAccount = vi
+      .fn<() => Promise<AccountLoad>>()
+      .mockResolvedValueOnce({ ok: true, creditBalance: 5, waiverNeedsSignature: true, bookedSessionIds: [] })
+      .mockResolvedValue({ ok: true, creditBalance: 5, waiverNeedsSignature: false, bookedSessionIds: [] });
+    const onSignWaiver = vi.fn().mockResolvedValue({ ok: true });
+    renderPanel({ loadAccount, onSignWaiver });
+
+    const name = await screen.findByLabelText(/type your full name/i);
+    fireEvent.change(name, { target: { value: "Jane Member" } });
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: /sign & continue/i }));
+
+    await waitFor(() => expect(onSignWaiver).toHaveBeenCalledWith("Jane Member"));
+    // Re-gate landed on the bookable state.
+    expect(await screen.findByRole("button", { name: /book with 1 credit/i })).toBeDefined();
   });
 
   it("shows out-of-credits (no book button) when the balance is below cost", async () => {
@@ -150,9 +175,11 @@ describe("BookingPanel — book-time reason branches", () => {
     expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
   });
 
-  it("waiver → the sign-a-waiver block", async () => {
+  it("waiver → the in-flow waiver step", async () => {
     await bookWithReason("waiver");
-    expect(await screen.findByText(/need a signed waiver/i)).toBeDefined();
+    // The book-time waiver reason lands in the same in-flow WaiverStep as the gate.
+    expect(await screen.findByText(/assume all risk/i)).toBeDefined();
+    expect(screen.getByRole("button", { name: /sign & continue/i })).toBeDefined();
   });
 
   it("unavailable → a terminal 'no longer open' message with a way back", async () => {

@@ -2827,6 +2827,116 @@ begin
 end
 $$;
 
+-- ===========================================================================
+-- (39) MEMBER WAIVER SIGNING (migration 0046): app.record_waiver_signature
+--      member_portal branch — service-role-only self-serve capture, active
+--      version only, idempotent. Proves an authenticated STAFF client (even a
+--      tenant OWNER, who passes the desk branch) can NOT forge a member's legal
+--      signature, and a double-submit yields exactly one evidence row.
+-- ===========================================================================
+do $$
+declare
+  v_a uuid; v_person uuid; v_active uuid; v_draft uuid;
+  v_sig1 uuid; v_sig2 uuid;
+  raised boolean;
+begin
+  reset role;
+  select val::uuid into v_a from app_test.ctx where key = 'tenant_a';
+  insert into public.people (tenant_id, first_name, source)
+    values (v_a, 'Waiver A', 'native') returning id into v_person;
+  -- A live relationship makes current_waiver_status.needs_signature genuinely
+  -- TRUE pre-sign (it gates on has-relationship), so the flip-to-false below is
+  -- a real signal of the signature, not a vacuous no-op.
+  insert into public.person_relationships (tenant_id, person_id, relationship_type, rule_version)
+    values (v_a, v_person, 'recurring_member', 1);
+  insert into public.waiver_versions (tenant_id, version, title, body, active)
+    values (v_a, 1, 'Liability', 'You assume all risk of sauna and cold plunge.', true)
+    returning id into v_active;
+  insert into public.waiver_versions (tenant_id, version, title, body, active)
+    values (v_a, 2, 'Draft', 'A newer draft, not yet activated.', false)
+    returning id into v_draft;
+
+  -- The partial-unique idempotency backstop exists independent of the in-body
+  -- pre-check (the race safety net).
+  perform app_test.assert(
+    exists (select 1 from pg_indexes
+            where schemaname = 'public' and indexname = 'waiver_signatures_member_portal_once'),
+    '(39) waiver_signatures_member_portal_once index is missing');
+
+  -- (a) An authenticated tenant OWNER — a role that WOULD pass the desk branch
+  --     — is refused on member_portal. The gate is service-role, not role-based.
+  perform set_config('request.jwt.claims', json_build_object('role', 'authenticated')::text, true);
+  raised := false;
+  begin
+    perform app.record_waiver_signature(
+      v_a, v_person, v_active, 'Imposter', true, 'member_portal', null, null, null, null);
+  exception when insufficient_privilege then raised := true; end;
+  perform app_test.assert(raised,
+    '(39) an authenticated client forged a member_portal waiver signature');
+
+  -- (b) anon → refused too.
+  perform set_config('request.jwt.claims', json_build_object('role', 'anon')::text, true);
+  raised := false;
+  begin
+    perform app.record_waiver_signature(
+      v_a, v_person, v_active, 'Anon', true, 'member_portal', null, null, null, null);
+  exception when insufficient_privilege then raised := true; end;
+  perform app_test.assert(raised, '(39) an anon client signed a member_portal waiver');
+
+  -- Everything below is the legitimate service-role (member API) path.
+  perform set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
+
+  -- (c) A NON-active version is refused (22023) — member capture must use the
+  --     active version (which the API resolves server-side, never the request).
+  raised := false;
+  begin
+    perform app.record_waiver_signature(
+      v_a, v_person, v_draft, 'Member', true, 'member_portal', null, null, null, null);
+  exception when invalid_parameter_value then raised := true; end;
+  perform app_test.assert(raised, '(39) member_portal signed a NON-active waiver version');
+
+  -- (d) A foreign / nonexistent person → P0002.
+  raised := false;
+  begin
+    perform app.record_waiver_signature(
+      v_a, gen_random_uuid(), v_active, 'Ghost', true, 'member_portal', null, null, null, null);
+  exception when no_data_found then raised := true; end;
+  perform app_test.assert(raised, '(39) member_portal signed for a nonexistent person');
+
+  -- Pre-sign: the member genuinely NEEDS to sign (has a relationship + an
+  -- active version + no signature). This makes the post-sign flip meaningful.
+  perform app_test.assert(
+    (select needs_signature from public.current_waiver_status(v_a, v_person)) = true,
+    '(39) needs_signature was not TRUE before the member signed (vacuous test guard)');
+
+  -- (e) Legitimate sign of the ACTIVE version → succeeds; exactly one row.
+  v_sig1 := app.record_waiver_signature(
+    v_a, v_person, v_active, 'Member Name', true, 'member_portal', 'iphash', 'UA/1.0', null, null);
+  perform app_test.assert(v_sig1 is not null, '(39) a legitimate member sign returned no id');
+  perform app_test.assert(
+    (select count(*) from public.waiver_signatures
+      where tenant_id = v_a and person_id = v_person and source = 'member_portal') = 1,
+    '(39) a legitimate member sign did not write exactly one row');
+  -- Post-sign: current_waiver_status now agrees the member is covered (the
+  -- signature FLIPPED needs_signature true → false).
+  perform app_test.assert(
+    (select needs_signature from public.current_waiver_status(v_a, v_person)) = false,
+    '(39) needs_signature stayed true after a member sign');
+
+  -- (f) Idempotent double-submit (retry with different attribution) → SAME row.
+  v_sig2 := app.record_waiver_signature(
+    v_a, v_person, v_active, 'Member Name', true, 'member_portal', 'iphash2', 'UA/2.0', null, null);
+  perform app_test.assert(v_sig2 = v_sig1, '(39) a member double-submit minted a new signature id');
+  perform app_test.assert(
+    (select count(*) from public.waiver_signatures
+      where tenant_id = v_a and person_id = v_person and source = 'member_portal') = 1,
+    '(39) a member double-submit wrote a duplicate evidence row');
+
+  reset role;
+  perform set_config('request.jwt.claims', '{}', true);
+end
+$$;
+
 do $$
 declare
   n int;

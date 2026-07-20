@@ -16,6 +16,9 @@ import {
   memberScheduleQuery,
   memberScheduleResponse,
   memberWaitlistBody,
+  memberWaiverView,
+  memberWaiverSignBody,
+  memberWaiverSignResponse,
   type MemberClaimStatus,
 } from "@kelo/contracts";
 import { createServiceRoleClient, type KeloSupabaseClient } from "@kelo/db";
@@ -45,6 +48,11 @@ import {
 } from "../data-member.js";
 import { bookSession, cancelBooking, holdSession } from "../data-bookings.js";
 import { joinWaitlist } from "../data-booking.js";
+import {
+  fetchActiveWaiverVersion,
+  personWaiverStatus,
+  recordMemberWaiverSignature,
+} from "../data-waivers.js";
 import { ApiError } from "../errors.js";
 import {
   MEMBER_COOKIE,
@@ -550,6 +558,56 @@ export function registerMemberRoutes(app: Hono<AppEnv>, deps: MemberDeps = {}): 
       c.var.ok(view, { source: "native", definitionVersion: "member-account:v1" }),
       200,
     );
+  });
+
+  /** GET /member/waiver — the active waiver's text for THIS member + whether
+   * they still need to sign it (unit 8.3i). version is null when the studio has
+   * no active waiver (needs_signature is then false — nothing to sign). */
+  app.get("/member/waiver", memberAuth, async (c) => {
+    const { memberTenantId, memberPersonId } = memberOf(c);
+    const db = client();
+    const [status, version] = await Promise.all([
+      personWaiverStatus(db, { p_tenant: memberTenantId, p_person: memberPersonId }),
+      fetchActiveWaiverVersion(db, memberTenantId),
+    ]);
+    const view = memberWaiverView.parse({
+      needs_signature: status?.needs_signature ?? false,
+      version:
+        version === null
+          ? null
+          : { id: version.id, version: version.version, title: version.title, body: version.body },
+    });
+    return c.json(c.var.ok(view, { source: "native", definitionVersion: "member-waiver:v1" }), 200);
+  });
+
+  /** POST /member/waiver/sign — self-serve typed-name + acknowledgement capture
+   * (unit 8.3i). The active version is resolved SERVER-SIDE (the request carries
+   * no version id), so a stale/forged version is structurally impossible;
+   * person/actor come only from the session. Not a money/booking mutation → no
+   * Idempotency-Key header (the RPC is idempotent per active version). */
+  app.post("/member/waiver/sign", memberAuth, async (c) => {
+    const body = await parseBody(c, memberWaiverSignBody);
+    const { memberTenantId, memberPersonId } = memberOf(c);
+    const db = client();
+    const version = await fetchActiveWaiverVersion(db, memberTenantId);
+    if (version === null) {
+      throw new ApiError(404, "waiver_version_not_found", "no active waiver is published for this studio");
+    }
+    const signatureId = await recordMemberWaiverSignature(db, {
+      p_tenant: memberTenantId,
+      p_person: memberPersonId,
+      p_waiver_version: version.id,
+      p_typed_name: body.typed_name,
+      p_ip_hash: ipHashOf(c),
+      // Clamp to the RPC's 1000-char attribution bound so an over-long UA can't
+      // turn a legitimate sign into a blocking 22023.
+      p_user_agent: c.req.header("user-agent")?.slice(0, 1000) ?? null,
+    });
+    const view = memberWaiverSignResponse.parse({
+      signature_id: signatureId,
+      waiver_version_id: version.id,
+    });
+    return c.json(c.var.ok(view, { source: "native", definitionVersion: "member-waiver:v1" }), 201);
   });
 
   /** GET /member/claim/status — the ONE route a needs_resolution session can
