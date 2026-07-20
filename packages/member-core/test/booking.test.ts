@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { holdSeat, bookSeat, cancelBooking, joinWaitlist, fetchAccount } from "../src/index.js";
+import {
+  holdSeat,
+  bookSeat,
+  cancelBooking,
+  joinWaitlist,
+  fetchAccount,
+  logoutMember,
+} from "../src/index.js";
 
 /**
  * member-core booking client (units 8.3a/8.3b) — fake fetch ONLY, zero network.
@@ -110,6 +117,25 @@ describe("joinWaitlist", () => {
     const res = await joinWaitlist({ origin: ORIGIN, sessionId: SESSION, idempotencyKey: "w", fetchImpl });
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.value.position).toBe(3);
+  });
+});
+
+describe("logoutMember", () => {
+  it("POSTs /member/auth/logout (no idempotency key) and returns revoked", async () => {
+    const { fetchImpl, seen } = capturingFetch({ revoked: true });
+    const res = await logoutMember({ origin: ORIGIN, fetchImpl });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value.revoked).toBe(true);
+    expect(seen[0]?.url).toBe(`${ORIGIN}/api/v1/member/auth/logout`);
+    expect(seen[0]?.method).toBe("POST");
+    // Not a money mutation — no Idempotency-Key.
+    expect(seen[0]?.headers.get("idempotency-key")).toBeNull();
+  });
+
+  it("mobile: attaches the session token as Authorization: Bearer", async () => {
+    const { fetchImpl, seen } = capturingFetch({ revoked: true });
+    await logoutMember({ origin: ORIGIN, token: "kmb_mobiletoken", fetchImpl });
+    expect(seen[0]?.headers.get("authorization")).toBe("Bearer kmb_mobiletoken");
   });
 });
 

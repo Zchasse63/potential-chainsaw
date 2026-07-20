@@ -23,6 +23,7 @@ function renderScreen(overrides: Partial<AccountScreenProps> = {}) {
       ],
     }),
     onRequireSignIn: vi.fn(),
+    onSignOut: vi.fn(),
     ...overrides,
   };
   render(<AccountScreen {...props} />);
@@ -57,6 +58,14 @@ describe("AccountScreen", () => {
     expect(screen.getByText("Time to be confirmed")).toBeDefined();
     // Singular credit copy (creditBalance === 1).
     expect(screen.getByText(/1 credit ·/)).toBeDefined();
+  });
+
+  it("offers a Sign out action that invokes the injected handler", async () => {
+    const onSignOut = vi.fn();
+    renderScreen({ onSignOut });
+    const btn = await screen.findByRole("button", { name: /sign out/i });
+    fireEvent.click(btn);
+    expect(onSignOut).toHaveBeenCalledTimes(1);
   });
 
   it("shows the signature-needed badge when the waiver is unsigned", async () => {

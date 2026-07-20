@@ -217,3 +217,7 @@ export const memberCancelResponse = z.object({
 export const memberWaitlistResponse = z.object({
   waitlist: z.object({ position: z.number().int().positive() }),
 });
+
+/** POST /member/auth/logout — revoke THIS session; the API also clears the
+ * host-only cookie. Idempotent. */
+export const memberLogoutResponse = z.object({ revoked: z.boolean() });
