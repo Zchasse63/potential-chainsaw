@@ -235,6 +235,9 @@ export function BookingPanel(props: BookingPanelProps) {
           <p className="text-chrome text-ink-muted">
             Need to change plans? You can cancel up to 12 hours before for a refund.
           </p>
+          <a href="/account" className="text-chrome font-medium text-link">
+            View your bookings →
+          </a>
         </Panel>
       )}
 

@@ -70,7 +70,7 @@ function SignInRoute() {
           });
           return { ok: res.ok };
         }}
-        onSignedIn={() => void router.navigate({ to: "/" })}
+        onSignedIn={() => void router.navigate({ to: "/account" })}
       />
     </main>
   );
