@@ -18,6 +18,10 @@ export default tseslint.config(
       "supabase/.temp/**",
       // Glofox scrape intermediates (regenerable source material, git-ignored).
       "docs/glofox/_*",
+      // WS-2 Playwright E2E harness — a separate test runner (its own tsconfig
+      // + @playwright/test globals), not part of the operator/member TS project.
+      "e2e/**",
+      "playwright.config.ts",
     ],
   },
   js.configs.recommended,

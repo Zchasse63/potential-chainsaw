@@ -1,0 +1,14 @@
+{
+  "//": "Standalone — NOT referenced by the root tsconfig, so `tsc -b` (pnpm -w typecheck) never picks up e2e specs. Editor + Playwright type resolution only.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "types": ["@playwright/test", "node"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true
+  },
+  "include": ["**/*.ts", "../playwright.config.ts"]
+}
