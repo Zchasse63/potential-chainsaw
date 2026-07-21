@@ -16,9 +16,15 @@ import { defineConfig, devices } from "@playwright/test";
  */
 
 const API_ORIGIN = process.env.KELO_API_ORIGIN ?? "http://127.0.0.1:8787";
-const MEMBER_ORIGIN = process.env.KELO_MEMBER_ORIGIN ?? "http://127.0.0.1:4174";
+// `localhost` (not 127.0.0.1) so the check works whether the Vite dev server
+// bound IPv4 or IPv6 (it defaults to ::1).
+const MEMBER_ORIGIN = process.env.KELO_MEMBER_ORIGIN ?? "http://localhost:4174";
 // The fixed tenant id seeded by supabase/tests/seed.e2e.sql.
 const E2E_TENANT_ID = process.env.KELO_TENANT_ID ?? "e2e00000-0000-4000-8000-000000000001";
+
+// Set KELO_E2E_NO_WEBSERVER=1 to run against a stack you started yourself
+// (e.g. the API + member app already up against a live or branch project).
+const MANAGE_SERVERS = process.env.KELO_E2E_NO_WEBSERVER !== "1";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -33,7 +39,7 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
-  webServer: [
+  webServer: !MANAGE_SERVERS ? undefined : [
     {
       // Needs a prior `pnpm --filter @kelo/api build` (the e2e workflow does it).
       command: "pnpm --filter @kelo/api dev",
