@@ -27,3 +27,7 @@ docs/glofox/_*
 
 # Workflow agent worktrees + local Claude state
 .claude/
+
+# Playwright run artifacts (may contain PII on failure — never commit)
+test-results/
+playwright-report/
