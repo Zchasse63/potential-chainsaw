@@ -44,7 +44,43 @@ and shows the one row seeded by `supabase/tests/seed.e2e.sql` — offering
 The seed was verified against the **live production schema**: `member_schedule`
 over a `now()..now()+7d` window returns exactly this one session.
 
-## Run it locally
+## Run against the LIVE project (read-only) — no seed, no local Supabase
+
+The public schedule is public marketing data (zero attendee/person data), so the
+read path is safe to E2E against production. This mode needs **no Docker, no
+local Supabase, no seed** — just the API + member app pointed at the live
+project, and `KELO_E2E_NO_WEBSERVER=1` so Playwright reuses the servers you
+started. **Verified green** this way (`e2e/live-schedule.spec.ts`):
+
+```bash
+# 1. API against the live project (reads SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY
+#    from .env; anon key defaults from SUPABASE_PUBLISHABLE_KEY)
+( set -a; . ./.env; set +a
+  export SUPABASE_ANON_KEY="${SUPABASE_ANON_KEY:-$SUPABASE_PUBLISHABLE_KEY}" PORT=8787
+  pnpm --filter @kelo/api build && node apps/api/dist/server.js ) &
+
+# 2. member app pointed at that API + the real tenant
+KELO_API_ORIGIN=http://127.0.0.1:8787 \
+KELO_TENANT_ID=<the studio's tenant id> \
+KELO_TENANT_TIMEZONE=America/New_York \
+  pnpm --filter @kelo/member dev --port 4174 &
+
+# 3. the browser test — reuses the running servers
+KELO_E2E_NO_WEBSERVER=1 KELO_MEMBER_ORIGIN=http://localhost:4174 \
+  pnpm exec playwright test live-schedule
+```
+
+`live-schedule.spec.ts` asserts the chain renders **truthfully** — header +
+EITHER real session rows OR the honest "nothing published yet" empty state, and
+never a provenance-violation refusal or an error page. It is resilient to the
+live book being empty (pre-cutover) or full.
+
+> The **write/auth flows (WS-10)** are NOT safe against prod — they mutate real
+> ledgers/Stripe, send a real OTP, and Playwright would snapshot real member PII
+> into artifacts (public repo). Run those against an isolated **Supabase branch**
+> (or the seeded local stack below), never the live project.
+
+## Run it locally (seeded, isolated)
 
 ```bash
 # 0. one-time: the browser binary
