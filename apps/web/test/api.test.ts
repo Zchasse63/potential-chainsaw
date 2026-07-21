@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { IDEMPOTENCY_KEY_HEADER } from "@kelo/contracts";
-import { patchEnvelope, postEnvelope } from "../src/lib/api.js";
+import { ApiRequestError, fetchEnvelope, patchEnvelope, postEnvelope } from "../src/lib/api.js";
 
 /**
  * The mutation transport contract (W3): postEnvelope/patchEnvelope mint a fresh
@@ -74,5 +74,51 @@ describe("postEnvelope / patchEnvelope idempotency key", () => {
 
     await patchEnvelope("/catalog/x", "tok", { a: 1 }, "patch-key-1");
     expect(keyOf(fetchMock, 0)).toBe("patch-key-1");
+  });
+});
+
+// WS-8d — the error transport contract: every non-2xx must reach the caller as
+// an ApiRequestError carrying the fields the UI shows (status + code + the
+// correlation id an operator quotes to support). Untested until now.
+describe("requestEnvelope error mapping", () => {
+  function respondWith(body: unknown, status: number) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }),
+        ),
+      ),
+    );
+  }
+
+  it("maps a STRUCTURED error body to ApiRequestError with status/code/message/correlation-id", async () => {
+    respondWith(
+      { error: { code: "insufficient_credits", message: "You have no credits.", correlation_id: "corr-err-1" } },
+      422,
+    );
+    const err = (await postEnvelope("/pos/checkout", "tok", { a: 1 }).catch((e: unknown) => e)) as ApiRequestError;
+    expect(err).toBeInstanceOf(ApiRequestError);
+    expect(err.status).toBe(422);
+    expect(err.code).toBe("insufficient_credits");
+    expect(err.message).toBe("You have no credits.");
+    expect(err.correlationId).toBe("corr-err-1");
+  });
+
+  it("falls back to http_error (no correlation id) when the error body is unstructured", async () => {
+    respondWith({ oops: "not our envelope" }, 500);
+    const err = (await fetchEnvelope("/staff", "tok").catch((e: unknown) => e)) as ApiRequestError;
+    expect(err).toBeInstanceOf(ApiRequestError);
+    expect(err.status).toBe(500);
+    expect(err.code).toBe("http_error");
+    expect(err.correlationId).toBeUndefined();
+  });
+
+  it("maps a fetch/network failure to a status-0 network_error (never a silent hang)", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("dns fail"))));
+    const err = (await fetchEnvelope("/staff", "tok").catch((e: unknown) => e)) as ApiRequestError;
+    expect(err).toBeInstanceOf(ApiRequestError);
+    expect(err.status).toBe(0);
+    expect(err.code).toBe("network_error");
   });
 });
