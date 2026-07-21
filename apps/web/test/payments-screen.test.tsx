@@ -16,6 +16,17 @@ const META = {
 function success(data: unknown): BoundaryQuery {
   return { status: "success", data: { data, meta: META }, isRefetching: false, refetch: vi.fn() };
 }
+function errorQuery(): BoundaryQuery {
+  return { status: "error", data: undefined, isRefetching: false, refetch: vi.fn() };
+}
+function pendingQuery(): BoundaryQuery {
+  return { status: "pending", data: undefined, isRefetching: false, refetch: vi.fn() };
+}
+// A success payload WITHOUT the freshness envelope meta — a provenance
+// violation the money surface must refuse to render (invariant #3).
+function metaLessQuery(data: unknown): BoundaryQuery {
+  return { status: "success", data: { data }, isRefetching: false, refetch: vi.fn() };
+}
 
 const STRIPE_PAYMENT = {
   id: "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
@@ -224,5 +235,32 @@ describe("PaymentsScreen", () => {
     expect(stage.textContent?.toLowerCase()).toContain("grace ends");
     const copy = screen.getByRole("button", { name: "Copy payment-update link" }) as HTMLButtonElement;
     expect(copy.disabled).toBe(true);
+  });
+});
+
+// WS-8c — invariant #3 on the MONEY surface. A price/tender must never render
+// unless its query is a provenance-bearing success. Import-review already had
+// this coverage; the payments money screen did not.
+describe("PaymentsScreen — money-surface provenance refusal (WS-8c, invariant #3)", () => {
+  it("renders no amount or tender when the payments query ERRORED (shows the consequence)", () => {
+    renderPayments({ paymentsQuery: errorQuery() });
+    expect(screen.queryByText("$200.00")).toBeNull();
+    expect(screen.queryByTestId("tender-stripe")).toBeNull();
+    expect(screen.getByText(/payments list didn't load; nothing was changed/i)).toBeDefined();
+  });
+
+  it("renders no amount while the payments query is PENDING", () => {
+    renderPayments({ paymentsQuery: pendingQuery() });
+    expect(screen.queryByText("$200.00")).toBeNull();
+    expect(screen.queryByTestId("tender-stripe")).toBeNull();
+  });
+
+  it("REFUSES a meta-less payload — never shows a price without its provenance record", () => {
+    renderPayments({
+      paymentsQuery: metaLessQuery({ payments: [STRIPE_PAYMENT], refund_step_up_cents: 10000 }),
+    });
+    expect(screen.queryByText("$200.00")).toBeNull();
+    expect(screen.queryByTestId("tender-stripe")).toBeNull();
+    expect(screen.getByText(/provenance record is missing/i)).toBeDefined();
   });
 });

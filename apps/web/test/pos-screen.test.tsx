@@ -16,6 +16,17 @@ const META = {
 function success(data: unknown): BoundaryQuery {
   return { status: "success", data: { data, meta: META }, isRefetching: false, refetch: vi.fn() };
 }
+function errorQuery(): BoundaryQuery {
+  return { status: "error", data: undefined, isRefetching: false, refetch: vi.fn() };
+}
+function pendingQuery(): BoundaryQuery {
+  return { status: "pending", data: undefined, isRefetching: false, refetch: vi.fn() };
+}
+// A success payload WITHOUT the freshness envelope meta — the money surface
+// must refuse to price a sale off an unprovenanced catalog (invariant #3).
+function metaLessQuery(data: unknown): BoundaryQuery {
+  return { status: "success", data: { data }, isRefetching: false, refetch: vi.fn() };
+}
 
 const CATALOG = {
   retail_products: [
@@ -209,3 +220,25 @@ describe("PosScreen", () => {
     expect(typeof secondKey).toBe("string");
     expect(secondKey).not.toBe(firstKey);
   });
+
+// WS-8c — invariant #3 on the POS money surface: no catalog item (and thus no
+// sale) may be priced off a query that errored, is still loading, or arrived
+// without its freshness envelope.
+describe("PosScreen — catalog provenance refusal (WS-8c, invariant #3)", () => {
+  it("shows no catalog item when the catalog query ERRORED (states no sale can start)", () => {
+    renderPos({ catalogQuery: errorQuery() });
+    expect(screen.queryByText(/Recovery towel/)).toBeNull();
+    expect(screen.getByText(/catalog didn't load; no sale can be started/i)).toBeDefined();
+  });
+
+  it("shows no catalog item while the catalog query is PENDING", () => {
+    renderPos({ catalogQuery: pendingQuery() });
+    expect(screen.queryByText(/Recovery towel/)).toBeNull();
+  });
+
+  it("REFUSES a meta-less catalog — never prices a sale without provenance", () => {
+    renderPos({ catalogQuery: metaLessQuery(CATALOG) });
+    expect(screen.queryByText(/Recovery towel/)).toBeNull();
+    expect(screen.getByText(/provenance record is missing/i)).toBeDefined();
+  });
+});
