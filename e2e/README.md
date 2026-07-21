@@ -70,10 +70,28 @@ KELO_E2E_NO_WEBSERVER=1 KELO_MEMBER_ORIGIN=http://localhost:4174 \
   pnpm exec playwright test live-schedule
 ```
 
-`live-schedule.spec.ts` asserts the chain renders **truthfully** — header +
-EITHER real session rows OR the honest "nothing published yet" empty state, and
-never a provenance-violation refusal or an error page. It is resilient to the
-live book being empty (pre-cutover) or full.
+Two specs run in this mode (8/8 green, stable on repeat):
+
+- **`live-schedule.spec.ts`** — the chain renders **truthfully**: header + EITHER
+  real session rows OR the honest "nothing published yet" empty state, never a
+  provenance-violation refusal or an error page. Resilient to the live book being
+  empty (pre-cutover) or full.
+- **`live-auth-gate.spec.ts`** — the SIGNED-IN surface's entry points: a
+  signed-out `/account` is bounced to `/signin`, the sign-in screen gates step 1
+  until a contact is entered (the code step unreachable), and an unknown session
+  id shows the honest can't-book state. Every request is a GET ending in a 401 or
+  an empty state — **nothing is booked and no OTP is requested** ("Send me a code"
+  is asserted but never clicked, since submitting writes an otp_challenge row).
+
+> Interacting with the signed-in surface requires `KELO_API_ORIGIN` to be set —
+> that switches on the member app's dev `/api` proxy (apps/member/vite.config.ts).
+> Without it the Netlify dev middleware rewrites `/api` at the unresolvable
+> `PRIMARY-SITE-PLACEHOLDER` host and every interactive call 404s.
+>
+> Specs that interact after hydration must `waitForHydration` first (keyed on
+> TanStack Start deleting `window.$_TSR`) — typing into server-rendered HTML
+> whose React handlers aren't attached leaves controlled state empty, so e.g. a
+> submit button stays disabled forever.
 
 > The **write/auth flows (WS-10)** are NOT safe against prod — they mutate real
 > ledgers/Stripe, send a real OTP, and Playwright would snapshot real member PII
@@ -153,14 +171,36 @@ jobs:
         with: { name: playwright-report, path: playwright-report/, retention-days: 7 }
 ```
 
-## Next: WS-10 flow specs
+## Next: WS-10 mutating flows (blocked on an isolated instance)
 
-This scaffold covers the **public** (unauthenticated) path only. The
-authenticated flows (OTP sign-in, booking, waitlist) need one more seam: the
-member OTP is sha256-at-rest, so an E2E must read the code out of band. Add an
-`apps/api/src/server.e2e.ts` that wires `sendMemberOtp` → a Mailpit SMTP
-inbox, then Playwright reads the code from Mailpit's HTTP API. That is WS-10 —
-built on exactly this harness.
+The public path and the auth **gate** are covered and green. What remains is the
+**mutating** half — OTP verify, book, join waitlist. Those cannot run against the
+live project (real credit ledgers/Stripe, a real OTP to a real person, and
+Playwright would snapshot real member PII into artifacts in a public repo), so
+they need an isolated instance.
+
+**A Supabase branch does NOT work — don't retry it.** Its migration integration
+fails (`MIGRATIONS_FAILED`; the member/booking objects never land), and decisively
+**a branch's service-role key is unobtainable**: the MCP exposes only
+anon/publishable, the parent project's key 401s against the branch (branches get
+their own JWT secret — verified), the CLI is unauthenticated, and there's no
+branch DB password. Since the member API is entirely `createServiceRoleClient()`,
+it cannot connect to a branch at all.
+
+**What an enabling environment needs:** Docker + `supabase start` (the local
+stack, per the seeded flow above). Everything else is ready:
+
+- the seed shape is **verified against the real schema** — a member books through
+  the service-role path debiting exactly 1 credit and replaying idempotently, and
+  a full session yields waitlist position 1;
+- `/api` is reachable in dev (the proxy above);
+- the OTP seam is the only code left to write: the code is sha256-at-rest, so add
+  an `apps/api/src/server.e2e.ts` that injects a capturing `sendMemberOtp`
+  (`MemberDeps.sendMemberOtp`, whose production default is a no-op) — e.g. → a
+  Mailpit inbox Playwright reads over HTTP. Pre-seeding a challenge row does NOT
+  work for a browser-driven flow: the UI always POSTs `/auth/start` first, and
+  `consume_member_otp` picks the newest live challenge, so your known-code row is
+  stale.
 
 ## Isolation guarantees (why this can't break `CI`)
 

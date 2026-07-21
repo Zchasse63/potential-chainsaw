@@ -18,7 +18,7 @@ runtime-verified in this environment is **done + merged to main**.
 | WS | status | evidence |
 | --- | --- | --- |
 | WS-1 real-PG harness + orphan wiring + invariant-#4 guard | ✅ done | CI `db` job + `scripts/check-single-scheduler.sh` |
-| WS-2 Playwright scaffold | ✅ scaffold done (run is CI/owner-verified) | seed proven vs `member_schedule`; `playwright test --list` green; required CI unaffected |
+| WS-2 Playwright scaffold | ✅ **done + RUNNING GREEN** | real chromium vs the LIVE project: `e2e/live-schedule.spec.ts` (public schedule SSRs truthfully) — 8/8 green with WS-10's slice |
 | WS-3a jobs queue · WS-3b money RPCs + storms | ✅ done | `packages/db/test/{jobs_concurrency,booking_storm,giftcard_storm}` |
 | WS-4a/b/c/d intelligence golden suites | ✅ done | `packages/db/test/{segments,relationships,kpi,ask}_golden` |
 | WS-5a step-up · 5b waiver+campaign immutability · 5c money-refusal taxonomy + generic append-only guard | ✅ done | attack blocks 39–42 + typed catches in blocks 28/29/31/32/33; block 26 comment-driven meta-guard |
@@ -26,8 +26,43 @@ runtime-verified in this environment is **done + merged to main**.
 | WS-7a POS money routes · 7b waitlist/check-in routes | ✅ done | HTTP-layer route tests |
 | WS-8a front-desk mutations · 8b staff-screen injectable+RTL · 8c money-provenance + auth · 8d api-error contract | ✅ done | `apps/web/test/{front-desk-screen,staff-screen,payments-screen,pos-screen,auth-context,sign-in-screen,api}` |
 | WS-9 briefing honesty-fence | ✅ done | `workers/test/briefing/honesty-fence` |
-| **WS-10 E2E flows (auth/OTP, booking, waitlist)** | ⏳ **remaining** | needs the WS-2 harness **+ the Mailpit OTP seam** (`server.e2e.ts`); can only be greened in an env with a browser + local Supabase + SMTP |
+| **WS-10 E2E flows** | 🟡 **read-only slice GREEN; mutating flows blocked** | `e2e/live-auth-gate.spec.ts` runs green vs live (signed-out `/account` → `/signin` bounce, sign-in step gating, unknown-session empty state) — all GETs, zero mutation/PII. The **mutating** flows (OTP verify / book / join waitlist) need an isolated instance — see the blocker below. |
 | WS-8d residual mediums (marketing no-optimistic, route-wiring smoke, step-up 401/cancel) | ⏳ optional tail | LOW/MEDIUM; the load-bearing 8d item (API error transport) is done |
+
+**Real bugs this pass surfaced (both fixed + pinned):**
+
+1. **`app.join_waitlist` rejected the member surface** — migration **0047**. It used
+   the strict guard (`raise` when `auth.uid()` is null) while the member API calls
+   it through the SERVICE-ROLE client (uid null), so a signed-in member tapping
+   "Join the waitlist" ALWAYS got 42501. Dead on arrival, latent only because no
+   full published session exists pre-cutover. Nothing caught it: API tests inject a
+   fake Supabase client, and attack block 33 drives it as an authenticated desk
+   owner. Fixed to mirror `book_session`'s gating; pinned by **attack block 43**
+   (member/service-role join at FIFO position 1 + idempotent replay, the surviving
+   desk actor guard, and the anon-lacks-EXECUTE boundary that makes the bypass safe).
+2. **The member app's `/api` was unreachable in local dev** — the Netlify vite
+   middleware applies `netlify.toml`'s `/api` rewrite at the unresolvable
+   `PRIMARY-SITE-PLACEHOLDER` host, so every INTERACTIVE member call (sign-in,
+   account, book, waitlist) 404'd locally; only SSR loaders worked. Vite's own
+   `server.proxy` can't fix it (Netlify's middleware runs first). Fixed with a
+   dev-only plugin registered ahead of Netlify's, opt-in via `KELO_API_ORIGIN`.
+
+**WS-10 mutating-flow blocker (do not repeat this dead end):** an isolated instance
+is required — prod is out (real ledgers/Stripe/OTP + PII into Playwright artifacts +
+invariant #2). Attempts and outcomes:
+- **Supabase branch — DEAD END.** Its migration integration fails
+  (`MIGRATIONS_FAILED`: history records 45 applied but the DDL didn't land — the
+  member/booking objects are absent), and, decisively, **a branch's service-role key
+  is unobtainable**: the MCP exposes only anon/publishable, the parent's key 401s
+  against the branch (own JWT secret, proven), the CLI is unauthenticated, and there
+  is no branch DB password. The member API is built entirely on
+  `createServiceRoleClient()`, so it cannot connect to a branch at all.
+- **Local Supabase — unavailable here** (no Docker, no psql).
+An enabling environment therefore needs **Docker + `supabase start`** (or a branch
+whose service-role key you can actually read). Everything else is ready: the seed
+shape is verified against the real schema (member book debits exactly 1 credit and
+replays idempotently; a full session yields waitlist position 1), and the `/api`
+dev proxy now exists.
 
 **Taxonomy-pass boundary (WS-5c):** every money/domain refusal *reason* is now
 typed + message-pinned (amount, capacity, credits, waiver, over-refund,
