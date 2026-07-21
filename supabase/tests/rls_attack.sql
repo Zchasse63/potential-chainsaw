@@ -3189,6 +3189,80 @@ begin
 end
 $$;
 
+-- ===========================================================================
+-- (43) MEMBER WAITLIST JOIN via the SERVICE ROLE (migration 0047 fix). The
+--      member surface (POST /member/waitlist) calls app.join_waitlist through
+--      the SERVICE-ROLE client (auth.uid() NULL) with p_actor = the member's
+--      own person id — exactly like app.book_session. Before 0047, join_waitlist
+--      used the strict guard (raise when auth.uid() is null), so this path
+--      always 42501'd and a member could NEVER join a waitlist. This block fails
+--      against the pre-fix function and pins BOTH the fix and the desk guard's
+--      survival (an authenticated actor<>caller is still refused).
+-- ===========================================================================
+do $$
+declare
+  v_t uuid; v_res uuid; v_ot uuid; v_sfull uuid; v_person uuid; v_filler uuid; v_stranger uuid;
+  v_pos int; raised boolean;
+begin
+  reset role;
+  insert into public.tenants (name, slug)
+    values ('WL Member', 'wl-member-' || substr(gen_random_uuid()::text, 1, 8)) returning id into v_t;
+  insert into auth.users (id, email)
+    values (gen_random_uuid(), 'wl-stranger@example.test') returning id into v_stranger;
+  insert into public.resources (tenant_id, name) values (v_t, 'Room') returning id into v_res;
+  insert into public.offering_templates (tenant_id, name, duration_minutes)
+    values (v_t, 'Contrast', 60) returning id into v_ot;
+  insert into public.scheduled_sessions
+    (tenant_id, offering_template_id, resource_id, starts_at, ends_at, capacity, status, published_at)
+    values (v_t, v_ot, v_res, now() + interval '2 day', now() + interval '2 day' + interval '1 hour',
+      1, 'published', now()) returning id into v_sfull;
+  insert into public.people (tenant_id, first_name, source) values (v_t, 'Member', 'native') returning id into v_person;
+  insert into public.people (tenant_id, first_name, source) values (v_t, 'Filler', 'native') returning id into v_filler;
+  insert into public.credit_ledger (tenant_id, person_id, entry_type, delta, source, external_ref) values
+    (v_t, v_person, 'grant', 5, 'native', 'g-wl-m'),
+    (v_t, v_filler, 'grant', 5, 'native', 'g-wl-f');
+
+  -- The service-role member context: auth.uid() is NULL.
+  perform set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
+  perform app.book_session(v_t, v_filler, v_sfull, v_filler, 'wl-fill', 'member_web', null, true); -- fill the seat
+
+  -- (a) THE FIX: the member joins the full session's waitlist at position 1.
+  v_pos := app.join_waitlist(v_t, v_sfull, v_person, v_person, 'wl-m-1');
+  perform app_test.assert(v_pos = 1, '(43) member (service role) could not join the waitlist (0047 regressed)');
+  perform app_test.assert(app.join_waitlist(v_t, v_sfull, v_person, v_person, 'wl-m-1') = 1,
+    '(43) member waitlist join was not idempotent');
+  perform app_test.assert(
+    (select count(*) from public.waitlist_entries
+       where tenant_id = v_t and session_id = v_sfull and person_id = v_person) = 1,
+    '(43) member waitlist replay wrote a second entry');
+
+  -- (b) NO REGRESSION — an AUTHENTICATED caller whose actor <> uid is still refused (42501).
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', v_stranger, 'role', 'authenticated')::text, true);
+  raised := false;
+  begin perform app.join_waitlist(v_t, v_sfull, v_person, v_filler, 'wl-x');
+  exception when insufficient_privilege then raised := true; end;
+  perform app_test.assert(raised, '(43) an authenticated actor<>caller join was not refused (desk guard lost)');
+
+  -- (c) THE BOUNDARY that makes 0047's service-role bypass safe: anon must NEVER
+  --     hold EXECUTE on the definer function. anon also has auth.uid() = NULL, so
+  --     if it could call app.join_waitlist the bypass would become an ANONYMOUS
+  --     write (enqueue anyone onto any full session). anon is stopped by the
+  --     app-schema grant, not by the guard — so pin the grant. Same boundary
+  --     app.book_session relies on for the identical bypass.
+  reset role;
+  perform app_test.assert(
+    not has_function_privilege('anon', 'app.join_waitlist(uuid,uuid,uuid,uuid,text)', 'execute'),
+    '(43) anon holds EXECUTE on app.join_waitlist — the service-role bypass becomes an anon write');
+  perform app_test.assert(
+    not has_function_privilege('anon', 'app.book_session(uuid,uuid,uuid,uuid,text,text,uuid,boolean)', 'execute'),
+    '(43) anon holds EXECUTE on app.book_session — the service-role bypass becomes an anon write');
+
+  reset role;
+  perform set_config('request.jwt.claims', '{}', true);
+end
+$$;
+
 do $$
 declare
   n int;
