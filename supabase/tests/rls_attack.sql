@@ -981,21 +981,36 @@ $$;
 --      (anon, authenticated, service_role) — inserts + the definer/owner append,
 --      but history is never rewritten. A migration that accidentally grants
 --      write to one of these (e.g. `grant update on public.credit_ledger`) fails
---      HERE, not in production. Explicit list (comment-driven enumeration missed
---      the pre-comment-convention ledgers). Add new append-only tables here.
+--      HERE, not in production.
+--
+--      The explicit list is the FLOOR: it also covers the pre-convention ledgers
+--      (credit_ledger, audit_events, person_relationship_log, briefing_feedback,
+--      campaign_attributions) whose table comments predate the APPEND-ONLY
+--      marker. Part (b) adds a comment-driven anti-drift meta-guard so the list
+--      can't silently fall behind: any table that DECLARES itself append-only in
+--      its comment must appear in the list. (A pure comment sweep is unsafe on
+--      its own — it would false-positive `bookings`, whose comment merely names
+--      the append-only DEBIT it links while its own status legitimately mutates.)
 do $$
 declare
-  t text;
-  role_name text;
-begin
-  reset role;
-  foreach t in array array[
+  append_only_tables text[] := array[
     'credit_ledger', 'gift_card_ledger', 'waiver_signatures', 'audit_events',
     'communication_consents', 'step_up_events', 'person_relationship_log',
     'briefing_feedback', 'campaign_attributions', 'person_deletions',
     'ask_misses', 'schedule_publish_log', 'plan_prices', 'dunning_states',
     'verify_runs', 'authority_flips', 'member_verification_events', 'claim_codes'
-  ] loop
+  ];
+  -- Tables whose comment mentions "append-only" descriptively, not as a
+  -- privilege claim on themselves (bookings: RPC-written, status advances).
+  excused text[] := array['bookings'];
+  t text;
+  role_name text;
+  r record;
+begin
+  reset role;
+
+  -- (a) the guarantee — every listed table denies UPDATE + DELETE to every role.
+  foreach t in array append_only_tables loop
     foreach role_name in array array['anon', 'authenticated', 'service_role'] loop
       perform app_test.assert(
         not has_table_privilege(role_name, format('public.%I', t), 'UPDATE'),
@@ -1004,6 +1019,22 @@ begin
         not has_table_privilege(role_name, format('public.%I', t), 'DELETE'),
         format('(26) append-only public.%s grants DELETE to %s', t, role_name));
     end loop;
+  end loop;
+
+  -- (b) anti-drift meta-guard — a new ledger tagged APPEND-ONLY in its comment
+  --     but forgotten from the list above fails HERE (never silently unguarded).
+  for r in
+    select c.relname
+    from pg_catalog.pg_class c
+    join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relkind = 'r'
+      and obj_description(c.oid) ilike '%append-only%'
+  loop
+    if not (r.relname = any(excused)) then
+      perform app_test.assert(r.relname = any(append_only_tables),
+        format('(26) public.%s declares itself APPEND-ONLY but is missing from the grant-guard list', r.relname));
+    end if;
   end loop;
 end
 $$;
