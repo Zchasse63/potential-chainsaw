@@ -1383,12 +1383,14 @@ begin
     '(29) authenticated holds INSERT on subscriptions — no optimistic client write');
 
   -- The one-live-sub partial unique: a second LIVE sub for the same (tenant,
-  -- customer, plan) is refused (v_sub_a is already 'active').
+  -- customer, plan) is refused (v_sub_a is already 'active'). This is a data
+  -- INTEGRITY invariant, so pin unique_violation (23505) — a vacuous "some
+  -- error" pass would hide the partial index being dropped or mis-scoped.
   raised := false;
   begin
     insert into public.subscriptions (tenant_id, customer_id, plan_id, plan_price_id, status)
       values (v_a, v_cust_a, v_plan_a, v_price_a, 'active');
-  exception when others then raised := true;
+  exception when unique_violation then raised := true;
   end;
   perform app_test.assert(raised,
     '(29) a second live subscription for the same plan+customer was allowed');
