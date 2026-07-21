@@ -1910,7 +1910,7 @@ declare
   v_e2 uuid; v_ew uuid;
   v_bk_forfeit uuid; v_bk_ci uuid; v_bk_cx uuid;
   v_res jsonb; v_bid uuid; v_bid2 uuid;
-  v_status text; n int; raised boolean;
+  v_status text; v_msg text; n int; raised boolean;
 begin
   reset role;
   select val::uuid into v_a  from app_test.ctx where key = 'tenant_a';
@@ -2013,11 +2013,13 @@ begin
     where tenant_id = v_b and session_id = v_sfull and status = 'waiting';
   perform app_test.assert(n = 2, '(33) duplicate join wrote a third waiting entry');
 
-  -- Joining an OPEN session (1 of 2 taken) is refused — the seat should be booked.
-  raised := false;
+  -- Joining an OPEN session (1 of 2 taken) is refused on THAT ground — the seat
+  -- should be booked (22023 + message), not merely "some error".
+  raised := false; v_msg := '';
   begin perform app.join_waitlist(v_b, v_sopen, v_p3, v_ub, 'wl-open');
-  exception when others then raised := true; end;
-  perform app_test.assert(raised, '(33) join succeeded on an OPEN (not full) session');
+  exception when invalid_parameter_value then raised := true; v_msg := sqlerrm; end;
+  perform app_test.assert(raised and v_msg like '%session is not full%',
+    '(33) join succeeded on an OPEN (not full) session');
 
   -- Cancel P1 → the AFTER UPDATE trigger promotes P2 (FIFO) to an OFFER.
   perform app.cancel_booking(v_b, v_book1, v_ub, 'cx-p1', now());
@@ -2058,10 +2060,11 @@ begin
   select id, status into v_ew, v_status from public.waitlist_entries
     where tenant_id = v_b and session_id = v_swaiver and person_id = v_pw;
   perform app_test.assert(v_status = 'offered', '(33) PW was not promoted to offered');
-  raised := false;
+  raised := false; v_msg := '';
   begin perform app.accept_waitlist_offer(v_b, v_ew, v_ub, 'ac-pw', 'desk');
-  exception when others then raised := true; end;
-  perform app_test.assert(raised, '(33) accept booked despite an unsigned active waiver');
+  exception when insufficient_privilege then raised := true; v_msg := sqlerrm; end;  -- book_session waiver_required (42501)
+  perform app_test.assert(raised and v_msg like '%waiver_required%',
+    '(33) accept booked despite an unsigned active waiver');
 
   -- CHECK-IN: positive inside the window (v_snow starts in 30min); refused when
   -- the session is >60min away (v_sopen starts in 4h).
@@ -2070,28 +2073,31 @@ begin
   -- Idempotent re-check-in no-ops.
   perform app_test.assert(app.check_in(v_b, v_bookci, v_ub, now()) = 'checked_in',
     '(33) idempotent re-check-in did not no-op');
-  raised := false;
+  raised := false; v_msg := '';
   begin perform app.check_in(v_b, v_bwin, v_ub, now());
-  exception when others then raised := true; end;
-  perform app_test.assert(raised, '(33) check-in succeeded outside the arrival window');
+  exception when invalid_parameter_value then raised := true; v_msg := sqlerrm; end;
+  perform app_test.assert(raised and v_msg like '%outside the arrival window%',
+    '(33) check-in succeeded outside the arrival window');
 
   -- --- Phase C: cross-tenant, as user_a (owner of A). ----------------------
   reset role;
   perform app_test.become(v_ua);
 
+  -- Each cross-tenant call hits the definer's in-body "role required" guard for
+  -- tenant B (uA holds no membership there) → 42501, never "some error".
   raised := false;
   begin perform app.join_waitlist(v_b, v_sfull, v_pa, v_ua, 'x-join');
-  exception when others then raised := true; end;
+  exception when insufficient_privilege then raised := true; end;
   perform app_test.assert(raised, '(33) uA could join a tenant-B waitlist');
 
   raised := false;
   begin perform app.accept_waitlist_offer(v_b, v_ew, v_ua, 'x-acc', 'desk');
-  exception when others then raised := true; end;
+  exception when insufficient_privilege then raised := true; end;
   perform app_test.assert(raised, '(33) uA could accept a tenant-B offer');
 
   raised := false;
   begin perform app.check_in(v_b, v_bookci, v_ua, now());
-  exception when others then raised := true; end;
+  exception when insufficient_privilege then raised := true; end;
   perform app_test.assert(raised, '(33) uA could check in a tenant-B booking');
 
   -- Cross-tenant SELECT: uA sees none of tenant B's waitlist entries.
