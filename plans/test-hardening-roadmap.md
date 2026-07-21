@@ -10,6 +10,34 @@ Synthesized from six domain coverage audits + the E2E setup strategy. Ordered by
 
 ---
 
+## Execution status (updated 2026-07-20)
+
+All five top CRITICAL gaps are closed, and every workstream that can be
+runtime-verified in this environment is **done + merged to main**.
+
+| WS | status | evidence |
+| --- | --- | --- |
+| WS-1 real-PG harness + orphan wiring + invariant-#4 guard | ✅ done | CI `db` job + `scripts/check-single-scheduler.sh` |
+| WS-2 Playwright scaffold | ✅ scaffold done (run is CI/owner-verified) | seed proven vs `member_schedule`; `playwright test --list` green; required CI unaffected |
+| WS-3a jobs queue · WS-3b money RPCs + storms | ✅ done | `packages/db/test/{jobs_concurrency,booking_storm,giftcard_storm}` |
+| WS-4a/b/c/d intelligence golden suites | ✅ done | `packages/db/test/{segments,relationships,kpi,ask}_golden` |
+| WS-5a step-up · 5b waiver+campaign immutability · 5c money-refusal taxonomy + generic append-only guard | ✅ done | attack blocks 39–42 + typed catches in blocks 28/29/31/32/33; block 26 comment-driven meta-guard |
+| WS-6 subscription monotonicity | ✅ done | `workers/test/billing/subscription_monotonicity` |
+| WS-7a POS money routes · 7b waitlist/check-in routes | ✅ done | HTTP-layer route tests |
+| WS-8a front-desk mutations · 8b staff-screen injectable+RTL · 8c money-provenance + auth · 8d api-error contract | ✅ done | `apps/web/test/{front-desk-screen,staff-screen,payments-screen,pos-screen,auth-context,sign-in-screen,api}` |
+| WS-9 briefing honesty-fence | ✅ done | `workers/test/briefing/honesty-fence` |
+| **WS-10 E2E flows (auth/OTP, booking, waitlist)** | ⏳ **remaining** | needs the WS-2 harness **+ the Mailpit OTP seam** (`server.e2e.ts`); can only be greened in an env with a browser + local Supabase + SMTP |
+| WS-8d residual mediums (marketing no-optimistic, route-wiring smoke, step-up 401/cancel) | ⏳ optional tail | LOW/MEDIUM; the load-bearing 8d item (API error transport) is done |
+
+**Taxonomy-pass boundary (WS-5c):** every money/domain refusal *reason* is now
+typed + message-pinned (amount, capacity, credits, waiver, over-refund,
+over-redemption, uniqueness). The `exception when others` that remain sit only
+on plain privilege-denied client writes, where any denial is itself the correct
+outcome (a successful write flips `raised=false` and fails the test) — so there
+is no wrong-reason vacuous pass to guard against there.
+
+---
+
 ## The 5 gaps to fix first (by name)
 
 1. **Jobs-queue SQL — `app.claim_jobs` (FOR UPDATE SKIP LOCKED), `fail_job` backoff, `reap_expired_leases`, complete/fail stale-worker guards** — *integrations-workers, CRITICAL*. Invariant #4's entire safety proof is unexecuted; **two** functions call `runTick` (`scheduler-tick.mts`, `worker-run-background.mts`), so concurrent double-fire is a real runtime condition. Dropping SKIP LOCKED or flipping the attempts comparison could double-run a money job and all 1123 tests stay green.
