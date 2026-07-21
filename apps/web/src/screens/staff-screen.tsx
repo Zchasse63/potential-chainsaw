@@ -1,10 +1,9 @@
 import { useState, type FormEvent } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "../components/button.jsx";
-import { DataBoundary } from "../components/data-boundary.jsx";
+import { DataBoundary, type BoundaryQuery } from "../components/data-boundary.jsx";
 import { Skeleton } from "@kelo/ui/react";
 import { StepUpPrompt, type StepUpGrantResult } from "../components/step-up-prompt.jsx";
-import { ApiRequestError, fetchEnvelope, postEnvelope } from "../lib/api.js";
+import { ApiRequestError } from "../lib/api.js";
 
 type StaffRole = "owner" | "manager" | "front_desk" | "trainer";
 
@@ -45,7 +44,7 @@ function PinEditor({
   pending: boolean;
   error: string | null;
   onCancel: () => void;
-  onSave: (pin: string) => Promise<void>;
+  onSave: (pin: string) => Promise<boolean>;
 }) {
   const [pin, setPin] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -53,9 +52,12 @@ function PinEditor({
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!/^\d{4,6}$/.test(pin) || pin !== confirmation) return;
-    await onSave(pin);
-    setPin("");
-    setConfirmation("");
+    // Only clear the entered PIN on SUCCESS — a failed save keeps the fields so
+    // the operator can retry (and doesn't read as "credential changed").
+    if (await onSave(pin)) {
+      setPin("");
+      setConfirmation("");
+    }
   }
 
   return (
@@ -131,48 +133,41 @@ function PinEditor({
   );
 }
 
-export function StaffScreen({ accessToken }: { accessToken: string | undefined }) {
-  const queryClient = useQueryClient();
+export interface StaffScreenProps {
+  /** GET /staff — the RBAC-scoped roster (each row carries can_manage_pin). */
+  staffQuery: BoundaryQuery;
+  /** POST /staff/:userId/pin — the raw PIN travels in the body, never the URL. */
+  onSetPin: (userId: string, pin: string) => Promise<void>;
+  /** POST /staff/step-up/verify — returns the signed grant or throws. */
+  onVerifyPin: (pin: string, context: string) => Promise<StepUpGrantResult>;
+}
+
+export function StaffScreen({ staffQuery, onSetPin, onVerifyPin }: StaffScreenProps) {
   const [editing, setEditing] = useState<StaffMember | null>(null);
   const [setError, setSetError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [stepUpOpen, setStepUpOpen] = useState(false);
   const [verifiedUntil, setVerifiedUntil] = useState<string | null>(null);
-  const staffQuery = useQuery({
-    queryKey: ["staff"],
-    enabled: accessToken !== undefined,
-    queryFn: () => fetchEnvelope("/staff", accessToken as string),
-    retry: false,
-  });
-  const setPin = useMutation({
-    mutationFn: ({ userId, pin }: { userId: string; pin: string }) =>
-      postEnvelope(`/staff/${encodeURIComponent(userId)}/pin`, accessToken as string, { pin }),
-    onSuccess: async () => {
+
+  async function savePin(userId: string, pin: string): Promise<boolean> {
+    setSaving(true);
+    try {
+      await onSetPin(userId, pin);
       setEditing(null);
       setSetError(null);
-      await queryClient.invalidateQueries({ queryKey: ["staff"] });
-    },
-    onError: (error) => {
+      return true;
+    } catch (error) {
+      // The editor stays OPEN on failure — a swallowed error would read as
+      // "credential changed" when nothing was written.
       setSetError(
         error instanceof ApiRequestError
           ? error.message
           : "The PIN wasn’t saved. No credential was changed.",
       );
-    },
-  });
-
-  async function verify(pin: string, context: string): Promise<StepUpGrantResult> {
-    const response = (await postEnvelope("/staff/step-up/verify", accessToken as string, {
-      pin,
-      context,
-    })) as {
-      data?: { grant_token?: string; grant?: { expires_at?: string } };
-    };
-    const token = response.data?.grant_token;
-    const expiresAt = response.data?.grant?.expires_at;
-    if (token === undefined || expiresAt === undefined) {
-      throw new Error("step-up response was missing its signed grant");
+      return false;
+    } finally {
+      setSaving(false);
     }
-    return { grantToken: token, expiresAt };
   }
 
   return (
@@ -277,19 +272,17 @@ export function StaffScreen({ accessToken }: { accessToken: string | undefined }
       {editing !== null && (
         <PinEditor
           member={editing}
-          pending={setPin.isPending}
+          pending={saving}
           error={setError}
           onCancel={() => setEditing(null)}
-          onSave={async (pin) => {
-            await setPin.mutateAsync({ userId: editing.user_id, pin });
-          }}
+          onSave={(pin) => savePin(editing.user_id, pin)}
         />
       )}
       <StepUpPrompt
         open={stepUpOpen}
         context="staff_access"
         onClose={() => setStepUpOpen(false)}
-        onVerify={verify}
+        onVerify={onVerifyPin}
         onGranted={(grant) => {
           setVerifiedUntil(grant.expiresAt);
           setStepUpOpen(false);
