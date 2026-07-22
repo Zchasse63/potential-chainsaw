@@ -14,8 +14,8 @@ permissions:
 # Postgres 17 container via the Supabase shim — no Docker/Supabase-local needed.
 # Real-Supabase parity comes from the Supabase GitHub integration, which applies
 # supabase/migrations/*.sql to a preview branch on every PR (plan-final §1).
-# NOTE (next unit): the jobs-queue concurrency ("double-tick executes once") test
-# is added to the `db` job when the queue migration lands.
+# The jobs-queue concurrency ("double-tick executes once") proof runs in the
+# `db` job below, alongside the storm/golden suites.
 
 jobs:
   check:

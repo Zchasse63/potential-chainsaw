@@ -21,8 +21,9 @@ tests is wrong (fix the drift, don't compound it).
   rules, briefing pipeline, revenue dictionary.
 - **Security gates:** [plans/threat-model.md](plans/threat-model.md) — phase-keyed checklists.
 - **Live status / what's next:** [plans/execution-remainder.md](plans/execution-remainder.md) —
-  the wave-by-wave remaining-work DAG and sequencing; the current source of truth for "what's next"
-  (the build has progressed through the phase-7 cutover machinery into the phase-8 member surface).
+  the wave-by-wave remaining-work DAG (R0–R6) and sequencing; the current source of truth for
+  "what's next" (rewritten 2026-07-22 from the verified mid-project review,
+  [plans/review-2026-07-22.md](plans/review-2026-07-22.md) — read both before starting work).
 
 ## Standing invariants (violations are defects, not choices)
 
@@ -30,7 +31,8 @@ tests is wrong (fix the drift, don't compound it).
    failed before the fix, (c) a production-visible health signal.
 2. **No fixture/demo data reachable from app code paths** — seed data exists only in staging/CI.
 3. **Every API response carries the freshness envelope** `{ data, meta: { as_of, source, stale } }`;
-   UI renders data only through the `DataBoundary` provenance contract.
+   UI renders data only through the `DataBoundary` provenance contract. (Documented exemptions:
+   webhook `{received:true}` ACKs and the unauthenticated `/health/ping`.)
 4. **Exactly one scheduler:** the Netlify tick + Postgres `jobs` queue. Never add a second cron.
 5. **Money/booking mutations are Postgres RPCs** with idempotency keys; no optimistic UI for
    money or bookings; Stripe webhooks are the confirmation authority.
@@ -51,9 +53,11 @@ tests is wrong (fix the drift, don't compound it).
 ## Workflow
 
 - Migrations live in `supabase/migrations/` (schema-as-code; deployed by the Supabase GitHub
-  integration on merge to `main`; PRs get preview branches). After any schema change, run the
-  portable RLS attack suite (`supabase/tests/rls_attack.sql`) — it dynamically covers every
-  tenant-scoped table and every new RPC/policy.
+  integration on merge to `main`). **Merging is deploying.** After any schema change, run the
+  portable RLS attack suite (`supabase/tests/rls_attack.sql`). Its generic guards dynamically
+  cover every tenant-scoped TABLE/matview and append-only grants — but **RPC blocks are
+  hand-written: every new `SECURITY DEFINER` function MUST ship with its own attack block; the
+  suite does not auto-detect new RPCs** (the 0047 waitlist bug is the proof of what slips through).
 - Secrets: `.env` locally, Netlify/Supabase env in deploys, Supabase Vault for per-tenant
   credentials. The service role key never appears client-side; CI greps built artifacts.
 - Zod schemas in `packages/contracts` are the single source of truth for shapes.

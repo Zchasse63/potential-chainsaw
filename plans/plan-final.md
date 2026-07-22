@@ -752,6 +752,25 @@ verification is).
 
 ## 10. Changelog
 
+**2026-07-22 (mid-project review — sequencing recorded, deviations recorded):** Full verified
+review at [review-2026-07-22.md](review-2026-07-22.md); rewritten forward plan at
+[execution-remainder.md](execution-remainder.md). (1) **Owner directive 2026-07-20 recorded:**
+finish ALL web before mobile, then a comprehensive test-hardening pass — executed 2026-07-20/21
+(roadmap WS-1…9 + WS-10 read-only slice; ~15 merges; found+fixed two shipped bugs incl. migration
+0047, where `join_waitlist`'s guard rejected the member surface's service-role path — the member
+waitlist was dead on arrival). (2) **Deviations now recorded** (shipped-differently-than-planned;
+see review §4 for evidence): authority is a BINARY append-only flip ledger (0042), not the §1/§5
+4-state registry, and `write_back_log` was never built (Glofox client is read-only); bookings are
+session-locked capacity (FOR UPDATE + trigger), not resource+tstzrange GIST — resource-slot
+bookings don't exist; `person_merges`, `cancellation_policies`/`policy_version`/
+`booked_by_person_id`, `written_off`, a `refunds` table, `automation_flows`/`enrollments`, and
+`import_conflicts` were never built; §3's `/outreach` shipped as `/marketing` and `/billing` as
+`/payments` (subset each); the §5 UX stack (shadcn/Radix, TanStack Table, Storybook, axe-core)
+was substituted with hand-rolled token-contract components; If-Match entity versioning is an
+unwired stub. Each is either scheduled (execution-remainder) or descoped here. (3) **Review
+headline:** no code path enqueues the recurring cadence root (`glofox.sync.all`) — the live
+parallel run froze silently 2026-07-18; fixing this (wave R0) precedes all other work.
+
 **2026-07-19 (OWNER PLAN CHANGE — native member apps added to phase 8):** the councils scoped the
 member surface as SSR-web-only (installable PWA explicitly dropped). The owner has now ruled that
 **native iOS AND Android member apps are required, ready at cutover** — members currently use the

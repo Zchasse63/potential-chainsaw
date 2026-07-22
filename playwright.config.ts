@@ -4,9 +4,11 @@ import { defineConfig, devices } from "@playwright/test";
  * WS-2 — Playwright E2E harness for the member surface.
  *
  * This config is NOT part of the required CI (`pnpm -w test` is Vitest only and
- * its include globs never match `e2e/`). It runs via `npx playwright test`, in
- * the dedicated `.github/workflows/e2e.yml` job or locally against a full local
- * Supabase stack. See e2e/README.md for the exact stand-up (the member API
+ * its include globs never match `e2e/`). As of 2026-07-22 there is NO CI e2e
+ * job — all runs are manual (`npx playwright test`), either in live-read-only
+ * mode (KELO_E2E_NO_WEBSERVER=1, proven green) or against a full local
+ * Supabase stack. A CI job is planned as wave R6 (plans/execution-remainder.md).
+ * See e2e/README.md for the exact stand-up (the member API
  * route calls PostgREST via the Supabase JS client, so a plain Postgres is not
  * enough — a local Supabase is required).
  *
