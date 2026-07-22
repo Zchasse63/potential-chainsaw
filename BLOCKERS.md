@@ -6,7 +6,11 @@ Never mark a gated item "passed" — it's "awaiting owner/external."
 
 Legend: 🟥 blocks a phase gate · 🟧 blocks live proof only (code is built) · ✅ resolved
 
-_Last updated: 2026-07-17 (Phase 0 in progress)._
+_Last updated: 2026-07-22 (phase-8 member web complete + test-hardening done; see
+[plans/review-2026-07-22.md](plans/review-2026-07-22.md) and the rewritten
+[plans/execution-remainder.md](plans/execution-remainder.md)). **Owner-clock urgency:** the
+review's owner-action list (10DLC · Netlify · PITR/restore drill · Stripe/PAN · Resend/Twilio ·
+ZDR · lawyer waiver/money-ToS · mobile ruling) are the longest poles to cutover — start them now._
 
 ## Phase 0
 
@@ -14,12 +18,12 @@ _Last updated: 2026-07-17 (Phase 0 in progress)._
 |---|---|---|---|---|
 | P0-1 | **Sentry DSN** (web + functions) | Create Sentry project(s); provide `SENTRY_DSN` / `VITE_SENTRY_DSN` | 🟧 | Sentry init code wired behind env; no-ops without DSN. Live error capture unprovable until DSN set. |
 | P0-2 | **Dead-man heartbeat check** | Create a Healthchecks.io (or BetterStack) check; provide `HEARTBEAT_PING_URL` | 🟧 | Scheduler tick pings the URL each run; the "unplug the tick → alert fires" gate proof needs the real check. |
-| P0-3 | **Netlify site** | Create/link the Netlify site to the GitHub repo; set env (service role, heartbeat, Sentry) | 🟧 | `netlify.toml` + functions (api, scheduler-tick) in-tree; deploy + live scheduled-function proof needs the site. |
+| P0-3 | **Netlify site(s)** | Create/link BOTH Netlify sites (primary + member site 2); set env (service role, heartbeat, Sentry); swap `PRIMARY-SITE-PLACEHOLDER` in `apps/member/netlify.toml` | 🟧 | `netlify.toml` + functions (api, scheduler-tick) in-tree. **2026-07-22 correction:** deploying starts the TICK but does NOT start the cadence — nothing enqueues `glofox.sync.all` (wave R0.1 builds the seeder; both are required for a live system). |
 | P0-4 | **10DLC registration** | EIN, use-case + sample messages, opt-in flow description; file with Twilio | 🟥 (phase 3 gate) | **Skeleton privacy page BUILT** (`apps/web/public/privacy.html` — SMS STOP/HELP language, no-third-party-sharing clause per carrier requirements); it gets a public URL with the Netlify deploy (P0-3/P0-9). Filing itself is an owner action with weeks of lead time. |
 | P0-5 | **Stripe account-ownership answer** | Confirmed 2026-07-17: **Glofox-gated** (negative branch active). PAN-portability request to Glofox/ABC still to be filed as early as possible. | ✅ (answer) / 🟥 (PAN request) | Reconciliation is Glofox-only pre-phase-5; failed payments from the Glofox report ERROR rows. PAN-portability request is an owner/Glofox action. |
 | P0-6 | **Glofox contract / ToS extraction-rights review** (owner-questions A3) | Locate the Glofox contract; review extraction + write rights; open the write-capability conversation with ABC/Glofox | 🟥 | Read probes pinned; non-mutating write-capability discovery (docs/endpoint existence) is buildable. Contractual permission is an owner action. |
 | P0-7 | **Glofox webhook signing secret** (A3b) | Email `glofox.apisupport@abcfitness.com` for the studio's webhook secret | 🟧 (phase 1) | Webhook-inbox pattern designed; secret needed to verify HMAC-SHA256 signatures. |
-| P0-8 | **PITR + restore drill #1** | Enable Supabase PITR (paid tier feature) on project `ysnijttvprwymwheyyfm`; run a rehearsed restore | 🟧 | Restore-drill runbook to be written; PITR toggle + drill require the owner + a paid plan. |
+| P0-8 | **PITR + restore drill #1** | Enable Supabase PITR (paid tier feature) on project `ysnijttvprwymwheyyfm`; run a rehearsed restore | 🟥 **ESCALATED 2026-07-22** | Restore-drill runbook to be written; PITR toggle + drill require the owner + a paid plan. **Escalation:** money schema (0031–0041) + 870 outstanding credits are LIVE in prod with no rehearsed recovery — plan-final's own hard gate ("required before any money phase ships") is being violated as of the review. |
 | P0-9 | **Domains** (owner-questions C1) | Buy `getkelo.com` + `kelo.studio` | 🟧 | Not code-blocking; needed before the public skeleton privacy page + member surface. |
 | P0-10 | **Supabase branching / preview DBs disabled** | Enable branching on the Supabase GitHub integration (dashboard → Branches) so PRs get preview DBs (plan-final §1) | 🟧 | **Half-resolved 2026-07-17:** merge-to-main **does** auto-apply migrations (all 6 Phase-0 migrations landed on production minutes after the PR #1 merge, verified via MCP `list_migrations`), and the full attack suite was then run against the production DB non-destructively: **RLS ATTACK SUITE PASSED (PRODUCTION) — 53 assertions**, rollback verified clean. Only the preview-DB-per-PR flow remains off; CI's Postgres-17 `db` job covers PR-time verification meanwhile. |
 
@@ -36,7 +40,7 @@ _Last updated: 2026-07-17 (Phase 0 in progress)._
 |---|---|---|---|---|
 | P1-3 | **Moonshot / Kimi K3 account** | ✅ **Credits restored (owner, 2026-07-19)** — Kimi K3 live again (verified). Per owner: Kimi serves as an ADDITIONAL planner/reviewer (first use: the phase-8 member-app design exercise). Implementation remains the all-Claude pipeline (Opus 4.8 implements, Fable 5 reviews/directs). | ✅ | History: suspended mid-1.6 → Sol/Codex took 1.8–4.1 → Sol quota died mid-4.2 → all-Claude workflow since. |
 | P4-IMPL | **Implementer roster** | ✅ **SETTLED (owner, 2026-07-19):** all-Claude pipeline — **Opus 4.8 implements** (workflow subagents, worktree-isolated), **Fable 5 plans/reviews/directs**, **Kimi K3 auxiliary planner/reviewer** (credits restored). **Sol/ChatGPT 5.6 is OUT — no credits; do not route work to it.** | ✅ | **Owner chose "I hand-write the rest" (2026-07-18).** Director completed **4.2 (scheduling + DST proof)** and **4.3 (waiver desk-signing slice)** by hand — both merged + applied + green (459 tests; RLS 183 assertions/50 tables; waiver_signatures append-only proven live). See [[kelo-implementer-fallback]]. Restoring a delegated implementer would resume the proven implement↔review separation (which caught the SMS opt-out + ledger-safety issues). |
-| P4-UI | **Deferred provider-gated waiver link flow** | None blocking; ships with live Resend/Twilio (P3-2) | 🟨 (deferred, recorded) | ✅ The **scheduling authoring web tab** and **waiver admin web screen** are DONE (built via Claude-subagent workflow, reviewed, merged 2026-07-18). Remaining deferral: the waiver **pre-arrival LINK flow** (link-enqueuer worker + public token signing route) — needs live Resend/Twilio (gated by P3-2). The in-person desk-signing path is complete + tested (front_desk enabled via 0032). |
+| P4-UI | **Deferred provider-gated waiver link flow** | None blocking; ships with live Resend/Twilio (P3-2) | 🟨 (deferred, recorded) | ✅ The **scheduling authoring web tab** and **waiver admin web screen** are DONE (built via Claude-subagent workflow, reviewed, merged 2026-07-18). Remaining deferral: the waiver **pre-arrival LINK flow** (link-enqueuer worker + public token signing route). **2026-07-22 correction: the worker + minting route are BUILDABLE NOW (wave R1.4) — only live DELIVERY gates on P3-2, and the waiver TEXT gates on lawyer review (legal 4c).** This flow is the mass re-sign de-risker: live prod has ZERO waiver signatures, so ~258+ members must sign fresh at cutover. The in-person desk-signing path is complete + tested (front_desk enabled via 0032). |
 
 ## Phase 2+ (recorded early so we don't forget)
 
@@ -50,6 +54,8 @@ _Last updated: 2026-07-17 (Phase 0 in progress)._
 | P5-1 | **Sales-tax practice** (A6) | Are sessions/retail taxed? Who files? | 🟥 (phase 5) |
 | P8-1 | **The Sauna Guys brand assets** | Logo, colors, type for the member-surface skin (now ALSO the app icons/splash for the store apps) | 🟧 (phase 8) |
 | P8-2 | **Apple Developer Program + Google Play Console accounts** (owner plan change 2026-07-19: native iOS+Android member apps required at cutover) | Enroll Apple Developer Program ($99/yr — enrollment can take days) + Google Play Console ($25 once). Needed before store submission; store review adds lead time to the phase-8 critical path. | 🟥 (phase-8 store gate) |
+| P8-3 | **Mobile-vs-cutover ruling** (review 2026-07-22, contradiction #4) | The 07-19 ruling makes native apps cutover-GATING; the 07-20 directive sequences mobile LAST. Both can't stand without cutover waiting on store review. Owner must either descope mobile from the cutover gate (recorded in plan-final §10) or start P8-1/P8-2 clocks immediately. | 🟥 (blocks wave R5 + the cutover date) |
+| R6-ENV | **Mutating-E2E / rehearsal environment** | A Docker-capable environment (`supabase start`) for the mutating Playwright flows (OTP→book→waitlist) AND freeze-window/restore rehearsals. Local machine has no Docker; Supabase branches are a proven dead end (broken migration integration + branch service-role key unobtainable). **GitHub Actions runners HAVE Docker** — the CI path is open (wave R6). | 🟧 (code path exists via CI) |
 
 ## Wave 8 code follow-ups (not owner-gated — tracked so they don't slip)
 

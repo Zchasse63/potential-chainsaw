@@ -1,76 +1,169 @@
-# Execution plan — the remainder (phases 5c → 8)
+# Execution plan — the remainder (to cutover and Glofox retirement)
 
-_Author: Fable 5 (director). 2026-07-19. This is the WORKING execution DAG for the remaining build,
-derived from [plan-final.md](plan-final.md) §6 (which stays authoritative — any scope deviation gets
-a §10 changelog entry). Model arrangement per owner directive 2026-07-19: **Opus 4.8 implements**
-(workflow subagents, worktree-isolated), **Fable 5 reviews** (adversarial, money-grade), Fable 5
-directs + integrates + performs every live action (merge, migrate, attack suite, backfills)._
+_Author: Fable 5 (director). **2026-07-22.** This SUPERSEDES the 2026-07-19 version entirely and is
+the current source of truth for "what's next." Derived from [plan-final.md](plan-final.md) §6
+(authoritative — deviations get §10 entries) and the verified mid-project review
+([review-2026-07-22.md](review-2026-07-22.md) — read it first; every claim here carries evidence
+there). Model arrangement: **Opus 4.8 implements**, **Fable 5 plans/reviews/directs**; Kimi K3 is
+an auxiliary planner/reviewer; **Sol/ChatGPT is OUT (no credits — never route work there).**_
 
-## Ground state (start of remainder)
+## How to work (standing instructions — do not skip)
 
-Phases 0–4 complete; Phase 5 core merged (schema 0033, idempotency, @kelo/stripe, webhook receiver,
-inbox/outbox processors, payment+refund RPCs w/ step-up; 3 reviewer-caught money bugs fixed).
-35 migrations live · 578 tests · RLS attack suite 317 assertions/54 tables.
+1. **Increment discipline:** branch `wf/<name>` → implement → `pnpm -w typecheck && pnpm -w lint
+   && pnpm -w test` → independent review for app code (feature-dev:code-reviewer, or a multi-lens
+   Workflow for money/security surfaces) → fix findings with fail-before-fix tests → `git merge
+   --no-ff` to main → delete branch → push. Test-only/doc increments take the light path (no
+   formal review).
+2. **Merging = deploying.** Migrations auto-apply to production on merge to main. After ANY schema
+   change, run the full attack suite; add an attack block for every new SECURITY DEFINER RPC —
+   **the suite does NOT auto-detect new RPCs** (the 0047 bug is the proof of what slips through).
+3. **Verify live before merge** (schema/RPC work): Supabase MCP `execute_sql` on project
+   `ysnijttvprwymwheyyfm`, wrapped in a DO block ending `raise exception 'ROLLBACK_SENTINEL'` with
+   a `raise notice '... OK'` immediately before — sentinel firing = all assertions passed, nothing
+   persisted.
+4. **Release rule (invariant #1):** no "done" without (a) captured evidence, (b) a test that failed
+   before the fix, (c) a production-visible health signal. Put the evidence in the commit body.
+5. **The repo is PUBLIC.** No PII in commits, docs, tests, or Playwright artifacts — aggregates
+   only. Member scope always from `resolveMember`, never the request.
+6. Record any plan deviation in plan-final §10. Update THIS file's status lines as waves complete.
 
-## Wave plan
+## Ground state (verified 2026-07-22)
 
-Each wave = one Workflow run: parallel worktree-isolated Opus implementers → Fable adversarial
-reviewers → director integrates, applies migrations live, runs the attack suite, pushes.
+Phases 0–7 machinery merged; member web (W8-1…W8-3) complete minus the Stripe Pay stage;
+test-hardening WS-1…9 done + WS-10 read-only slice green (mutating slice env-blocked). 47
+migrations · 150 vitest files / 1217 cases · 43 attack blocks / 352 assertions · CI green ·
+3 Playwright specs green vs the live DB (run manually — **no CI e2e job exists yet**).
 
-### Wave 5c — prove the money engine
-| Unit | Scope | Gate it serves |
+**Live production reality (probed 2026-07-22):** 1,366 people · 258 credit holders / 870
+outstanding credits · 0 waiver signatures · 0 person claims · **the recurring cadence is FROZEN
+since 2026-07-18** (nothing enqueues `glofox.sync.all`; jobs queue empty; 3 warning alerts
+unacknowledged) · nothing is deployed (P0-3 open — the tick itself is not running anywhere).
+
+---
+
+## The remaining work, in order
+
+Waves are dependency-ordered. R0 is not optional and not owner-gated — nothing downstream is
+trustworthy until the system runs itself.
+
+### R0 — Make it run itself + close the live holes _(code only, no owner gates — DO THIS FIRST)_
+
+| Unit | Scope | Key refs |
 |---|---|---|
-| **5.5 verify_money + chaos harness** | Nightly cross-ledger invariant job (payments ↔ stripe_commands ↔ stripe_events: missing/orphaned/mismatched, refund-exceeds, command-without-event past SLA → critical alerts + a verify_runs record). The **webhook chaos harness**: a test harness firing dupes, reordered, replayed, delayed event sequences at the inbox — the phase-5 gate test ("webhook chaos harness passes"). | §6 phase-5 gate |
-| **5.6 subscriptions + dunning** | subscriptions table (Stripe-Billing-for-recurrence per §5 ruling), subscription lifecycle events into the inbox mapper, the **dunning state machine** (failed payment → grace window (owner default 14d) → dunning comms via `transactional_quiet` (quiet-hours-aware, consent-exempt) → focus-queue surfacing → `past_due`/cancel), plan_prices → stripe price wiring. | dunning fires on failed payment |
+| **R0.1 cadence producer** | The missing "unit 1.7": seed `glofox.sync.all` per active tenant from the tick (in-tick hour-keyed enqueue is sufficient — the fan-out's idempotency buckets already make double-fire safe; a schedule table is acceptable if cleaner). Test: a cold queue self-populates. | workers/src/glofox/processors.ts:52-57; netlify/functions/scheduler-tick.mts |
+| **R0.2 watchdog + alert push** | Sync-staleness alert (no sync_run inside the expected window), dead-lettered-job alert, and PUSH delivery of critical alerts to a human (email via the comms adapter, dry-run-aware). /health surfaces `jobs.status='dead'` count. | alert writers: pipeline.ts, reconcile.ts, outbox.ts, inbox.ts |
+| **R0.3 member purge registration** | Register `member_otp_purge` / `member_session_purge` processors (thin delegations to the 0044 definer fns) + day-keyed fan-out enqueues + tests. Currently kinds-only → unbounded auth-table growth. | workers/src/member/purge.ts; workers/src/processors.ts |
+| **R0.4 member OTP → comms adapter** | Replace the hard-coded no-op `sendMemberOtp` default with the @kelo/comms adapter behind the standard env-key dry-run switch, so P3-2 keys flip it live with everything else. Send-path test. | apps/api/src/routes/member.ts:153-155 |
+| **R0.5 grant_gift_card idempotency** | Add `p_idempotency_key` to the RPC (migration) or mount `persistIdempotency`; failing-first duplicate-grant test; attack-suite rerun. The one live invariant-#5 hole (duplicate stored-value liability). | routes/retail.ts:151-156; migration 0031:113-158 |
+| **R0.6 attack-coverage closure** | Blocks for the 9 uncovered authenticated definer RPCs (priority: grant_gift_card, pseudonymize_person, publish_sessions) + a webhook_events deny-all probe + a **definer-RPC catalog meta-guard** (every `app.*` SECURITY DEFINER name must appear in rls_attack.sql — extends the block-26 pattern). | review §3 P1 |
+| **R0.7 credits reconciliation** | Add credits to RECONCILE_ENTITIES: Kelo-vs-Glofox balance diff per person; explicit expiry semantics (3 expired grants exist; no `expire` entries materialized). This is the pre-flip attestation input for the 258 holders / 870 credits. | workers/src/glofox/reconcile/reconcile.ts:76-81 |
+| **R0.8 /health authority truth** | Replace the hardcoded 5-capability constant with a read of `current_authority` (0042's 8 domains). | apps/api/src/authority.ts |
+| **R0.9 hygiene batch** | Bundle-grep existence assertions (`test -d` before grep, both jobs); Idempotency-Key on `POST /member/holds`; grantGiftCard 22023/P0002 + data-booking 23514 error mappings; route the two raw envelope casts through inspectEnvelope (marketing-screen.tsx:84, import-screen.tsx:135). | review §3 P2 |
 
-### Wave 5d — the operator money surface
+_Gate: production queue self-populates from a cold start; a manufactured staleness fires an alert
+that reaches a human channel; the 07-18-style silent freeze is impossible to repeat; attack suite
+green with the new blocks; credits reconciliation runs green (or surfaces real drift honestly)._
+
+**Immediate op (director, before/alongside R0.1):** hand-run the sync cadence once against prod to
+unfreeze reconciliation data, and acknowledge/triage the 3 open warnings.
+
+### R1 — Member-surface completion (web)
+
 | Unit | Scope |
 |---|---|
-| **5.7 POS backend** | Checkout RPC composing: line items (retail/plans/gift-card SALE), **cash tender recording**, simple discounts (manager step-up grant), tax config (tenant settings; owner Q A6 pending → build the config, default 0), receipts via the comms path (email, transactional). Gift-card **sale** (payment → issue + ledger) + **redemption** (definer RPC by code hash, ledger debit). Terminal is stubbed behind the adapter (needs the live account). |
-| **5.8 Payments web** | /payments screen: payments list w/ status provenance, refund flow with the StepUpPrompt (over-threshold), the dunning queue, a minimal POS (cash) checkout screen. |
+| **R1.1 cancel-booking UI** | Wire the existing tested `cancelBooking` into booking-panel/account with the refund-vs-forfeit branch surfaced. The panel already PROMISES this in copy. |
+| **R1.2 claim resolution path** | Member claim-status screen (first-name-only, polls `/member/claim/status` — endpoint built); operator resolution workspace over `person_claims`; desk claim-code mint/consume routes + screen (0044 table exists, nothing mints). Fixes the needs_resolution bounce loop. |
+| **R1.3 session refresh spine** | `member-core.refreshSession()` + a rotation **grace window** migration (plan §14.3 — 0045 currently insta-revokes the family on any replay; mobile will hit spurious revocations without it) + concurrent-refresh test. Prereq for mobile. |
+| **R1.4 waiver-links flow** | The mass re-sign de-risker: `waivers.send_links` worker processor + minting route calling `enqueue_waiver_links` (RPC + tokens exist; both ends dead today). BUILD now; live delivery gates on P3-2; **waiver TEXT gates on lawyer review (legal 4c) — do not mass-send before sign-off.** |
+| **R1.5 account completeness** | Receipts + unsubscribe prefs + balance expiry in contract/data/UI (receipts partially Stripe-gated → can trail into R4). |
 
-### Wave 6a — the booking engine core
-| Unit | Scope | Gate |
+### R2 — Operator-surface completion
+
+| Unit | Scope |
+|---|---|
+| **R2.1 marketing screen** | Refactor to the injectable seam (mirror routes/staff.tsx) + RTL tests incl. no-optimistic-approve. Last non-injectable screen; gates real sends; currently zero tests. |
+| **R2.2 scheduling route tests** | HTTP-layer tests for all 22 `/scheduling/*` routes (role walls, idempotency, envelope, publish atomicity) — largest untested API surface. + marketing/tenant/retail/payments stragglers. |
+| **R2.3 People surface (XL)** | Profile API endpoints (people.ts is search/export/delete only) + People index + person profile screens (visits/credits/payments/comms/waivers/relationship history). Without it operators keep Glofox open, defeating cutover. Merge tooling: decide person_merges scope (never built — §10). |
+| **R2.4 Reports consumer** | Screen consuming `GET /reports/revenue` (live, zero consumers) + definitions drill-down; CSV per plan or record deferral. |
+| **R2.5 test tail** | AskScreen tests; thicken retail/app-shell/heatmap; component-allowlist decision (extract or record deviation per invariant #10). |
+
+### R3 — Cutover machinery _(the strangler-fig actually strangles)_
+
+| Unit | Scope |
+|---|---|
+| **R3.1 authority enforcement** | Sync upserts, deletion detection, and reconciliation consult `current_authority` per domain (skip/demote Glofox for kelo-owned domains). Today a flip is a diary entry, not a lever. |
+| **R3.2 freeze + partition** | Final-import trigger, per-domain import pause, freeze-window runbook, inventory-partition rule for bookings during coexistence (Glofox-app members can otherwise oversell flipped capacity). Owner decision partition-vs-writeback still open (phase-4 probe). |
+| **R3.3 subscription migration tool** | Bulk Stripe customer+subscription creation with billing anchors + an explicit no-double-billing guard (the plan's cohort rule). Rehearse in Stripe test mode. |
+| **R3.4 member cutover comms** | Claim/switch/re-card templates + campaign wiring through ApprovalCeremony. All 258 credit holders have email (verified) — the claim blast is email-first and NOT 10DLC-gated. |
+| **R3.5 Glofox webhook receiver** | HMAC verify + inbox + MEMBER_UPDATED soft-delete handling. Buildable now; live needs P0-7 secret. |
+| **R3.6 final-archive task** | Scripted full Glofox export (incl. entities outside the 6 synced) before contract cancellation — data outside sync dies with the account. |
+
+### R4 — Money live _(owner-gated: P0-5 Stripe, P0-3 Netlify, P3-2 comms)_
+
+Stripe go-live wiring (stripe_accounts row, keys, public webhook URL → one real charge flips
+`payment_verified`) · member **Pay stage** (`/member/bookings/:id/pay` PaymentIntent +
+`/payment-methods` SetupIntent over the existing 5.4 RPCs, Payment Element, webhook-confirmed) ·
+member **step-up spine** (`/member/auth/step-up` + `requireRecentVerification` — prereq for card
+update) · receipts · POS Terminal later.
+
+### R5 — Mobile (W8-4) — **blocked on an owner ruling, see Open decisions**
+
+Expo apps per plan-member-app §4: member-core TokenStore + hooks layer, `apps/member-mobile`
+scaffold, `member_push_tokens` migration + expo-push adapter + receipt-poll job, EAS Build/Submit,
+Maestro smokes. Prereqs: R1.3 (refresh + grace window), P8-1 (assets), P8-2 (store accounts).
+Store review lead time sits on the critical path **if** mobile stays cutover-gating.
+
+### R6 — Verification & ops gates _(interleave with R1–R4; several unblock in CI)_
+
+- **CI e2e job**: read-only live specs now (proven safe); **mutating specs on GitHub Actions** —
+  runners have Docker, so `supabase start` + the Mailpit OTP-capture seam (`server.e2e.ts`
+  injecting `sendMemberOtp`) work in CI even though the local machine is blocked. Keep
+  non-required/opt-in initially.
+- Operator Playwright money flows (refund step-up 423 lockout, POS ledger, desk booking/check-in).
+- Executable segment-engine fixture on real PG + the owner gold-label pass (≥99% gate).
+- **Restore drill #1 then #2** (P0-8 — plan's own hard gate; money is live in schema NOW).
+- Heartbeat proven by unplugging the tick (never run).
+- Perf: pin budgets, measure p95 for 7+ days pre-cutover; rate-limit or cache `GET /member/schedule`.
+- Briefing tail: feedback-loop summarizer, fill-rate candidate, AI budget caps, tone-lint
+  expansion, /ask growth toward ~20.
+
+### The cutover event (ops, rehearsed — from plan-final §4/§6 + review)
+
+Claim campaign (email-first) + pre-arrival waiver links → re-card campaign only if PAN portability
+fails → staged per-domain authority flips WITH enforcement live → rehearsed freeze window + final
+import → Glofox read-only 30 days, parallel reconciliation green (now including credits) →
+documented rollback decision point → final archive export → contract cancelled one cycle later.
+
+---
+
+## Owner-action list (start these clocks NOW — they, not code, set the cutover date)
+
+| Action | Why now | Blocker |
 |---|---|---|
-| **6.1 availability + holds + booking RPCs** | Native bookings on scheduled_sessions: availability computation (capacity − active bookings − active holds, readiness-aware), **server holds** (TTL + btree_gist exclusion constraint — DB-enforced no-oversell), book/cancel RPCs (idempotent; **credit debit via credit_ledger** append-only entries; refund of credit on policy-compliant cancel). | zero double-bookings (storm) |
-| **6.2 waitlist + check-in + policy + waiver block** | Waitlist (FIFO w/ hold-on-promote), check-in (+ degraded mode), no-show/late-cancel policy engine (≥12h free / else forfeit 1 credit — owner defaults), the **enforcing booking-time waiver block** (retires the phase-4 advisory queue; desk queue stays as monitored backstop). |
+| File 10DLC | Weeks of carrier lead time; gates all SMS (not the email claim blast) | P0-4 |
+| Create/deploy Netlify sites (+ swap member `PRIMARY-SITE-PLACEHOLDER`) | Unblocks the tick runtime, webhook URLs, the 10DLC-required public privacy page | P0-3 |
+| Enable PITR + schedule restore drill #1 | Money live in schema; plan's own hard gate | P0-8 |
+| Stripe Connect account + PAN-portability request to Glofox/ABC | Long external clock; determines re-card need | P0-5 |
+| Resend (domain verify) + Twilio accounts | Claim campaign channel; OTP delivery | P3-2 |
+| Sign Anthropic ZDR | Briefing ships aggregates; required before PII-bearing drafting | P2-1 |
+| Lawyer: waiver text (FL check "can change the build") + member money-ToS | Upstream of mass re-sign build-out and first live charge | legal 4c/4 |
+| Rule on mobile-vs-cutover (below) and, if in, enroll Apple + Play NOW | Store review lead time | P8-2 |
 
-### Wave 6b — booking surface + the storm
-| Unit | Scope |
-|---|---|
-| **6.3 booking UI + concurrency storm** | Quick Book flow (UX §3D: person-pick → slot → hold w/ countdown → waiver preflight → tender/credit → confirmation), roster/check-in screen. The **concurrency storm test** (N parallel bookers vs 1 slot; runs in CI's Postgres job — not prod). |
+## Open decisions (owner — each currently blocks a wave)
 
-### Wave 7 — ramp machinery (code-buildable slice)
-| Unit | Scope |
-|---|---|
-| **7.1 readiness dashboard + authority flips** | The per-capability authority matrix as a first-class config (tenant settings + health surface), the readiness dashboard (launch hard-gates per UX §Setup: reconciliation green, payment verified, active waiver, resources+plans configured, roles assigned, delivery tested), onboarding checklist assets. |
+1. **Mobile scope:** ruling 2026-07-19 made native apps cutover-gating; directive 2026-07-20
+   sequenced them last. Both can't stand without cutover waiting on store review. Either descope
+   mobile from the cutover gate (record in §10) or start P8-1/P8-2 clocks immediately.
+2. **Partition vs write-back** for bookings coexistence (phase-4 decision, never made — R3.2
+   depends on it). The Glofox client is read-only today; write-back would be new scope.
+3. **Waiver text** — lawyer sign-off before the mass re-sign flow sends anything (R1.4 gate).
+4. **person_merges** — plan-promised, never built; decide build-vs-descope for R2.3 (§10 either way).
 
-### Wave 8 — member surface (code-buildable slice)
-_Owner plan change 2026-07-19 (plan-final §10): native iOS + Android member apps (Expo/React
-Native, one codebase) are REQUIRED and cutover-gating — app parity with the Glofox member app the
-studio's members use today. The web app still ships FIRST (claiming/no-install path; earns beta
-metrics during store review). One client-agnostic member API/auth spine serves all three surfaces._
-_Status 2026-07-20: the member WEB booking surface is COMPLETE + merged (8.3e–h):
-Choose (schedule+book links) → Identify (OTP sign-in) → waiver gate → Book→Confirmed
-credit path (honest waitlist on the 409 capacity race, idempotent) → read-only Account
-(credits/waiver/upcoming) → Sign-out. Shared `packages/member-core` (auth/booking/account/
-logout) + pure adapters drive it; 1101 tests green; zero-Supabase bundle guard passes. Two
-independent reviews caught real bugs (race status-code mapping; unbounded past bookings) →
-fixed → re-reviewed PASS. Remaining in 8.1 (all deferred/gated): Stripe drop-in Pay stage
-(P0-5), waiver-signing in-flow (needs a member waiver-sign endpoint), receipts, unsubscribe
-prefs. NEXT code wave: 8.2 mobile — start with the architect step._
-| Unit | Scope |
-|---|---|
-| **8.1 member web app** | The member SSR web surface (on-domain booking, account claiming, credits/cards, waiver, receipts, unsubscribe prefs) per §6 phase 8 + plans/plan-member-app.md — built against the booking engine; deploys with the Netlify gate. **Booking surface + account + session lifecycle DONE (2026-07-20); Pay/waiver-sign/receipts/prefs deferred or gated.** |
-| **8.2 mobile apps** | Expo/React Native iOS + Android consuming the same member API spine; shared member-core package (API client, auth/claiming hooks, booking state machine) per the plan-member-app mobile track; push via Expo (APNs/FCM); store submission on the critical path (owner gates: Apple Developer + Play Console accounts, P8-2). **NEXT — reuses the completed member-core spine; can be built before the store gates, but has no simulator in the build env (typecheck/unit-testable, not runtime-verifiable here).** |
+## Deferred / descoped register (recorded in plan-final §10, 2026-07-22 entry)
 
-### Live-ops / owner-gated (NOT code — tracked in BLOCKERS)
-Netlify deploy (P0-3, unlocks scheduler cadence + every URL) · Stripe Connect account (P0-5 → live
-charges, Terminal, "reconcile to the cent") · Resend/Twilio + 10DLC (P3-2 → live sends + the waiver
-link flow) · restore drill #2 (PITR, P0-8) · Glofox write-probe sign-off (phase-4 decision) ·
-parallel-run/cutover execution (phases 7–8 gates are operational by nature).
-
-## Standing rules (unchanged)
-Reviews are adversarial and money-grade; FAIL blocks merge until fixed with a regression test.
-Director applies every migration live + runs the attack suite after schema changes. Append-only
-ledgers, RLS-on-everything, webhook-as-authority, outbox-before-call, no optimistic money UI.
+Binary authority ledger (vs 4-state + write_back_log) · person_merges · cancellation_policies /
+policy_version / booked_by_person_id · resource+tstzrange GIST bookings (session-lock design
+instead, documented) · written_off payment state · refunds table (commands+webhook instead) ·
+automation_flows/enrollments · import_conflicts · /outreach→/marketing, /billing→/payments ·
+operator stack substitution (no shadcn/Radix/Storybook/TanStack-Table/axe; hand-rolled token
+components) · If-Match stub unwired.

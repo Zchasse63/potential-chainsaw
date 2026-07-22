@@ -18,7 +18,7 @@ runtime-verified in this environment is **done + merged to main**.
 | WS | status | evidence |
 | --- | --- | --- |
 | WS-1 real-PG harness + orphan wiring + invariant-#4 guard | ✅ done | CI `db` job + `scripts/check-single-scheduler.sh` |
-| WS-2 Playwright scaffold | ✅ **done + RUNNING GREEN** | real chromium vs the LIVE project: `e2e/live-schedule.spec.ts` (public schedule SSRs truthfully) — 8/8 green with WS-10's slice |
+| WS-2 Playwright scaffold | ✅ **done + RUNNING GREEN** (manual runs) | real chromium vs the LIVE project: `e2e/live-schedule.spec.ts` (public schedule SSRs truthfully) — 8/8 green with WS-10's slice. **Correction 2026-07-22: the "CI e2e job" deliverable was NOT built — no e2e.yml exists; all green runs are manual. Now tracked as wave R6 in execution-remainder.md (GH Actions runners have Docker, so both the read-only and mutating CI paths are open).** |
 | WS-3a jobs queue · WS-3b money RPCs + storms | ✅ done | `packages/db/test/{jobs_concurrency,booking_storm,giftcard_storm}` |
 | WS-4a/b/c/d intelligence golden suites | ✅ done | `packages/db/test/{segments,relationships,kpi,ask}_golden` |
 | WS-5a step-up · 5b waiver+campaign immutability · 5c money-refusal taxonomy + generic append-only guard | ✅ done | attack blocks 39–42 + typed catches in blocks 28/29/31/32/33; block 26 comment-driven meta-guard |
