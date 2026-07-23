@@ -188,6 +188,56 @@ describe("per-row salvage (one bad row never kills a page)", () => {
     expect(quarantined[0]?.values?.[1]).toBe("members");
     expect(callsMatching(pool.calls, "set committed_watermark")).toHaveLength(1);
   });
+
+  it("a parse-failed row still carries its _id as external_ref (join-able to the record)", async () => {
+    // The 2026-07-22 credit gap: parse-failed quarantine rows were written with
+    // external_ref NULL, so a 331-credit / 41-member shortfall sat un-joinable to
+    // any member for weeks. A row that fails the contract for ANY reason other
+    // than a missing id must still name the record it stands for.
+    const bad = memberRow("m2");
+    delete bad["first_name"]; // breaks the contract; _id survives
+    const pool = createFakePool();
+    const client = createFakeClient(() => styleAPage([bad]));
+
+    const outcome = await runEntitySync(pool, client, makeCtx(), membersSpec);
+
+    expect(outcome.rowsQuarantined).toBe(1);
+    const quarantined = callsMatching(pool.calls, "insert into public.import_quarantine");
+    expect(quarantined).toHaveLength(1);
+    expect(quarantined[0]?.values?.[2]).toBe("m2"); // external_ref = _id (was NULL before the fix)
+    expect(quarantined[0]?.values?.[4]).toContain("first_name");
+  });
+});
+
+describe("quarantine tripwire (tripwire 5)", () => {
+  it("a 'success' run that quarantined >0 rows opens a 'sync_quarantine' warning alert", async () => {
+    const good = memberRow("m1");
+    const bad = memberRow("m2");
+    delete bad["_id"]; // one row fails the contract → quarantined, run still succeeds
+    const pool = createFakePool();
+    const client = createFakeClient(() => styleAPage([good, bad]));
+
+    const outcome = await runEntitySync(pool, client, makeCtx(), membersSpec);
+
+    expect(outcome.status).toBe("success");
+    expect(outcome.rowsQuarantined).toBe(1);
+
+    // A success that silently drops rows is exactly what hid the credit gap.
+    const alert = callsMatching(pool.calls, "insert into public.alerts");
+    expect(alert).toHaveLength(1);
+    expect(alert[0]?.values?.[1]).toBe("sync_quarantine");
+    expect(alert[0]?.values?.[2]).toBe("warning");
+    expect(alert[0]?.values?.[5]).toBe("members"); // deduped per tenant+entity
+  });
+
+  it("a fully clean run (0 quarantined) opens NO quarantine alert", async () => {
+    const pool = createFakePool();
+    const client = createFakeClient(() => styleAPage([memberRow("m1"), memberRow("m2")]));
+
+    await runEntitySync(pool, client, makeCtx(), membersSpec);
+
+    expect(callsMatching(pool.calls, "insert into public.alerts")).toHaveLength(0);
+  });
 });
 
 describe("raw-before-parse (step 1)", () => {
