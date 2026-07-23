@@ -373,6 +373,125 @@ describe("bookings — active facts only", () => {
   });
 });
 
+/** The single-round-trip credits conservation row (raw zone vs ledger). */
+function creditsRow(row: {
+  packs: number;
+  raw_granted: number;
+  raw_outstanding: number;
+  grants: number;
+  ledger_granted: number;
+  net_balance: number;
+  open_q: number;
+  mismatches: number;
+}) {
+  return (text: string) =>
+    text.includes("endpoint = '/2.0/credits'") ? { rows: [row] } : undefined;
+}
+
+describe("credits — DB-only raw→ledger conservation (the standing-gap backstop)", () => {
+  it("ledger at parity with the raw zone reports match, no drift alert", async () => {
+    const pool = createFakePool({
+      respond: creditsRow({
+        packs: 307,
+        raw_granted: 1907,
+        raw_outstanding: 1199,
+        grants: 307,
+        ledger_granted: 1907,
+        net_balance: 1199,
+        open_q: 0,
+        mismatches: 0,
+      }),
+    });
+    const client = createFakeClient(() => ({}));
+
+    const outcomes = await runReconciliation(
+      pool,
+      client,
+      makeCtx({ payload: { entities: ["credits"] } }),
+    );
+
+    expect(outcomes[0]).toMatchObject({
+      entity: "credits",
+      status: "match",
+      glofoxCount: 307,
+      keloCount: 307,
+      driftCount: 0,
+      driftSum: 0,
+    });
+    // DB-only: it must NEVER touch the Glofox client for credits.
+    expect(client.calls).toHaveLength(0);
+    expect(callsMatching(pool.calls, "insert into public.alerts")).toHaveLength(0);
+    const row = reconRow(callsMatching(pool.calls, "insert into public.reconciliations")[0]!);
+    expect(row.detail["per_person_balance_mismatches"]).toBe(0);
+  });
+
+  it("a standing gap (missing grants + understated balance) drifts and opens the alert", async () => {
+    // The 2026-07-22 shape: 41 packs never made it to the ledger, so 331
+    // outstanding credits are unaccounted for.
+    const pool = createFakePool({
+      respond: creditsRow({
+        packs: 307,
+        raw_granted: 1907,
+        raw_outstanding: 1199,
+        grants: 266,
+        ledger_granted: 1576,
+        net_balance: 868,
+        open_q: 5,
+        mismatches: 41,
+      }),
+    });
+    const client = createFakeClient(() => ({}));
+
+    const outcomes = await runReconciliation(
+      pool,
+      client,
+      makeCtx({ payload: { entities: ["credits"] } }),
+    );
+
+    expect(outcomes[0]).toMatchObject({
+      entity: "credits",
+      status: "drift",
+      driftCount: 41, // 307 raw packs − 266 ledger grants
+      driftSum: 331, // 1199 raw outstanding − 868 ledger balance
+    });
+    const alert = callsMatching(pool.calls, "insert into public.alerts");
+    expect(alert).toHaveLength(1);
+    expect(alert[0]?.values?.[1]).toBe("reconciliation_drift");
+    expect(alert[0]?.values?.[2]).toBe("critical"); // 331 > $100 floor and 41 > 10 count
+    expect(alert[0]?.values?.[5]).toBe("credits");
+    const row = reconRow(callsMatching(pool.calls, "insert into public.reconciliations")[0]!);
+    expect(row.detail["per_person_balance_mismatches"]).toBe(41);
+    expect(row.detail["open_quarantine"]).toBe(5);
+  });
+
+  it("a per-person balance mismatch drifts even when counts and totals net out", async () => {
+    // packs == grants and totals equal, but one person's raw balance != ledger:
+    // an offsetting error that count/total checks alone would miss.
+    const pool = createFakePool({
+      respond: creditsRow({
+        packs: 307,
+        raw_granted: 1907,
+        raw_outstanding: 1199,
+        grants: 307,
+        ledger_granted: 1907,
+        net_balance: 1199,
+        open_q: 0,
+        mismatches: 2,
+      }),
+    });
+    const client = createFakeClient(() => ({}));
+
+    const outcomes = await runReconciliation(
+      pool,
+      client,
+      makeCtx({ payload: { entities: ["credits"] } }),
+    );
+
+    expect(outcomes[0]).toMatchObject({ entity: "credits", status: "drift", driftCount: 0, driftSum: 0 });
+    expect(callsMatching(pool.calls, "insert into public.alerts")).toHaveLength(1);
+  });
+});
+
 describe("error isolation — one entity's failure never blinds the others", () => {
   it("a failing entity writes an 'error' row + alert; the next entity still reconciles", async () => {
     const pool = createFakePool({ respond: keloCounts({ bookings: 42 }) });

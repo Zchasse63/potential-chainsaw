@@ -173,9 +173,40 @@ describe("credits — debit dedupe rule", () => {
     const enqueue = callsMatching(pool.calls, "app.enqueue_job");
     expect(enqueue).toHaveLength(1);
     expect(enqueue[0]?.values?.[0]).toBe("glofox.sync.credits");
-    expect(JSON.parse(String(enqueue[0]?.values?.[1]))).toEqual({ cursor: "u0499" });
+    // No cycle in the payload → falls back to the "adhoc" token.
+    expect(JSON.parse(String(enqueue[0]?.values?.[1]))).toEqual({ cursor: "u0499", cycle: "adhoc" });
     expect(enqueue[0]?.values?.[3]).toContain("glofox.sync.credits:");
-    expect(enqueue[0]?.values?.[3]).toContain("u0499");
+    expect(enqueue[0]?.values?.[3]).toContain(":adhoc:after:u0499");
+  });
+
+  it("threads the per-cycle token into the next chunk's payload AND idempotency key", async () => {
+    // The re-run bug (2026-07-23): a cursor-only key is stable across cycles, so
+    // every chunk past the first deduped against the prior cycle's succeeded job
+    // and the walk stopped at 500 members. The cycle token makes each cycle a
+    // fresh chain — two different cycles MUST produce two different chunk keys.
+    const refs = Array.from({ length: 500 }, (_, i) => `u${String(i).padStart(4, "0")}`);
+    const makePool = () =>
+      createFakePool({
+        syncState: { plausible_zero: true },
+        respond: (text) =>
+          text.includes("from public.people")
+            ? { rows: refs.map((ref, i) => ({ id: `person-${i}`, external_ref: ref })) }
+            : undefined,
+      });
+    const client = () => createFakeClient(() => styleAPage([]));
+
+    const poolA = makePool();
+    await runEntitySync(poolA, client(), makeCtx({ payload: { cycle: "2026-07-23T14" } }), createCreditsSpec());
+    const enqA = callsMatching(poolA.calls, "app.enqueue_job")[0];
+    expect(JSON.parse(String(enqA?.values?.[1]))).toEqual({ cursor: "u0499", cycle: "2026-07-23T14" });
+    expect(enqA?.values?.[3]).toContain(":2026-07-23T14:after:u0499");
+
+    const poolB = makePool();
+    await runEntitySync(poolB, client(), makeCtx({ payload: { cycle: "2026-07-23T15" } }), createCreditsSpec());
+    const enqB = callsMatching(poolB.calls, "app.enqueue_job")[0];
+
+    // Different cycle → different key: the next hour's walk is NOT deduped away.
+    expect(enqA?.values?.[3]).not.toBe(enqB?.values?.[3]);
   });
 
   it("a partial chunk does NOT re-enqueue (the pass is done)", async () => {

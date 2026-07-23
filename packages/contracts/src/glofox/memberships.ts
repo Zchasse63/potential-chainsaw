@@ -37,7 +37,12 @@ export const glofoxPlanSchema = z.object({
   credits: z.array(planCreditSchema),
   starts_on: z.string(),
   is_group_membership: z.boolean().nullish(),
-  max_group_membership_size: z.number().int().nullable(),
+  // Population-variant tolerance (LIVE 2026-07-23): non-group plans OMIT this
+  // key entirely (not just null), so `.nullable()` rejected them at parse and
+  // quarantined the whole membership — the last strict field in the sequence
+  // that already relaxed model_ids/upfront_fee/is_group_membership. Unused by
+  // the catalog mapper; `.nullish()` accepts both absent and null.
+  max_group_membership_size: z.number().int().nullish(),
   free_time_unit_count: z.number().int(),
   min_price: z.number(),
   auto_renewal: z.boolean(),

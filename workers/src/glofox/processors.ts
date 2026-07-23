@@ -308,7 +308,14 @@ export function createGlofoxProcessors(
       for (const kind of independentlyEnqueuedKinds) {
         await ctx.pool.query(`select app.enqueue_job($1, $2, $3, now(), 100, 5, $4)`, [
           kind,
-          JSON.stringify({}),
+          // `cycle` = the hour bucket flows into the payload so a self-chaining
+          // entity (credits: O(members), chunked, self-re-enqueuing) can thread
+          // it into its per-chunk idempotency keys. Without a per-cycle token
+          // its cursor-only keys are stable across runs and every chunk past
+          // the first dedupes against the prior cycle — the credits walk then
+          // silently stops at 500 members each cycle. Harmless to entities that
+          // don't chain (they ignore payload.cycle).
+          JSON.stringify({ cycle: hourBucket }),
           tenantId,
           `${kind}:${tenantId}:${hourBucket}`,
         ]);

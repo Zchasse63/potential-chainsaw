@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { glofoxBookingSchema, glofoxMemberSchema } from "../src/index.js";
+import { glofoxBookingSchema, glofoxMemberSchema, glofoxMembershipSchema } from "../src/index.js";
 import { loadSample } from "./helpers.js";
 
 /**
@@ -17,6 +17,11 @@ function sampleMember(): Record<string, unknown> {
 
 function sampleBooking(): Record<string, unknown> {
   const page = loadSample("bookings.get.limit3.json") as { data: Record<string, unknown>[] };
+  return JSON.parse(JSON.stringify(page.data[0])) as Record<string, unknown>;
+}
+
+function sampleMembership(): Record<string, unknown> {
+  const page = loadSample("memberships.get.json") as { data: Record<string, unknown>[] };
   return JSON.parse(JSON.stringify(page.data[0])) as Record<string, unknown>;
 }
 
@@ -54,5 +59,16 @@ describe("live population variants stay parseable", () => {
     b["metadata"] = [];
     const parsed = glofoxBookingSchema.parse(b);
     expect(parsed.metadata ?? null).toBeNull();
+  });
+
+  it("membership plan that OMITS max_group_membership_size (non-group plans, 2026-07-23)", () => {
+    // A real active plan omits this key entirely; `.nullable()` rejected the
+    // absent case and quarantined the whole membership (its plan never reached
+    // plan_catalog). The last strict field in the memberships sequence.
+    const m = sampleMembership();
+    const plan = (m["plans"] as Record<string, unknown>[])[0]!;
+    delete plan["max_group_membership_size"];
+    const parsed = glofoxMembershipSchema.parse(m);
+    expect(parsed.plans[0]!.max_group_membership_size ?? null).toBeNull();
   });
 });

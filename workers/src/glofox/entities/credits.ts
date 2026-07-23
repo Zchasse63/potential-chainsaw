@@ -224,15 +224,22 @@ export function createCreditsSpec(): EntitySpec<CreditPacket> {
 
     candidateFor: (window: SyncWindow) => window.end,
 
-    // Re-enqueue the NEXT chunk; the idempotency key is scoped to the cursor,
-    // so a retried chunk hands off exactly one successor.
+    // Re-enqueue the NEXT chunk. The idempotency key MUST carry the per-cycle
+    // token (the fan-out passes `cycle` = hourBucket into chunk 1's payload;
+    // we thread it forward). Without it the key was `...:after:<cursor>` —
+    // stable across runs — so a repeated full walk deduped every chunk past
+    // chunk 1 against the PRIOR cycle's succeeded jobs and silently stopped at
+    // 500 members every cycle after the first (found in the 2026-07-23 credit
+    // rebuild). With the cycle in the key each cycle is a fresh chain, while a
+    // retry WITHIN a cycle (same cycle + cursor) still dedupes.
     afterSuccess: async (pool, ctx) => {
       if (!chunkWasFull || lastMemberRef === null) return;
+      const cycle = typeof ctx.payload["cycle"] === "string" ? ctx.payload["cycle"] : "adhoc";
       await pool.query(`select app.enqueue_job($1, $2, $3, now(), 100, 5, $4)`, [
         "glofox.sync.credits",
-        JSON.stringify({ cursor: lastMemberRef }),
+        JSON.stringify({ cursor: lastMemberRef, cycle }),
         ctx.tenantId,
-        `glofox.sync.credits:${ctx.tenantId}:after:${lastMemberRef}`,
+        `glofox.sync.credits:${ctx.tenantId}:${cycle}:after:${lastMemberRef}`,
       ]);
     },
   };
