@@ -21,7 +21,14 @@ export function strictRow<T, I>(
     quarantine: [
       {
         entity,
-        external_ref: null,
+        // ATTRIBUTION: a parse-failed quarantine row must still name the record
+        // it represents, or a quarantine pile silently hides a derived-table
+        // shortfall (the 2026-07-22 credit gap: 124 credit quarantine rows, ALL
+        // external_ref NULL, masked a 41-member / 331-outstanding-credit ledger
+        // shortfall — un-joinable to any member or balance). Every entity
+        // through strictRow (members/bookings/events/credits/memberships) is a
+        // Glofox Mongo doc keyed by _id; fall back to `id`, else null.
+        external_ref: externalRefOf(rawRow),
         reason:
           `row failed contract parse: ` +
           (issue ? `${issue.path.join(".")}: ${issue.message}` : "unknown issue"),
@@ -29,6 +36,16 @@ export function strictRow<T, I>(
       },
     ],
   };
+}
+
+/** Best-effort stable id for a row that FAILED parse (so it can't be validated). */
+function externalRefOf(rawRow: unknown): string | null {
+  if (rawRow !== null && typeof rawRow === "object") {
+    const r = rawRow as Record<string, unknown>;
+    if (typeof r._id === "string" && r._id !== "") return r._id;
+    if (typeof r.id === "string" && r.id !== "") return r.id;
+  }
+  return null;
 }
 
 /** Date → timestamptz param (null passes through). */

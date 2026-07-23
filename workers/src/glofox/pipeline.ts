@@ -417,6 +417,30 @@ export async function runEntitySync<TRow>(
       });
     }
 
+    // Tripwire 5: ANY row quarantined is visible, not silent. A run can report
+    // 'success' while dropping records at the contract boundary — the class of
+    // failure that hid a 41-member / 331-outstanding-credit ledger shortfall
+    // behind 124 quarantined usercredit rows for weeks (2026-07-22). Those rows
+    // were all later marked 'resolved', so the /health open-quarantine count
+    // read 0 and the loss was invisible from every dashboard. This alert is the
+    // second, harder-to-silence signal: it stays open (deduped per entity)
+    // until the quarantine queue is actually worked, so a growing pile can
+    // never pass unnoticed again. Attribution now lives on the rows (strictRow),
+    // so import_quarantine can be joined back to the members/records affected.
+    if (totals.quarantined > 0) {
+      await openAlert(pool, ctx, spec.entity, {
+        kind: "sync_quarantine",
+        severity: "warning",
+        title: `${spec.entity} sync quarantined ${totals.quarantined} row(s) — records did NOT import`,
+        body:
+          `A ${spec.entity} run recorded 'success' but ${totals.quarantined} row(s) failed the ` +
+          `contract parse and were quarantined, so they are ABSENT from the derived table. ` +
+          `Review public.import_quarantine (entity='${spec.entity}'); a 'resolved' row must be ` +
+          `re-imported and verified present, never bulk-flagged. Downstream counts/balances are ` +
+          `understated until the queue is cleared.`,
+      });
+    }
+
     await closeSyncRun(pool, syncRunId, "success", totals, null);
     await spec.afterSuccess?.(pool, ctx);
     return {
