@@ -78,6 +78,7 @@ export const RECONCILE_ENTITIES = [
   "members_active",
   "transactions",
   "bookings",
+  "credits",
 ] as const;
 
 /** The member-canary proxy window (the recurring-payment evidence chain). */
@@ -535,11 +536,107 @@ const checkBookings: EntityCheck = async (pool, client, ctx) => {
   };
 };
 
+/**
+ * Credits — a DB-ONLY conservation check (raw zone vs credit_ledger), NOT a
+ * live-API check. There is no cheap branch-wide credits endpoint (README §7.3:
+ * credits are O(members), per-user), so the "Glofox side" is the raw zone —
+ * `glofox_raw` /2.0/credits, the latest pack per `_id`, which IS the vendor's
+ * data faithfully stored. The ledger MUST equal it. This is the standing-gap
+ * backstop the 2026-07-22 credit loss lacked: Tripwire 5 only fires on NEW
+ * quarantine in a run, so an accumulated gap (124 credit rows, all marked
+ * `resolved`, /health open-count 0) stayed invisible — this attestation makes
+ * "ledger != last-synced raw" a red reconciliations row every cycle. Scoped to
+ * source='glofox' so non-Glofox credits (gift cards, manual adjustments) don't
+ * masquerade as import drift. Freshness of the raw snapshot itself is the
+ * credits sync_state watermark's job, not this check's.
+ */
+const checkCredits: EntityCheck = async (pool, _client, ctx) => {
+  const result = await pool.query(
+    `with packs as (
+       select (p->>'_id') as pack_id, (p->>'user_id') as user_ref,
+              (p->>'num_sessions')::int as granted, (p->>'available')::int as available,
+              row_number() over (partition by (p->>'_id') order by gr.fetched_at desc) as rn
+       from public.glofox_raw gr
+       cross join lateral jsonb_array_elements(coalesce(gr.payload->'data','[]'::jsonb)) as p
+       where gr.tenant_id = $1 and gr.endpoint = '/2.0/credits'
+     ),
+     latest as (select * from packs where rn = 1),
+     raw_side as (
+       select count(*)::int as packs,
+              coalesce(sum(granted),0)::int as granted,
+              coalesce(sum(available),0)::int as outstanding
+       from latest
+     ),
+     ledger_side as (
+       select count(*) filter (where entry_type = 'grant')::int as grants,
+              coalesce(sum(delta) filter (where entry_type = 'grant'),0)::int as granted,
+              coalesce(sum(delta),0)::int as net_balance
+       from public.credit_ledger where tenant_id = $1 and source = 'glofox'
+     ),
+     quar as (
+       select count(*)::int as open_q
+       from public.import_quarantine
+       where tenant_id = $1 and entity = 'credits' and status = 'open'
+     ),
+     per_person as (
+       select count(*)::int as mismatches from (
+         select coalesce(r.person_id, k.person_id) as person_id
+         from (select pe.id as person_id, sum(lt.available)::int as raw_out
+               from latest lt
+               join public.people pe on pe.tenant_id = $1 and pe.external_ref = lt.user_ref
+               group by pe.id) r
+         full join (select person_id, sum(delta)::int as bal
+                    from public.credit_ledger
+                    where tenant_id = $1 and source = 'glofox' group by person_id) k
+           on k.person_id = r.person_id
+         where coalesce(r.raw_out, 0) <> coalesce(k.bal, 0)
+       ) m
+     )
+     select r.packs, r.granted as raw_granted, r.outstanding as raw_outstanding,
+            g.grants, g.granted as ledger_granted, g.net_balance,
+            q.open_q, pp.mismatches
+     from raw_side r, ledger_side g, quar q, per_person pp`,
+    [ctx.tenantId],
+  );
+  const parsed = result.rows[0] as Record<string, unknown> | undefined;
+  const packs = asNumber(parsed?.["packs"] ?? 0);
+  const grants = asNumber(parsed?.["grants"] ?? 0);
+  const rawOutstanding = asNumber(parsed?.["raw_outstanding"] ?? 0);
+  const netBalance = asNumber(parsed?.["net_balance"] ?? 0);
+  const mismatches = asNumber(parsed?.["mismatches"] ?? 0);
+  const driftCount = packs - grants;
+  const driftSum = rawOutstanding - netBalance;
+  return {
+    windowStart: null,
+    windowEnd: null,
+    glofoxCount: packs,
+    keloCount: grants,
+    glofoxSum: rawOutstanding,
+    keloSum: netBalance,
+    driftCount,
+    driftSum,
+    // A per-person balance mismatch is drift even when the pack/grant counts
+    // and totals happen to net out — so it is part of the match predicate.
+    status: driftCount === 0 && driftSum === 0 && mismatches === 0 ? "match" : "drift",
+    detail: {
+      source:
+        "raw zone (glofox_raw /2.0/credits, latest pack per _id) vs credit_ledger where source='glofox'; no branch-wide credits endpoint, so the last-synced raw snapshot is the vendor truth the ledger must equal",
+      raw_granted: asNumber(parsed?.["raw_granted"] ?? 0),
+      ledger_granted: asNumber(parsed?.["ledger_granted"] ?? 0),
+      per_person_balance_mismatches: mismatches,
+      open_quarantine: asNumber(parsed?.["open_q"] ?? 0),
+      unit: "credits (num_sessions), not currency — drift_sum is a credit count",
+      rule: "drift_count = raw packs − ledger grants; drift_sum = raw outstanding − ledger balance; status also drifts on any per-person balance mismatch",
+    },
+  };
+};
+
 const CHECKS: Record<(typeof RECONCILE_ENTITIES)[number], EntityCheck> = {
   members: checkMembers,
   members_active: checkMembersActive,
   transactions: checkTransactions,
   bookings: checkBookings,
+  credits: checkCredits,
 };
 
 // --- the engine ------------------------------------------------------------------

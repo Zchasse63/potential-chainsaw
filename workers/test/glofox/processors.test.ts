@@ -157,6 +157,13 @@ describe("glofox.sync.all fan-out", () => {
       expect(call.values?.[2]).toBe(TENANT);
       expect(String(call.values?.[3])).toBe(`${String(call.values?.[0])}:${TENANT}:2026-07-17T23`);
     }
+    // The per-cycle token (= hour bucket) rides in each independently-enqueued
+    // sync payload so the credits self-chain can key each cycle's chunks
+    // distinctly (a re-runnable walk — see entities.test.ts). The ordered
+    // statement's derivation jobs keep an empty payload.
+    for (const call of enqueues.slice(0, 7)) {
+      expect(JSON.parse(String(call.values?.[1]))).toEqual({ cycle: "2026-07-17T23" });
+    }
     // The billing drains are GLOBAL: tenant NULL (SQL literal, not a bind param)
     // and a tenant-independent HOUR key, so every tenant's fan-out converges on
     // ONE drain job per bucket.
